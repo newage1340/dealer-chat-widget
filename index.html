@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{{ dealer_name }} - Chat</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-container">
+
+    <!-- Sidebar -->
+    <button class="mobile-menu-toggle" id="menuToggle" aria-label="Open menu">&#9776;</button>
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-close" id="sidebarClose" aria-label="Close menu">&times;</div>
+
+      <div class="logo">
+        <div class="logo-icon">&#128663;</div>
+        <div class="logo-text">{{ dealer_name }}</div>
+      </div>
+      <div class="sidebar-tagline">Instant answers, 24/7.</div>
+
+      <div class="topic-list">
+        <div class="topic-label">Browse Inventory</div>
+        <button class="topic-btn" onclick="askTopic('Show me your inventory')">&#128663; All Vehicles</button>
+        <button class="topic-btn" onclick="askTopic('What SUVs do you have?')">&#128741;&#65039; SUVs</button>
+        <button class="topic-btn" onclick="askTopic('What trucks do you have?')">&#128666; Trucks</button>
+        <button class="topic-btn" onclick="askTopic('What sedans do you have?')">&#128663; Sedans</button>
+        <button class="topic-btn" onclick="askTopic('What 4WD vehicles do you have?')">&#9968;&#65039; 4WD</button>
+
+        <div class="topic-label section-spacer">Price Range</div>
+        <button class="topic-btn" onclick="askTopic('What cars do you have under $10,000?')">&#128176; Under $10k</button>
+        <button class="topic-btn" onclick="askTopic('What cars do you have under $20,000?')">&#128176; Under $20k</button>
+        <button class="topic-btn" onclick="askTopic('What cars do you have between $20,000 and $30,000?')">&#128176; $20k - $30k</button>
+
+        <div class="topic-label section-spacer">Get Started</div>
+        <button class="topic-btn" onclick="askTopic('Do you offer financing?')">&#128179; Financing</button>
+        <button class="topic-btn" onclick="askTopic('Do you accept trade-ins?')">&#128259; Trade-In</button>
+        <button class="topic-btn" onclick="askTopic('Do you offer warranties?')">&#128737;&#65039; Warranties</button>
+        <button class="topic-btn" onclick="askTopic('I want to schedule a visit')">&#128197; Schedule a Visit</button>
+        <button class="topic-btn" onclick="askTopic('What are your hours and location?')">&#128205; Hours / Location</button>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="clear-btn" onclick="clearChat()">&#128465; Clear Chat</button>
+        <a class="terms-link" href="{{ terms_url }}" target="_blank" rel="noopener">Terms of Service</a>
+      </div>
+    </div>
+
+    <!-- Main Chat -->
+    <div class="main">
+      <div class="main-header">
+        <div class="main-header-title">{{ dealer_name }}</div>
+        <div class="main-header-status"><span class="status-dot"></span>Online</div>
+      </div>
+
+      <div class="chat-window" id="chatWindow">
+        <div class="message assistant">
+          <div class="avatar">AI</div>
+          <div class="bubble">
+            Welcome to <strong>{{ dealer_name }}</strong>! I can help you browse inventory, answer questions about specific vehicles, or schedule a visit. Use the menu on the left or just type your question below.
+          </div>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <textarea
+          id="userInput"
+          placeholder="Ask about a vehicle, financing, trade-in, or scheduling..."
+          rows="1"
+          onkeydown="handleKey(event)"
+        ></textarea>
+        <button id="sendBtn" onclick="sendMessage()" aria-label="Send">&#10148;</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>

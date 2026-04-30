@@ -1,0 +1,9 @@
+flask
+openai
+twilio
+gunicorn
+gspread
+apscheduler
+requests
+beautifulsoup4
+playwright
