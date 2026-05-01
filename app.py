@@ -64,7 +64,21 @@ logging.basicConfig(level=logging.INFO)
 openai_client = OpenAI()
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-gs = gspread.service_account(filename=SERVICE_ACCOUNT_JSON, scopes=SCOPES)
+
+
+def _build_gspread_client():
+    """Build a gspread client from either:
+      - SERVICE_ACCOUNT_JSON_CONTENT env var (raw JSON string, easiest on Render)
+      - SERVICE_ACCOUNT_JSON env var (path to file on disk)
+    Tries inline content first, falls back to file path."""
+    inline = os.getenv("SERVICE_ACCOUNT_JSON_CONTENT", "").strip()
+    if inline:
+        info = json.loads(inline)
+        return gspread.service_account_from_dict(info, scopes=SCOPES)
+    return gspread.service_account(filename=SERVICE_ACCOUNT_JSON, scopes=SCOPES)
+
+
+gs = _build_gspread_client()
 # Fail fast if Google is slow - Twilio gives up waiting on the webhook at ~15s.
 try:
     gs.session.timeout = 6  # seconds for connect+read
@@ -165,7 +179,7 @@ def _refresh_gs_client() -> None:
     underlying HTTP session in a bad state."""
     global gs
     try:
-        gs = gspread.service_account(filename=SERVICE_ACCOUNT_JSON, scopes=SCOPES)
+        gs = _build_gspread_client()
         try:
             gs.session.timeout = 6
         except Exception:
