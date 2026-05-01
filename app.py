@@ -539,6 +539,30 @@ def refresh_inventory_for_twilio(twilio_number: str, website_url: str, max_vehic
         return 0
 
     scrape_start_iso = _utc_now_iso()
+    # Resume window: any vehicle for this dealer scraped in the last 15 min is
+    # treated as "this session's already-done work" and skipped on retry. Long
+    # enough to cover a crash + Render worker restart, short enough that the
+    # scheduled 30-min refresh still re-scrapes everything fresh.
+    resume_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+    _recently_scraped_urls: set = set()
+    try:
+        conn = _db()
+        rows = conn.execute(
+            "SELECT detail_url FROM inventory WHERE twilio_number=? AND scraped_at >= ? AND detail_url <> ''",
+            (tn, resume_cutoff),
+        ).fetchall()
+        conn.close()
+        _recently_scraped_urls = {r[0] for r in rows}
+        if _recently_scraped_urls:
+            app.logger.info(
+                "refresh_inventory_for_twilio %s: resuming - skipping %d already-scraped URLs",
+                tn, len(_recently_scraped_urls),
+            )
+    except Exception as e:
+        app.logger.warning("refresh resume lookup failed for %s: %s", tn, e)
+
+    def _should_skip(detail_url: str) -> bool:
+        return detail_url in _recently_scraped_urls
 
     def _save_one(v):
         """Called by scraper after each vehicle is scraped. Replaces the row
@@ -570,6 +594,7 @@ def refresh_inventory_for_twilio(twilio_number: str, website_url: str, max_vehic
         website_url,
         max_vehicles=max_vehicles,
         on_vehicle_scraped=_save_one,
+        should_skip=_should_skip,
     )
 
     # Prune stale rows: anything whose scraped_at is older than this scrape

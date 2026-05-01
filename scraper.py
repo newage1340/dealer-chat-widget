@@ -446,7 +446,7 @@ def _dcs_scrape_detail_page(html: str, detail_url: str = "") -> Optional[Dict[st
 # ===========================================================================
 
 def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0,
-                            on_vehicle_scraped=None) -> List[Dict[str, str]]:
+                            on_vehicle_scraped=None, should_skip=None) -> List[Dict[str, str]]:
     """
     Scrape full vehicle inventory from a dealer website.
     Detects the platform and routes to the correct scraping logic.
@@ -454,6 +454,10 @@ def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0
     If on_vehicle_scraped is provided, it will be called with each vehicle dict
     immediately after that vehicle finishes scraping. Lets the caller persist
     rows incrementally so progress isn't lost on a crash mid-scrape.
+
+    If should_skip(detail_url) is provided and returns True, that detail page
+    will be skipped (not scraped). Lets the caller resume an interrupted
+    scrape by skipping vehicles already saved in a recent session.
     """
     if not url:
         return []
@@ -526,6 +530,10 @@ def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0
 
                 vehicles: List[Dict[str, str]] = []
                 for i, detail_url in enumerate(all_detail_links):
+                    if should_skip and should_skip(detail_url):
+                        logger.info("Skipping %d/%d (recently scraped): %s",
+                                    i + 1, len(all_detail_links), detail_url)
+                        continue
                     html = _load_page_playwright(browser, detail_url)
                     if not html:
                         continue
