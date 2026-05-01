@@ -4552,6 +4552,24 @@ if os.getenv("DISABLE_SCHEDULER", "0") != "1":
     except Exception as _e:
         app.logger.warning("Scheduler failed to start: %s", _e)
 
+# Kick off an immediate inventory scrape in a background thread so the web
+# server starts replying instantly while inventory loads in parallel. Without
+# this, a fresh deploy has empty inventory until the scheduler's first run
+# (~30 min later). Skip when running locally via __main__ (handled there) or
+# if SKIP_STARTUP_SCRAPE is set.
+def _background_initial_scrape():
+    try:
+        app.logger.info("Module-level startup: kicking off background inventory scrape...")
+        refresh_all_inventory(max_vehicles=0)
+        app.logger.info("Background inventory scrape complete.")
+    except Exception as _e:
+        app.logger.warning("Background inventory scrape failed: %s", _e)
+
+
+if __name__ != "__main__" and os.getenv("SKIP_STARTUP_SCRAPE", "0") != "1":
+    import threading as _threading
+    _threading.Thread(target=_background_initial_scrape, daemon=True).start()
+
 
 # =========================
 # MAIN
