@@ -529,16 +529,29 @@ def get_inventory_for_twilio(twilio_number: str) -> List[Dict[str, Any]]:
 
 
 def refresh_inventory_for_twilio(twilio_number: str, website_url: str, max_vehicles: int = 0) -> int:
+    """Scrape this dealer's inventory and persist row-by-row as each vehicle
+    is scraped. Old inventory stays available the whole time; stale rows
+    (vehicles no longer found at the dealer) are pruned at the end based on
+    the scrape session timestamp. Survives mid-scrape crashes - already-saved
+    vehicles persist and the next attempt picks up from there."""
     tn = normalize_phone(twilio_number)
     if not tn or not website_url:
         return 0
-    vehicles = scrape_dealer_inventory(website_url, max_vehicles=max_vehicles)
-    if not vehicles:
-        return 0
-    conn = _db()
-    with conn:
-        conn.execute("DELETE FROM inventory WHERE twilio_number=?", (tn,))
-        for v in vehicles:
+
+    scrape_start_iso = _utc_now_iso()
+
+    def _save_one(v):
+        """Called by scraper after each vehicle is scraped. Replaces the row
+        for the same detail_url (so re-scrapes update prices/details cleanly)
+        and stamps it with the current scrape's timestamp."""
+        conn = _db()
+        with conn:
+            detail_url = v.get("DetailURL", "")
+            if detail_url:
+                conn.execute(
+                    "DELETE FROM inventory WHERE twilio_number=? AND detail_url=?",
+                    (tn, detail_url),
+                )
             conn.execute("""
                 INSERT INTO inventory
                 (twilio_number, year, make, model, trim, color, price, mileage, vin, stock, description, carfax_url, detail_url, scraped_at)
@@ -549,9 +562,30 @@ def refresh_inventory_for_twilio(twilio_number: str, website_url: str, max_vehic
                 v.get("Trim", ""), v.get("Color", ""), v.get("Price", ""),
                 v.get("Mileage", ""), v.get("VIN", ""), v.get("Stock", ""),
                 v.get("Description", ""), v.get("CarfaxURL", ""),
-                v.get("DetailURL", ""), _utc_now_iso(),
+                detail_url, _utc_now_iso(),
             ))
-    conn.close()
+        conn.close()
+
+    vehicles = scrape_dealer_inventory(
+        website_url,
+        max_vehicles=max_vehicles,
+        on_vehicle_scraped=_save_one,
+    )
+
+    # Prune stale rows: anything whose scraped_at is older than this scrape
+    # started is a vehicle that wasn't seen this round (sold / removed).
+    if vehicles:
+        try:
+            conn = _db()
+            with conn:
+                conn.execute(
+                    "DELETE FROM inventory WHERE twilio_number=? AND scraped_at < ?",
+                    (tn, scrape_start_iso),
+                )
+            conn.close()
+        except Exception as e:
+            app.logger.warning("Stale-row prune failed for %s: %s", tn, e)
+
     return len(vehicles)
 
 

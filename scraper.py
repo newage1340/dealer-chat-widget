@@ -445,10 +445,15 @@ def _dcs_scrape_detail_page(html: str, detail_url: str = "") -> Optional[Dict[st
 # Public entry point
 # ===========================================================================
 
-def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0) -> List[Dict[str, str]]:
+def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0,
+                            on_vehicle_scraped=None) -> List[Dict[str, str]]:
     """
     Scrape full vehicle inventory from a dealer website.
     Detects the platform and routes to the correct scraping logic.
+
+    If on_vehicle_scraped is provided, it will be called with each vehicle dict
+    immediately after that vehicle finishes scraping. Lets the caller persist
+    rows incrementally so progress isn't lost on a crash mid-scrape.
     """
     if not url:
         return []
@@ -530,6 +535,13 @@ def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0
                         logger.info("Scraped %d/%d: %s %s %s",
                                     i + 1, len(all_detail_links),
                                     vehicle["Year"], vehicle["Make"], vehicle["Model"])
+                        # Incremental save callback - lets caller persist rows
+                        # one at a time so progress survives mid-scrape crashes.
+                        if on_vehicle_scraped:
+                            try:
+                                on_vehicle_scraped(vehicle)
+                            except Exception as _e:
+                                logger.warning("on_vehicle_scraped callback failed: %s", _e)
                     else:
                         logger.warning("Could not parse detail page: %s", detail_url)
 
