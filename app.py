@@ -4531,6 +4531,37 @@ def health():
     return jsonify({"ok": True, "dealer": WIDGET_DEALER_NAME})
 
 
+@app.route("/debug/inventory")
+def debug_inventory():
+    """Quick diagnostic: shows what twilio_numbers have inventory and the
+    count for the widget's configured dealer. Helps detect mismatches between
+    what the scraper saved vs what the chat handler is looking up."""
+    try:
+        conn = _db()
+        all_groups = conn.execute(
+            "SELECT twilio_number, COUNT(*) as n FROM inventory GROUP BY twilio_number"
+        ).fetchall()
+        widget_count = conn.execute(
+            "SELECT COUNT(*) FROM inventory WHERE twilio_number=?",
+            (WIDGET_DEALER_TWILIO_NUM,),
+        ).fetchone()[0]
+        sample = conn.execute(
+            "SELECT year, make, model FROM inventory WHERE twilio_number=? LIMIT 5",
+            (WIDGET_DEALER_TWILIO_NUM,),
+        ).fetchall()
+        conn.close()
+        return jsonify({
+            "widget_dealer_twilio_num": WIDGET_DEALER_TWILIO_NUM,
+            "rows_for_widget_dealer": widget_count,
+            "all_dealer_groups": [{"twilio_number": tn, "count": n} for tn, n in all_groups],
+            "sample_rows_for_widget_dealer": [
+                {"year": y, "make": mk, "model": md} for y, mk, md in sample
+            ],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # =========================
 # MODULE-LEVEL INIT (runs whether started via `python app.py` or gunicorn)
 # Render hosts via gunicorn so __main__ never executes - we need tables and
