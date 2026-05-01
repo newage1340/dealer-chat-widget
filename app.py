@@ -597,15 +597,18 @@ def refresh_inventory_for_twilio(twilio_number: str, website_url: str, max_vehic
         should_skip=_should_skip,
     )
 
-    # Prune stale rows: anything whose scraped_at is older than this scrape
-    # started is a vehicle that wasn't seen this round (sold / removed).
+    # Prune stale rows: anything whose scraped_at is older than the resume
+    # cutoff (15 min before this attempt started) is from a previous full
+    # scrape cycle and is now stale - vehicle was sold or removed. Rows
+    # within the resume window (saved by an earlier crashed attempt this
+    # cycle) are kept, since they're part of the same scrape session.
     if vehicles:
         try:
             conn = _db()
             with conn:
                 conn.execute(
                     "DELETE FROM inventory WHERE twilio_number=? AND scraped_at < ?",
-                    (tn, scrape_start_iso),
+                    (tn, resume_cutoff),
                 )
             conn.close()
         except Exception as e:
