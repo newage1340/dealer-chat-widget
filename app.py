@@ -4532,6 +4532,28 @@ def health():
 
 
 # =========================
+# MODULE-LEVEL INIT (runs whether started via `python app.py` or gunicorn)
+# Render hosts via gunicorn so __main__ never executes - we need tables and
+# the scheduler set up at import time.
+# =========================
+init_db()
+if os.getenv("DEV_CLEAR_DB", "0") == "1":
+    try:
+        with _db() as _conn:
+            _conn.execute("DELETE FROM primer_sent")
+        app.logger.info("DEV_CLEAR_DB=1 - cleared primer_sent on startup.")
+    except Exception as _e:
+        app.logger.warning("Could not clear primer_sent: %s", _e)
+
+# Start the scheduler unless explicitly disabled (useful for unit tests).
+if os.getenv("DISABLE_SCHEDULER", "0") != "1":
+    try:
+        start_scheduler()
+    except Exception as _e:
+        app.logger.warning("Scheduler failed to start: %s", _e)
+
+
+# =========================
 # MAIN
 # =========================
 
@@ -4556,13 +4578,7 @@ if __name__ == "__main__":
         DEV_MAX_VEHICLES = 0
         _skip_scan = False
 
-    init_db()
-    # Wipe primer-sent records so every customer is treated as new on each restart
-    # and gets the FYI/capability primer on their next message.
-    with _db() as _conn:
-        _conn.execute("DELETE FROM primer_sent")
-    app.logger.info("Cleared primer_sent - all numbers will receive the FYI primer on next message.")
-    start_scheduler()
+    # init_db() and start_scheduler() already ran at module-level above.
     if not _skip_scan:
         app.logger.info("Running initial inventory scan on startup...")
         refresh_all_inventory(max_vehicles=DEV_MAX_VEHICLES)
