@@ -1167,6 +1167,61 @@ def mark_all_sessions_followed_up(real_phone: str, twilio_number: str) -> None:
         app.logger.warning("mark_all_sessions_followed_up failed for %s: %s", real_phone, e)
 
 
+def has_followup_for_real_phone(real_phone: str, twilio_number: str) -> bool:
+    """Has ANY session belonging to this real phone already received a cold
+    follow-up? Lets us dedupe across sessions: a customer who chatted,
+    abandoned, came back in a fresh session and abandoned again should NOT
+    receive a second SMS — unless they explicitly hit Clear Chat, which
+    wipes the cold_followups history for that real phone."""
+    if not real_phone or not twilio_number:
+        return False
+    try:
+        conn = _db()
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM cold_followups cf
+            JOIN customer_names cn
+              ON cf.customer_phone = cn.customer_phone
+             AND cf.twilio_number  = cn.twilio_number
+            WHERE cn.real_phone    = ?
+              AND cn.twilio_number = ?
+            LIMIT 1
+            """,
+            (real_phone, twilio_number),
+        ).fetchone()
+        conn.close()
+        return bool(row)
+    except Exception as e:
+        app.logger.warning("has_followup_for_real_phone lookup failed for %s: %s", real_phone, e)
+        return False
+
+
+def clear_followup_history_for_real_phone(real_phone: str, twilio_number: str) -> None:
+    """Delete every cold_followups row tied to any session of this real
+    phone. Called from the Clear Chat endpoint so a customer who resets is
+    eligible for a fresh follow-up / lead notification on their next visit."""
+    if not real_phone or not twilio_number:
+        return
+    try:
+        conn = _db()
+        with conn:
+            conn.execute(
+                """
+                DELETE FROM cold_followups
+                WHERE twilio_number = ?
+                  AND customer_phone IN (
+                      SELECT customer_phone FROM customer_names
+                      WHERE real_phone=? AND twilio_number=?
+                  )
+                """,
+                (twilio_number, real_phone, twilio_number),
+            )
+        conn.close()
+    except Exception as e:
+        app.logger.warning("clear_followup_history_for_real_phone failed for %s: %s", real_phone, e)
+
+
 def clear_cold_followup(customer_phone, twilio_number):
     conn = _db()
     with conn:
@@ -4586,6 +4641,15 @@ def send_cold_followups() -> None:
                 _safe_mark(customer_phone, twilio_number)
                 continue
 
+            # Cross-cycle dedupe: this real phone has already received a
+            # follow-up via some prior session that pre-dates this cycle.
+            # Don't send another. The only way to reset this is for the
+            # customer to hit "Clear Chat", which wipes follow-up history
+            # for their real phone.
+            if has_followup_for_real_phone(outbound_phone, twilio_number):
+                _safe_mark(customer_phone, twilio_number)
+                continue
+
             dealer        = select_dealer_for_twilio_number(dealers, twilio_number) if dealers else {}
             dealer_name   = get_row_field(dealer, DEALER_NAME_ALIASES) if dealer else ""
             customer_profile_local = get_customer_profile(customer_phone, twilio_number)
@@ -6208,6 +6272,15 @@ def widget_clear_session():
 
     customer_key  = _session_to_phone(session_id)
     twilio_number = branding["twilio_number"]
+
+    # Look up the customer's real phone BEFORE deleting customer_names so we
+    # can wipe cold_followups history for every sibling session — otherwise
+    # the cross-session follow-up dedup would still see this human as
+    # already-followed-up after the reset.
+    real_phone_for_reset = (get_customer_profile(customer_key, twilio_number)
+                            .get("real_phone", "") or "").strip()
+    if real_phone_for_reset:
+        clear_followup_history_for_real_phone(real_phone_for_reset, twilio_number)
 
     tables = (
         "messages",
