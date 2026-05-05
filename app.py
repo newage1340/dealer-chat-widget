@@ -5616,12 +5616,29 @@ def _process_message(from_number: str, to_number: str, body: str):
     # ── PRIORITY 5: Full AI conversation ─────────────────────────────────
     history  = get_recent_messages(from_number, to_number, limit=14)
 
+    # Pulled up early so pronoun resolution below can use it.
+    last_assistant = next(
+        (m.get("content", "") for m in reversed(history) if m.get("role") == "assistant"),
+        "",
+    )
+
     _is_list_q = bool(re.search(
         r"\b(list|show|what do you have|what cars|what vehicles|what.?s available|"
         r"what are your|under \$?[\d,]+|over \$?[\d,]+|less than|more than|"
         r"between \$?[\d,]|all your|everything (under|over|you have))\b",
         body, re.I
     ))
+
+    # If the customer says "info about it / tell me more about that / what else
+    # on this one" — pronoun referring to a vehicle the bot just discussed —
+    # treat it as a vehicle info request even though the message itself names
+    # no year/make/model. Without this, follow-ups fall through to the generic
+    # "I don't have that information" fallback.
+    _uses_pronoun_for_vehicle = bool(re.search(
+        r"\b(it|that|this|the\s+(?:car|vehicle|truck|suv|sedan|one)|that\s+one|this\s+one)\b",
+        body, re.I,
+    ))
+    _last_assistant_mentions_car = _body_mentions_car(last_assistant or "", inventory_rows)
 
     _is_vehicle_info_q = (
         _is_general_info_question(body)
@@ -5630,14 +5647,13 @@ def _process_message(from_number: str, to_number: str, body: str):
             r"break down|learn more|what.?s the deal|tell me)\b",
             body, re.I,
         ))
-    ) and _body_mentions_car(body, inventory_rows)
+    ) and (
+        _body_mentions_car(body, inventory_rows)
+        or (_uses_pronoun_for_vehicle and _last_assistant_mentions_car)
+    )
 
     # Detect the "no more questions" follow-up: the bot just asked "Do you have
     # any specific questions about it?" and the customer answered with a closure.
-    last_assistant = next(
-        (m.get("content", "") for m in reversed(history) if m.get("role") == "assistant"),
-        "",
-    )
     _bot_just_asked_for_questions = "specific questions about it" in (last_assistant or "").lower()
     _is_no_more_questions = bool(re.search(
         r"^\s*(no|nope|nah|not really|i.?m good|im good|that.?s it|thats it|"
@@ -6001,6 +6017,55 @@ def widget_register_phone():
     save_customer_profile(customer_key, branding["twilio_number"],
                           real_phone=normalized)
     return jsonify({"ok": True, "phone": normalized})
+
+
+@app.route("/widget/clear-session", methods=["POST"])
+def widget_clear_session():
+    """Wipe all per-customer state tied to a widget session (conversation
+    history, profile, pending bookings, cold follow-up scheduling, primer
+    flag). Triggered by the "Clear Chat" button so a customer who resets
+    isn't still chased by lead follow-ups based on the old conversation.
+
+    terms_acceptance_log is intentionally NOT cleared — it's a legal record
+    of the customer's consent and stays put regardless of chat resets."""
+    data = request.get_json(silent=True) or {}
+    session_id = (data.get("session_id") or "").strip()
+    slug       = (data.get("slug") or "").strip()
+    if not session_id or not slug:
+        return jsonify({"error": "missing session_id or slug"}), 400
+
+    branding = _resolve_widget_dealer(slug)
+    if not branding or not branding.get("twilio_number"):
+        return jsonify({"error": "dealer not found"}), 404
+
+    customer_key  = _session_to_phone(session_id)
+    twilio_number = branding["twilio_number"]
+
+    tables = (
+        "messages",
+        "customer_names",
+        "appointments",
+        "pending_appointments",
+        "pending_reconfirmations",
+        "pending_cancellations",
+        "cold_followups",
+        "primer_sent",
+    )
+    try:
+        conn = _db()
+        with conn:
+            for t in tables:
+                conn.execute(
+                    f"DELETE FROM {t} WHERE customer_phone=? AND twilio_number=?",
+                    (customer_key, twilio_number),
+                )
+        conn.close()
+    except Exception as e:
+        app.logger.warning("widget_clear_session DB delete failed: %s", e)
+        return jsonify({"error": "clear failed"}), 500
+
+    app.logger.info("Widget session cleared for %s on %s", customer_key, twilio_number)
+    return jsonify({"ok": True})
 
 
 @app.route("/health")
