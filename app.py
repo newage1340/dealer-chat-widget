@@ -707,7 +707,6 @@ def refresh_inventory_for_twilio(twilio_number: str, website_url: str, max_vehic
 
 
 def refresh_all_inventory(max_vehicles: int = 0) -> None:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     try:
         dealers = read_dealers()
     except Exception as e:
@@ -726,24 +725,21 @@ def refresh_all_inventory(max_vehicles: int = 0) -> None:
     if not tasks:
         return
 
-    def _scrape_one(twilio_number, website_url, dealer_name):
-        count = refresh_inventory_for_twilio(twilio_number, website_url, max_vehicles=max_vehicles)
-        return twilio_number, dealer_name, count
-
-    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-        futures = {
-            executor.submit(_scrape_one, tn, url, name): name
-            for tn, url, name in tasks
-        }
-        for future in as_completed(futures):
-            try:
-                twilio_number, dealer_name, count = future.result()
-                app.logger.info(
-                    "Inventory refreshed for %s (%s): %d vehicles",
-                    dealer_name, twilio_number, count,
-                )
-            except Exception as e:
-                app.logger.error("Inventory refresh failed for %s: %s", futures[future], e)
+    # Scrape dealers sequentially so only one Chromium instance is alive at a
+    # time. Parallel scraping spikes memory past Render Starter's 512MB cap and
+    # OOM-kills the worker mid-scrape. Per-dealer try/except so one failure
+    # doesn't abort the rest of the cycle.
+    for twilio_number, website_url, dealer_name in tasks:
+        try:
+            count = refresh_inventory_for_twilio(
+                twilio_number, website_url, max_vehicles=max_vehicles
+            )
+            app.logger.info(
+                "Inventory refreshed for %s (%s): %d vehicles",
+                dealer_name, twilio_number, count,
+            )
+        except Exception as e:
+            app.logger.error("Inventory refresh failed for %s: %s", dealer_name, e)
 
 
 # =========================
