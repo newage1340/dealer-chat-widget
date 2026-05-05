@@ -4,6 +4,7 @@ import re
 import json
 import sqlite3
 import logging
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,6 +37,17 @@ PURGE_MESSAGES_OLDER_THAN_DAYS = 30
 DEV_CLEAR_DB      = os.getenv("DEV_CLEAR_DB", "0") == "1"
 # Dev mode: set DEV_MAX_VEHICLES=5 to only load first N vehicles (0 = no limit)
 DEV_MAX_VEHICLES  = int(os.getenv("DEV_MAX_VEHICLES", "0"))
+
+# SMS abuse filter: cap inbound SMS per (customer phone, twilio number) pair.
+# In-memory only — resets when the bot restarts. Counts messages 1..8 normally.
+# Message 9 returns a "call the dealer" notice. Messages 10+ get no reply.
+SMS_ABUSE_LIMIT              = 8
+SMS_ABUSE_NOTICE             = (
+    "You have reached the message limit for this number. "
+    "Please call the dealer directly if you have any more questions."
+)
+_sms_abuse_counts: Dict[Tuple[str, str], int] = {}
+_sms_abuse_lock = threading.Lock()
 
 PRIMER_TERMS_URL = os.getenv(
     "PRIMER_TERMS_URL",
@@ -261,6 +273,50 @@ def select_dealer_for_twilio_number(dealers: List[Dict[str, Any]], twilio_to: st
     return dealers[-1] if dealers else {}
 
 
+def _normalize_slug(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
+def select_dealer_for_slug(dealers: List[Dict[str, Any]], slug: str) -> Dict[str, Any]:
+    """Find the dealer row matching the given slug. Falls back to deriving a
+    slug from the dealer name if the slug column is empty, so the bot still
+    works for dealers who haven't filled in the slug yet."""
+    target = _normalize_slug(slug)
+    if not target:
+        return {}
+    for d in reversed(dealers):
+        explicit = _normalize_slug(get_row_field(d, SLUG_ALIASES))
+        if explicit and explicit == target:
+            return d
+    # Fallback: match by slugified dealer name
+    for d in reversed(dealers):
+        name_slug = _normalize_slug(get_row_field(d, DEALER_NAME_ALIASES))
+        if name_slug and name_slug == target:
+            return d
+    return {}
+
+
+def get_widget_branding(dealer: Dict[str, Any]) -> Dict[str, str]:
+    """Return the dealer's widget branding fields with safe defaults."""
+    name        = get_row_field(dealer, DEALER_NAME_ALIASES) or "Dealer"
+    twilio_num  = normalize_phone(get_row_field(dealer, TWILIO_NUMBER_ALIASES))
+    brand_color = (get_row_field(dealer, BRAND_COLOR_ALIASES) or "").strip()
+    logo_url    = (get_row_field(dealer, LOGO_URL_ALIASES) or "").strip()
+    slug        = _normalize_slug(get_row_field(dealer, SLUG_ALIASES)) \
+                  or _normalize_slug(name)
+    if not brand_color:
+        brand_color = "#4a90e2"  # default accent
+    return {
+        "name": name,
+        "twilio_number": twilio_num,
+        "brand_color": brand_color,
+        "logo_url": logo_url,
+        "slug": slug,
+    }
+
+
 # =========================
 # FIELD ALIAS SETS
 # (match Google Form column headers exactly)
@@ -311,6 +367,20 @@ SALESMAN_PHONES_ALIASES = {
 WEBSITE_URL_ALIASES = {
     "website url", "website", "dealer website", "dealership website",
     "inventory website", "url", "site url",
+}
+SLUG_ALIASES = {
+    "slug", "widget slug", "url slug", "dealer slug", "dealership slug",
+    "short name", "shortname", "id", "dealer id",
+}
+BRAND_COLOR_ALIASES = {
+    "brand color", "brand colour", "color", "colour", "primary color",
+    "primary colour", "accent color", "widget color", "theme color",
+    "brand color hex color code", "brand color hex code",
+    "brand colour hex colour code", "hex color", "hex color code",
+}
+LOGO_URL_ALIASES = {
+    "logo url", "logo", "logo image", "logo link", "brand logo",
+    "dealer logo", "dealership logo",
 }
 
 # Inventory alias sets
@@ -403,7 +473,8 @@ def init_db() -> None:
         """)
         for col_def in ("last_name TEXT NOT NULL DEFAULT ''",
                         "email TEXT NOT NULL DEFAULT ''",
-                        "trade_in_vehicle TEXT NOT NULL DEFAULT ''"):
+                        "trade_in_vehicle TEXT NOT NULL DEFAULT ''",
+                        "real_phone TEXT NOT NULL DEFAULT ''"):
             try:
                 conn.execute(f"ALTER TABLE customer_names ADD COLUMN {col_def}")
             except sqlite3.OperationalError:
@@ -487,6 +558,17 @@ def init_db() -> None:
         """)
 
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS terms_acceptance_log (
+                real_phone TEXT PRIMARY KEY,
+                first_name TEXT NOT NULL DEFAULT '',
+                last_name TEXT NOT NULL DEFAULT '',
+                dealer_name TEXT NOT NULL DEFAULT '',
+                twilio_number TEXT NOT NULL DEFAULT '',
+                accepted_at TEXT NOT NULL
+            )
+        """)
+
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS primer_sent (
                 customer_phone TEXT NOT NULL,
                 twilio_number TEXT NOT NULL,
@@ -496,7 +578,7 @@ def init_db() -> None:
         """)
 
         if DEV_CLEAR_DB:
-            app.logger.warning("DEV_CLEAR_DB=1 - wiping appointments, pending, messages, cold_followups, customer_names")
+            app.logger.warning("DEV_CLEAR_DB=1 - wiping appointments, pending, messages, cold_followups, customer_names, terms_acceptance_log")
             conn.execute("DELETE FROM appointments")
             conn.execute("DELETE FROM pending_appointments")
             conn.execute("DELETE FROM pending_reconfirmations")
@@ -504,6 +586,13 @@ def init_db() -> None:
             conn.execute("DELETE FROM cold_followups")
             conn.execute("DELETE FROM messages")
             conn.execute("DELETE FROM customer_names")
+            conn.execute("DELETE FROM terms_acceptance_log")
+            # Also wipe the human-readable text log so dev testing starts fresh.
+            try:
+                if os.path.exists(TERMS_LOG_PATH):
+                    os.remove(TERMS_LOG_PATH)
+            except Exception as e:
+                app.logger.warning("DEV_CLEAR_DB: could not remove %s: %s", TERMS_LOG_PATH, e)
 
     conn.close()
 
@@ -664,17 +753,19 @@ def refresh_all_inventory(max_vehicles: int = 0) -> None:
 def get_customer_profile(customer_phone: str, twilio_number: str) -> Dict[str, str]:
     conn = _db()
     row = conn.execute(
-        "SELECT name, last_name, email, trade_in_vehicle FROM customer_names WHERE customer_phone=? AND twilio_number=?",
+        "SELECT name, last_name, email, trade_in_vehicle, real_phone "
+        "FROM customer_names WHERE customer_phone=? AND twilio_number=?",
         (customer_phone, twilio_number),
     ).fetchone()
     conn.close()
     if not row:
-        return {"name": "", "last_name": "", "email": "", "trade_in_vehicle": ""}
+        return {"name": "", "last_name": "", "email": "", "trade_in_vehicle": "", "real_phone": ""}
     return {
         "name": (row["name"] or "").strip(),
         "last_name": (row["last_name"] or "").strip(),
         "email": (row["email"] or "").strip(),
         "trade_in_vehicle": (row["trade_in_vehicle"] or "").strip(),
+        "real_phone": (row["real_phone"] or "").strip(),
     }
 
 
@@ -682,18 +773,21 @@ def save_customer_profile(customer_phone: str, twilio_number: str, *,
                           name: Optional[str] = None,
                           last_name: Optional[str] = None,
                           email: Optional[str] = None,
-                          trade_in_vehicle: Optional[str] = None) -> None:
+                          trade_in_vehicle: Optional[str] = None,
+                          real_phone: Optional[str] = None) -> None:
     """Upsert customer profile. Only fields passed (non-None) are updated; existing values are preserved."""
     current = get_customer_profile(customer_phone, twilio_number)
     new_name = (name if name is not None else current["name"]).strip()
     new_last = (last_name if last_name is not None else current["last_name"]).strip()
     new_email = (email if email is not None else current["email"]).strip()
     new_trade = (trade_in_vehicle if trade_in_vehicle is not None else current["trade_in_vehicle"]).strip()
+    new_phone = (real_phone if real_phone is not None else current["real_phone"]).strip()
     conn = _db()
     conn.execute(
         "INSERT OR REPLACE INTO customer_names "
-        "(customer_phone, twilio_number, name, last_name, email, trade_in_vehicle) VALUES (?, ?, ?, ?, ?, ?)",
-        (customer_phone, twilio_number, new_name, new_last, new_email, new_trade),
+        "(customer_phone, twilio_number, name, last_name, email, trade_in_vehicle, real_phone) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (customer_phone, twilio_number, new_name, new_last, new_email, new_trade, new_phone),
     )
     conn.commit()
     conn.close()
@@ -743,6 +837,57 @@ def missing_profile_field(profile: Dict[str, str]) -> Optional[str]:
     if not is_valid_email(profile.get("email", "")):
         return "email address"
     return None
+
+
+# Path to the human-readable terms-acceptance log. Sits next to the SQLite DB.
+TERMS_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "terms_acceptance.log")
+
+
+def log_terms_acceptance(*, real_phone: str, first_name: str = "", last_name: str = "",
+                         dealer_name: str = "", twilio_number: str = "") -> bool:
+    """Record that the customer with this phone has accepted the terms and
+    submitted their phone number. Once-per-phone (across all dealers) using
+    INSERT OR IGNORE on terms_acceptance_log; only appends to the human-
+    readable text file on the FIRST acceptance for a given phone. Returns
+    True if newly logged, False if this phone was already on file."""
+    rp = normalize_phone(real_phone or "")
+    if not rp or not rp.startswith("+"):
+        return False
+    accepted_at = datetime.now().isoformat(timespec="seconds")
+    conn = _db()
+    try:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO terms_acceptance_log "
+            "(real_phone, first_name, last_name, dealer_name, twilio_number, accepted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (rp, (first_name or "").strip(), (last_name or "").strip(),
+             (dealer_name or "").strip(), (twilio_number or "").strip(), accepted_at),
+        )
+        conn.commit()
+        was_new = cur.rowcount > 0
+    except Exception as e:
+        app.logger.warning("log_terms_acceptance DB write failed: %s", e)
+        return False
+    finally:
+        conn.close()
+
+    if not was_new:
+        return False
+
+    # Append a human-readable line to the text log. Best-effort - any IO
+    # failure here is logged but does not raise.
+    line = (
+        f"[{accepted_at}] phone={rp} "
+        f"name={first_name or '?'} {last_name or '?'} "
+        f"dealer={dealer_name or '?'} twilio={twilio_number or '?'}\n"
+    )
+    try:
+        os.makedirs(os.path.dirname(TERMS_LOG_PATH) or ".", exist_ok=True)
+        with open(TERMS_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception as e:
+        app.logger.warning("log_terms_acceptance file write failed: %s", e)
+    return True
 
 
 # =========================
@@ -1287,7 +1432,8 @@ def format_inventory_rows(rows: List[Dict[str, Any]], limit: int = 80) -> str:
         if not (year or make or model):
             continue
         car = f"{year} {make} {model}".strip()
-        extras = [x for x in [color, f"{mileage} mi" if mileage else "", f"${price}" if price else ""] if x]
+        price_part = f"${price}" if price else "Call for price"
+        extras = [x for x in [color, f"{mileage} mi" if mileage else "", price_part] if x]
         if extras:
             car += " (" + ", ".join(extras) + ")"
         lines.append(car)
@@ -1328,8 +1474,13 @@ def _keyword_score(current_msg: str, row: Dict[str, Any]) -> float:
         if not val:
             continue
         tokens = [t for t in re.sub(r"[^a-z0-9 ]", " ", val).split() if len(t) >= min_len]
-        if tokens and any(t in q_words for t in tokens):
-            bonus += weight
+        matching = sum(1 for t in tokens if t in q_words)
+        if matching:
+            # Base weight for any match + additional bump per extra token
+            # matched. Lets a 3-token-matched "Odyssey Touring Elite" beat a
+            # 1-token-matched "Odyssey Ex-L" when the customer types "odyssey
+            # touring", instead of both tying at the binary base weight.
+            bonus += weight + (matching - 1) * (weight * 0.5)
     model = str(row.get("Model", "")).strip().lower().replace("-", "")
     trim  = str(row.get("Trim",  "")).strip().lower().replace("-", "")
     if model and trim:
@@ -1580,6 +1731,191 @@ def _row_haystack(r: Dict[str, Any]) -> str:
     return " ".join(p.strip() for p in parts if p).lower()
 
 
+# Fallback model-name → body-type hints. Some scrapers don't include the body
+# type in titles/descriptions (e.g., DealerCarSearch lists "2019 Honda Civic
+# Sport" with no "sedan" anywhere), so without these hints body-type filters
+# would silently miss obvious matches. Keys are lowercase model substrings
+# matched against the Model field. Order doesn't matter; multiple hits OK.
+_MODEL_BODY_TYPE_HINTS: Dict[str, List[str]] = {
+    "sedan": [
+        # Honda / Acura
+        "civic", "accord", "insight", "tlx", "ilx", "rlx", "tsx", "tl",
+        # Toyota / Lexus
+        "camry", "corolla", "avalon", "yaris", "is 250", "is 300", "is 350",
+        "es 300", "es 330", "es 350", "gs 350", "gs 450", "ls 400", "ls 460",
+        "ls 500",
+        # Chevy / GM / Buick / Cadillac / Pontiac / Saturn
+        "malibu", "cruze", "impala", "sonic", "spark", "regal", "lacrosse",
+        "verano", "cts", "ats", "xts", "ct5", "ct6", "dts", "sts", "catera",
+        "g6", "g8", "grand prix", "bonneville", "aura", "ion",
+        # Chrysler / Dodge / Plymouth
+        "200", "300", "charger", "avenger", "stratus", "neon",
+        # Ford / Lincoln / Mercury
+        "fusion", "taurus", "focus sedan", "mkz", "mks", "continental",
+        "sable",
+        # Hyundai / Kia / Genesis
+        "sonata", "elantra", "accent", "azera", "g70", "g80", "g90",
+        "optima", "forte", "rio", "k5", "cadenza", "stinger",
+        # Nissan / Infiniti
+        "altima", "sentra", "maxima", "versa sedan", "q50", "q60", "q70",
+        "m37", "m45", "g35", "g37",
+        # Volkswagen
+        "jetta", "passat", "arteon", " cc ",
+        # BMW (3, 5, 7 series)
+        "320i", "328i", "330i", "335i", "340i", "m340", "525", "528", "530",
+        "535", "540", "550", "m5", "740", "745", "750", "760", "m760",
+        # Mercedes-Benz (A, C, E, S, CLA, CLS)
+        "a-class", "a220", "a250", "c-class", "c220", "c230", "c240", "c250",
+        "c280", "c300", "c320", "c350", "c400", "c450", "c63",
+        "e-class", "e300", "e320", "e350", "e400", "e500", "e550", "e63",
+        "s-class", "s400", "s450", "s500", "s550", "s560", "s580", "s600",
+        "s63", "s65", "cla", "cls",
+        # Audi
+        "a3", "a4", "a5 sedan", "a6", "a7", "a8", "s3", "s4", "s5 sedan",
+        "s6", "s7", "s8",
+        # Volvo
+        "s40", "s60", "s80", "s90",
+        # Mazda / Subaru
+        "mazda3 sedan", "mazda6", "legacy", "impreza sedan",
+        # Mitsubishi / Saab / Tesla
+        "lancer", "galant", "mirage", "9-3", "9-5", "model s", "model 3",
+    ],
+    "suv": [
+        # Honda / Acura
+        "cr-v", "crv", "pilot", "hr-v", "hrv", "passport", "rdx", "mdx",
+        "zdx",
+        # Toyota / Lexus
+        "rav4", "highlander", "4runner", "sequoia", "land cruiser", "venza",
+        "c-hr", "rx ", "rxl", "gx ", "lx ", "nx ", "ux ",
+        # Chevy / GM / Buick / Cadillac
+        "equinox", "tahoe", "suburban", "trax", "traverse", "blazer",
+        "trailblazer", "acadia", "yukon", "terrain", "envoy", "envision",
+        "encore", "enclave", "rendezvous", "srx", "xt4", "xt5", "xt6",
+        "escalade",
+        # Ford / Lincoln
+        "escape", "explorer", "edge", "bronco", "expedition", "flex",
+        "ecosport", "mkc", "mkx", "corsair", "nautilus", "aviator",
+        "navigator",
+        # Hyundai / Kia / Genesis
+        "tucson", "santa fe", "palisade", "kona", "venue", "nexo",
+        "sportage", "sorento", "telluride", "soul", "niro", "seltos",
+        "gv70", "gv80",
+        # Nissan / Infiniti
+        "rogue", "murano", "pathfinder", "armada", "kicks", "xterra",
+        "qx30", "qx50", "qx55", "qx56", "qx60", "qx70", "qx80",
+        # Jeep
+        "wrangler", "cherokee", "grand cherokee", "compass", "patriot",
+        "renegade", "liberty", "commander",
+        # Volkswagen / Audi / Porsche
+        "tiguan", "atlas", "touareg", "taos", "id.4", "q3", "q5", "q7",
+        "q8", "e-tron", "cayenne", "macan",
+        # BMW
+        "x1", "x2", "x3", "x4", "x5", "x6", "x7",
+        # Mercedes-Benz
+        "gla", "glb", "glc", "gle", "gls", "g-class", "g550", "g63", "ml",
+        " gl ", "eqb", "eqc",
+        # Subaru / Mazda / Mitsubishi
+        "forester", "outback", "ascent", "crosstrek", "cx-3", "cx-30",
+        "cx-5", "cx-50", "cx-9", "outlander", "eclipse cross", "asx",
+        # Dodge / Ram
+        "durango", "journey", "nitro",
+        # Land Rover / Range Rover
+        "range rover", "discovery", "defender", "velar", "evoque",
+        "freelander", "lr2", "lr3", "lr4",
+        # Volvo
+        "xc40", "xc60", "xc70", "xc90",
+        # Lincoln (older)
+        "navigator",
+        # Tesla / Jaguar / Maserati / Bentley / Lambo / Porsche
+        "model x", "model y", "f-pace", "e-pace", "i-pace", "levante",
+        "bentayga", "urus",
+    ],
+    "truck": [
+        # Ford
+        "f-150", "f150", "f-250", "f250", "f-350", "f350", "f-450", "f450",
+        "f-550", "f550", "f-650", "f650", "f-750", "f750", "ranger",
+        "maverick", "lightning",
+        # Chevy / GMC
+        "silverado", "colorado", "avalanche", "s-10", "s10", "sierra",
+        "canyon", "hummer ev",
+        # Toyota / Nissan / Honda
+        "tacoma", "tundra", "frontier", "titan", "ridgeline",
+        # Ram / Dodge
+        "ram 1500", "ram 2500", "ram 3500", "ram 4500", "ram 5500", "dakota",
+        # Hyundai
+        "santa cruz",
+        # Jeep
+        "gladiator",
+        # Lincoln
+        "mark lt",
+        # Commercial / box trucks
+        "hino ", "npr", "nqr", "international 4",
+    ],
+    "van": [
+        # Minivans
+        "odyssey", "sienna", "pacifica", "town & country", "town and country",
+        "caravan", "grand caravan", "sedona", "carnival", "quest", "routan",
+        "vanagon", "eurovan", "mpv",
+        # Cargo / passenger vans
+        "transit", "e-150", "e-250", "e-350", "e150", "e250", "e350",
+        "sprinter", "metris", "nv200", "nv1500", "nv2500", "nv3500",
+        "express", "astro", "savana", "promaster", "promaster city",
+    ],
+    "coupe": [
+        "camaro", "corvette", "challenger", "mustang", "350z", "370z",
+        "gt-r", "supra", " 86 ", "brz", "genesis coupe", "prelude", "s2000",
+        "nsx", "rc 350", "rc 300", "rc 200", "lc 500", "lc 600",
+        "slk", " sl ", "amg gt", "cle", " cl ", "tt", "r8", "911",
+        "718 cayman", "718 boxster", "rx-7", "rx-8",
+        "solstice", "sky", "eclipse", "3000gt", "talon", "stealth", "viper",
+        "cougar", "riviera", "m2", "m4", "i8",
+    ],
+    "hatchback": [
+        "prius", "fit", "civic hatch", "fiesta", "focus hatch",
+        "golf", "rabbit", "gti", "r32",
+        "mazda3 hatch", "veloster", "accent hatch", "elantra gt",
+        "rio hatch", "soul", "forte hatch",
+        "cooper", "hardtop", "clubman", "versa note", "leaf", "i3",
+        "sonic hatch", "aveo hatch",
+    ],
+    "wagon": [
+        "v60", "v70", "v90", "sportwagen", "allroad", "a4 avant",
+        "a6 avant", "outback", "pt cruiser",
+    ],
+    "convertible": [
+        "miata", "mx-5", "z3", "z4", "z8", "boxster", "eos", "beetle convertible",
+        "spyder", "cabriolet", "cabrio", "roadster", "drop-top", "drop top",
+    ],
+}
+
+
+def _normalize_for_hint_match(text: str) -> str:
+    """Insert a space between letters/digits so 'GLS450' becomes 'gls 450',
+    'ML350' becomes 'ml 350', etc. Lets word-boundary matching hit prefix
+    style model names without false positives like 's450' matching 'gls450'."""
+    s = (text or "").lower()
+    s = re.sub(r"([a-z])(\d)", r"\1 \2", s)
+    s = re.sub(r"(\d)([a-z])", r"\1 \2", s)
+    return s
+
+
+def _hint_matches_word(hint: str, normalized_haystack: str) -> bool:
+    """Word-boundary match of a hint against the normalized haystack."""
+    norm_hint = _normalize_for_hint_match(hint)
+    return bool(re.search(r"\b" + re.escape(norm_hint) + r"\b", normalized_haystack))
+
+
+def _model_hint_matches(model_field: str, body_type: str) -> bool:
+    """True if the vehicle's model field contains a known hint for this body
+    type. Used as a fallback when the literal body-type word isn't in the
+    scraped data."""
+    hints = _MODEL_BODY_TYPE_HINTS.get(body_type, [])
+    if not hints:
+        return False
+    normalized = _normalize_for_hint_match(model_field)
+    return any(_hint_matches_word(h, normalized) for h in hints)
+
+
 def _row_matches_body_type(r: Dict[str, Any], body_type: str) -> bool:
     if not body_type:
         return True
@@ -1594,7 +1930,16 @@ def _row_matches_body_type(r: Dict[str, Any], body_type: str) -> bool:
         "wagon":       ["wagon"],
         "convertible": ["convertible", "drop-top", "drop top"],
     }.get(body_type, [body_type])
-    return any(a in h for a in aliases)
+    # Word-boundary match against the alias words to avoid false positives
+    # from random substrings (e.g. "sedansomething" or a Patriot description
+    # that mentions "sedan-like ride").
+    if any(re.search(r"\b" + re.escape(a) + r"\b", h) for a in aliases):
+        return True
+    # Fallback: check the model name against known-model hints. Catches cars
+    # whose scraped data doesn't include the body type word (e.g., Civic,
+    # Malibu, Chrysler 200 listed without "sedan" in the title).
+    model_field = str(r.get("Model", ""))
+    return _model_hint_matches(model_field, body_type)
 
 
 def _row_matches_fuel_type(r: Dict[str, Any], fuel_type: str) -> bool:
@@ -1925,7 +2270,7 @@ def _format_make_listing(rows: List[Dict[str, Any]], make_name,
         _, r = matching[0]
         title = _vehicle_title(r)
         p = _row_price_int(r)
-        price_str = f" for ${p:,}" if p > 0 else ""
+        price_str = f" for ${p:,}" if p > 0 else " — call for price"
         return (f"Yes - we have the {title}{price_str}. "
                 f"Would you like more details or to schedule a visit?")
 
@@ -1933,7 +2278,7 @@ def _format_make_listing(rows: List[Dict[str, Any]], make_name,
     lines = [f"Here are our {label}{label_noun}{price_qual}:"]
     for p, r in matching[:LIST_LIMIT]:
         title = _vehicle_title(r)
-        price_str = f": ${p:,}" if p > 0 else ""
+        price_str = f": ${p:,}" if p > 0 else ": Call for price"
         lines.append(f"- {title}{price_str}")
     lines.append("")
     if len(matching) > LIST_LIMIT:
@@ -2015,7 +2360,7 @@ def _format_feature_listing(rows: List[Dict[str, Any]],
         _, r = matching[0]
         title = _vehicle_title(r)
         p = _row_price_int(r)
-        price_str = f" for ${p:,}" if p > 0 else ""
+        price_str = f" for ${p:,}" if p > 0 else " — call for price"
         return (f"Yes - we have the {title}{price_str}. "
                 f"Would you like more details or to schedule a visit?")
 
@@ -2023,7 +2368,7 @@ def _format_feature_listing(rows: List[Dict[str, Any]],
     lines = [f"Here are our {label}{label_noun}{price_qual}:"]
     for p, r in matching[:LIST_LIMIT]:
         title = _vehicle_title(r)
-        price_str = f": ${p:,}" if p > 0 else ""
+        price_str = f": ${p:,}" if p > 0 else ": Call for price"
         lines.append(f"- {title}{price_str}")
     lines.append("")
     if len(matching) > LIST_LIMIT:
@@ -2031,6 +2376,64 @@ def _format_feature_listing(rows: List[Dict[str, Any]],
     else:
         lines.append("Would you like more details on any of these, or to schedule a visit?")
     return "\n".join(lines)
+
+
+def _format_new_arrivals_listing(rows: List[Dict[str, Any]]) -> str:
+    """List vehicles that don't have a public price yet — these are typically
+    just-arrived units the dealer hasn't priced. Used for 'new arrivals' /
+    'what's new' style queries."""
+    new_arrivals = [r for r in rows if _row_price_int(r) <= 0]
+    # Sort newest year first so genuinely new units bubble up.
+    def _key(r):
+        try:
+            yi = int(str(r.get("Year", "")).strip())
+        except ValueError:
+            yi = 0
+        return -yi
+    new_arrivals.sort(key=_key)
+
+    if not new_arrivals:
+        return ("We don't have any new arrivals listed at the moment - "
+                "everything currently in inventory has a posted price. "
+                "Want me to show you what we have?")
+
+    LIST_LIMIT = 8
+    lines = ["Here are our latest arrivals (call for pricing):"]
+    for r in new_arrivals[:LIST_LIMIT]:
+        title = _vehicle_title(r)
+        lines.append(f"- {title}")
+    lines.append("")
+    if len(new_arrivals) > LIST_LIMIT:
+        lines.append(f"...and {len(new_arrivals) - LIST_LIMIT} more. Ask about any specific one and I'll share the details.")
+    else:
+        lines.append("Want details on any of these or to schedule a visit to see one?")
+    return "\n".join(lines)
+
+
+def _is_new_arrivals_question(body: str) -> bool:
+    """Detect 'what's new', 'any new arrivals', 'new inventory', 'just got
+    in' style questions. Distinct from asking for brand-new (current year)
+    cars - this is about freshly-arrived stock. Patterns are written to
+    tolerate common typos: 'arrivals' / 'arivals' / 'arrivels' / 'arrival'
+    all match via the 'arr?iv\\w*' fragment."""
+    s = (body or "").lower()
+    # Reusable typo-tolerant fragment for arrivals/arrival/arived/arrived/etc.
+    arr = r"arr?iv\w*"
+    if not re.search(
+        rf"\b(new\s+{arr}|new\s+inventory|new\s+stock|new\s+to\s+the\s+lot|"
+        rf"new\s+(cars?|vehicles?|trucks?|suvs?|sedans?)|"
+        rf"recen?tly\s+arr?ived?|recen?t\s+{arr}|"
+        rf"just\s+(got|came)\s+in|just\s+arr?ived?|"
+        rf"lat[ei]st\s+{arr}|fresh\s+inventory|fresh\s+{arr}|"
+        rf"what'?s\s+new|whats\s+new|anything\s+new|got\s+anything\s+new)\b",
+        s,
+    ):
+        return False
+    # Don't fire if customer is asking specifically about a make/model that
+    # happens to include "new" in some other sense.
+    if re.search(r"\bnew\s+(toyota|honda|ford|chevy|bmw|mercedes)\b", s):
+        return False
+    return True
 
 
 def _is_more_question(body: str) -> bool:
@@ -2315,7 +2718,7 @@ def _format_generic_listing(rows: List[Dict[str, Any]], limit: int = 10) -> str:
         model = str(r.get("Model", "")).strip()
         title = " ".join(s for s in [year, make, model] if s)
         p = _row_price_int(r)
-        price_str = f": ${p:,}" if p > 0 else ""
+        price_str = f": ${p:,}" if p > 0 else ": Call for price"
         lines.append(f"- {title}{price_str}")
 
     lines.append("")
@@ -2328,12 +2731,19 @@ def _format_generic_listing(rows: List[Dict[str, Any]], limit: int = 10) -> str:
 
 def _extract_car_from_last_bot_message(history: List[Dict[str, Any]], inventory_rows: List[Dict[str, Any]]):
     """Find the vehicle the bot most recently mentioned. Returns None if the
-    most recent assistant message named multiple plausible cars (e.g. a price
+    most recent assistant message named multiple distinct vehicles (e.g. a
     listing) - the caller should fall through to the LLM rather than guess."""
     for msg in reversed(history):
         if msg.get("role") != "assistant":
             continue
         content = (msg.get("content") or "").lower()
+        # Detect listing context: 2+ "<year> <make>" mentions usually means
+        # the bot was enumerating vehicles, not talking about one. In that
+        # case we return None so the caller can route through the LLM with
+        # full conversation context.
+        year_make_pairs = set(re.findall(r"\b(19[5-9]\d|20[0-2]\d)\s+([a-z][a-z\-]+)", content))
+        if len(year_make_pairs) >= 2:
+            return None
         # Build a hyphen-stripped word set from content so "F-250" (which
         # tokenizes to ["f", "250"] under default splitting) still matches a
         # row whose model nameplate is "F-250" -> "f250".
@@ -2342,11 +2752,11 @@ def _extract_car_from_last_bot_message(history: List[Dict[str, Any]], inventory_
             content.replace("-", ""),
         ))
         best_row, best_score = None, 0
-        plausible = 0
         for r in inventory_rows:
             year  = str(r.get("Year",  "")).strip().lower()
             make  = str(r.get("Make",  "")).strip().lower()
             model = str(r.get("Model", "")).strip().lower()
+            trim  = str(r.get("Trim",  "")).strip().lower()
             # Require the model NAMEPLATE (first token of the model field) to
             # appear in the message before counting this vehicle as plausibly
             # mentioned. Year+make alone isn't enough - otherwise a 2019 Jetta
@@ -2361,15 +2771,21 @@ def _extract_car_from_last_bot_message(history: List[Dict[str, Any]], inventory_
             if year and year in content:   score += 2
             if make and make in content:   score += 3
             score += 3  # nameplate match (already required above)
-            plausible += 1
+            # Tiebreaker for same-nameplate variants: credit for secondary
+            # model tokens / trim words present in the message. Lets Odyssey
+            # Touring Elite beat Odyssey Ex-L when the bot was talking about
+            # the former specifically.
+            secondary_tokens = set(
+                re.sub(r"[^a-z0-9]", "", t)
+                for t in (model.split()[1:] + trim.split())
+            )
+            secondary_tokens.discard("")
+            for tok in secondary_tokens:
+                if len(tok) >= 2 and tok in content_words:
+                    score += 2
             if score > best_score:
                 best_score, best_row = score, r
-        # If the last bot message named several cars (a list), refuse to pick
-        # one arbitrarily - caller falls through to the LLM with full context.
-        if best_row and plausible <= 1:
-            return best_row
-        if plausible >= 2:
-            return None
+        return best_row
     return None
 
 
@@ -2490,22 +2906,177 @@ def _title_status_response_for_match(r):
     return f"The {title} carries a {title_status} title." if title_status else f"Title status information is not currently on file for the {title}."
 
 
+_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_DAY_ALIASES = {
+    "mon": "Monday", "monday": "Monday",
+    "tue": "Tuesday", "tues": "Tuesday", "tuesday": "Tuesday",
+    "wed": "Wednesday", "weds": "Wednesday", "wednesday": "Wednesday",
+    "thu": "Thursday", "thur": "Thursday", "thurs": "Thursday", "thursday": "Thursday",
+    "fri": "Friday", "friday": "Friday",
+    "sat": "Saturday", "saturday": "Saturday",
+    "sun": "Sunday", "sunday": "Sunday",
+}
+
+
+def _parse_hours_string(hours_str: str) -> Dict[str, str]:
+    """Parse common hours-string formats into {weekday: 'closed' or 'X to Y'}.
+    Handles: 'Monday-Saturday: 9am to 6pm, Sunday: closed', 'Mon-Fri 8-5',
+    'Open daily 9-5', etc. Unknown days default to absent."""
+    result: Dict[str, str] = {}
+    if not hours_str:
+        return result
+    # Split on common segment separators
+    segments = re.split(r"[,;|/\n]+", hours_str)
+    for seg in segments:
+        seg = seg.strip().rstrip(".")
+        if not seg:
+            continue
+        is_closed = bool(re.search(r"\bclosed\b", seg, re.I))
+        # Detect "daily" / "every day" → all 7 days
+        if re.search(r"\b(daily|every\s*day|all\s*week)\b", seg, re.I):
+            day_indices = list(range(7))
+        else:
+            # Day range like "Mon-Sat" or "Monday - Saturday"
+            range_match = re.search(
+                r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\s*[-–to]+\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b",
+                seg, re.I,
+            )
+            if range_match:
+                start = _DAY_ALIASES.get(range_match.group(1).lower())
+                end   = _DAY_ALIASES.get(range_match.group(2).lower())
+                if start in _WEEKDAYS and end in _WEEKDAYS:
+                    s, e = _WEEKDAYS.index(start), _WEEKDAYS.index(end)
+                    day_indices = list(range(s, e + 1)) if s <= e else (
+                        list(range(s, 7)) + list(range(0, e + 1))
+                    )
+                else:
+                    continue
+            else:
+                # Single day(s) - find any day mention(s)
+                singles = re.findall(
+                    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b",
+                    seg, re.I,
+                )
+                day_indices = []
+                for d in singles:
+                    canonical = _DAY_ALIASES.get(d.lower())
+                    if canonical and canonical in _WEEKDAYS:
+                        day_indices.append(_WEEKDAYS.index(canonical))
+                if not day_indices:
+                    continue
+        # Pull the open/close time pair if not closed
+        hours_text = "closed"
+        if not is_closed:
+            time_match = re.search(
+                r"(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.?m\.?|p\.?m\.?)?)\s*(?:-|–|to)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.?m\.?|p\.?m\.?)?)",
+                seg, re.I,
+            )
+            if time_match:
+                hours_text = f"{time_match.group(1).strip()} to {time_match.group(2).strip()}"
+            else:
+                continue  # no parseable hours and not closed → skip
+        for idx in day_indices:
+            result[_WEEKDAYS[idx]] = hours_text
+    return result
+
+
+def _detect_day_in_message(msg: str) -> Optional[str]:
+    """Return the weekday name the customer is asking about (e.g. 'Monday'),
+    or None if the question is general."""
+    if not msg:
+        return None
+    s = msg.lower()
+    today = datetime.now()
+    if re.search(r"\btomorrow\b", s):
+        return (today + timedelta(days=1)).strftime("%A")
+    if re.search(r"\b(today|tonight|right now|now)\b", s):
+        return today.strftime("%A")
+    # Specific named day - support "Monday", "next Monday", "this Friday", etc.
+    for raw, canonical in _DAY_ALIASES.items():
+        if re.search(rf"\b{raw}\b", s):
+            return canonical
+    return None
+
+
+def _hours_response_for_day(hours_str: str, asked_day: str) -> Optional[str]:
+    """Return a tailored response for a specific day, or None if we can't
+    parse hours for that day."""
+    parsed = _parse_hours_string(hours_str)
+    status = parsed.get(asked_day)
+    if status is None:
+        return None
+    today_name = datetime.now().strftime("%A")
+    tomorrow_name = (datetime.now() + timedelta(days=1)).strftime("%A")
+    if asked_day == today_name:
+        day_phrase = f"today ({asked_day})"
+    elif asked_day == tomorrow_name:
+        day_phrase = f"tomorrow ({asked_day})"
+    else:
+        day_phrase = asked_day
+    if status == "closed":
+        return f"We're closed {day_phrase}."
+    return f"Yes, we're open {day_phrase} from {status}."
+
+
 def _dealer_info_response(dealer: Dict[str, Any], dealer_phone: str, msg: str = "") -> str:
     msg_lower    = (msg or "").lower()
     dealer_name  = get_row_field(dealer, DEALER_NAME_ALIASES) or "the dealership"
     dealer_phone = normalize_phone(dealer_phone)
 
-    if re.search(r"\b(address|location|where|located|directions)\b", msg_lower):
-        return f"We are located at {get_row_field(dealer, DEALER_ADDRESS_ALIASES) or '(not listed)'}."
-    if re.search(r"\b(hour|hours|open|close|operation)\b", msg_lower):
-        return f"Our hours of operation are {get_row_field(dealer, DEALER_HOURS_ALIASES) or '(not listed)'}."
-    if re.search(r"\b(financ\w*)\b", msg_lower):
-        return f"Regarding financing: {get_row_field(dealer, DEALER_FINANCING_ALIASES) or '(not listed)'}."
-    if re.search(r"\b(trade[- ]?in)\b", msg_lower):
-        return f"Regarding trade-ins: {get_row_field(dealer, DEALER_TRADEINS_ALIASES) or '(not listed)'}."
-    if re.search(r"\b(polic|rules|restrictions)\b", msg_lower):
-        return f"Our dealership policy: {get_row_field(dealer, DEALER_POLICIES_ALIASES) or '(none listed)'}."
+    asks_address   = bool(re.search(r"\b(address|location|where|located|directions)\b", msg_lower))
+    asks_hours     = bool(re.search(r"\b(hour|hours|open|close|operation)\b", msg_lower))
+    asks_financing = bool(re.search(r"\b(financ\w*)\b", msg_lower))
+    asks_tradeins  = bool(re.search(r"\b(trade[- ]?in)\b", msg_lower))
+    asks_policy    = bool(re.search(r"\b(polic|rules|restrictions)\b", msg_lower))
+    matched_count  = sum([asks_address, asks_hours, asks_financing, asks_tradeins, asks_policy])
 
+    # Single-topic question - preserve the original concise response.
+    if matched_count == 1:
+        if asks_address:
+            return f"We are located at {get_row_field(dealer, DEALER_ADDRESS_ALIASES) or '(not listed)'}."
+        if asks_hours:
+            hours_str = get_row_field(dealer, DEALER_HOURS_ALIASES) or "(not listed)"
+            asked_day = _detect_day_in_message(msg)
+            if asked_day:
+                day_response = _hours_response_for_day(hours_str, asked_day)
+                if day_response:
+                    return day_response
+            return f"Our hours of operation are {hours_str}."
+        if asks_financing:
+            return f"Regarding financing: {get_row_field(dealer, DEALER_FINANCING_ALIASES) or '(not listed)'}."
+        if asks_tradeins:
+            return f"Regarding trade-ins: {get_row_field(dealer, DEALER_TRADEINS_ALIASES) or '(not listed)'}."
+        if asks_policy:
+            return f"Our dealership policy: {get_row_field(dealer, DEALER_POLICIES_ALIASES) or '(none listed)'}."
+
+    # Multi-topic question - answer every part the customer asked about.
+    if matched_count >= 2:
+        parts: List[str] = []
+        if asks_address:
+            parts.append(f"we're located at {get_row_field(dealer, DEALER_ADDRESS_ALIASES) or '(not listed)'}")
+        if asks_hours:
+            hours_str = get_row_field(dealer, DEALER_HOURS_ALIASES) or "(not listed)"
+            asked_day = _detect_day_in_message(msg)
+            day_response = _hours_response_for_day(hours_str, asked_day) if asked_day else None
+            if day_response:
+                # Strip the leading "We're closed " / "Yes, we're open " for fragment use
+                fragment = re.sub(r"^(yes,?\s*)?we'?re\s+", "", day_response, flags=re.I).rstrip(".")
+                parts.append(fragment)
+            else:
+                parts.append(f"our hours of operation are {hours_str}")
+        if asks_financing:
+            parts.append(f"regarding financing, {get_row_field(dealer, DEALER_FINANCING_ALIASES) or '(not listed)'}")
+        if asks_tradeins:
+            parts.append(f"on trade-ins, {get_row_field(dealer, DEALER_TRADEINS_ALIASES) or '(not listed)'}")
+        if asks_policy:
+            parts.append(f"as for our policies, {get_row_field(dealer, DEALER_POLICIES_ALIASES) or '(none listed)'}")
+        # Capitalize the first segment.
+        parts[0] = parts[0][0].upper() + parts[0][1:]
+        if len(parts) == 2:
+            return f"{parts[0]}, and {parts[1]}."
+        return ", ".join(parts[:-1]) + f", and {parts[-1]}."
+
+    # No specific topic matched - return the catch-all overview.
     address   = get_row_field(dealer, DEALER_ADDRESS_ALIASES) or "(not listed)"
     hours     = get_row_field(dealer, DEALER_HOURS_ALIASES) or "(not listed)"
     financing = get_row_field(dealer, DEALER_FINANCING_ALIASES) or "(not listed)"
@@ -2694,6 +3265,111 @@ def send_sms_to_customer(*, customer_phone: str, from_number: str, body: str) ->
     return _send_sms(customer_phone, from_number, body)
 
 
+def find_widget_session_for_real_phone(real_phone: str, twilio_number: str) -> str:
+    """Reverse lookup: given a real phone number that texted in via SMS,
+    find the matching +web<sessionid> pseudo-phone if this customer ever
+    used the widget. Lets SMS replies (e.g. reschedule/cancel) reach
+    appointments that were originally booked through the widget."""
+    rp = normalize_phone(real_phone or "")
+    if not rp:
+        return ""
+    conn = _db()
+    try:
+        row = conn.execute(
+            "SELECT customer_phone FROM customer_names "
+            "WHERE twilio_number=? AND real_phone=? AND customer_phone LIKE '+web%' "
+            "ORDER BY rowid DESC LIMIT 1",
+            (twilio_number, rp),
+        ).fetchone()
+    except Exception as e:
+        app.logger.warning("find_widget_session_for_real_phone failed: %s", e)
+        return ""
+    finally:
+        conn.close()
+    return row["customer_phone"] if row else ""
+
+
+def resolve_outbound_customer_phone(customer_phone: str, twilio_number: str) -> str:
+    """Return the phone number we can actually text the customer at.
+
+    For SMS customers, customer_phone IS their real phone, so it works as-is.
+    For widget customers, customer_phone is a "+web<sessionid>" pseudo-phone
+    that Twilio can't reach - we fall back to real_phone from their profile,
+    which is collected when they open the widget."""
+    cp = (customer_phone or "").strip()
+    if cp.startswith("+web"):
+        return get_customer_profile(cp, twilio_number).get("real_phone", "")
+    return cp
+
+
+def build_customer_confirmation_body(*, dealer_name: str, customer_name: str,
+                                     visit_time: str, car_desc: str,
+                                     dealer_address: str = "",
+                                     dealer_phone: str = "") -> str:
+    """Friendly customer-facing appointment confirmation SMS. Distinct from
+    the operational dealer/salesman alert, which has different info."""
+    name_part = f"Hi {customer_name}! " if customer_name else "Hi! "
+    body = (
+        f"{name_part}Your appointment with {dealer_name} is confirmed for "
+        f"{visit_time} to see the {car_desc}."
+    )
+    if dealer_address:
+        body += f"\n\nAddress: {dealer_address}"
+    if dealer_phone:
+        body += f"\nQuestions? Call us at {dealer_phone}."
+    body += "\n\nWe look forward to seeing you!"
+    return body
+
+
+def notify_customer_appointment(dealer_row: Dict[str, Any], *, customer_phone: str,
+                                twilio_number: str, customer_name: str,
+                                visit_time: str, car_desc: str,
+                                action: str = "confirmed") -> None:
+    """Send a friendly appointment confirmation/reschedule/cancellation text
+    to the CUSTOMER. Silently no-ops if we don't have a real phone for them
+    (e.g., widget customer who somehow skipped phone collection), OR if the
+    current request came in via /sms (the bot's TwiML reply already reaches
+    the customer's phone, so a separate SMS would duplicate)."""
+    if g.get("is_sms_request"):
+        app.logger.info("notify_customer_appointment: skipping for SMS-origin request "
+                        "(TwiML reply already covers it)")
+        return
+    to_phone = resolve_outbound_customer_phone(customer_phone, twilio_number)
+    if not to_phone:
+        app.logger.info("notify_customer_appointment: no real phone on file for %s, skipping",
+                        customer_phone)
+        return
+    dealer_name = get_row_field(dealer_row, DEALER_NAME_ALIASES) or "the dealership"
+    dealer_address = get_row_field(dealer_row, DEALER_ADDRESS_ALIASES)
+    dealer_phone = normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
+    if action == "rescheduled":
+        body = (
+            f"Hi {customer_name}! Your appointment with {dealer_name} has been "
+            f"rescheduled to {visit_time} to see the {car_desc}."
+        )
+        if dealer_address: body += f"\n\nAddress: {dealer_address}"
+        if dealer_phone:   body += f"\nQuestions? Call us at {dealer_phone}."
+        body += "\n\nSee you then!"
+    elif action == "cancelled":
+        body = (
+            f"Hi {customer_name}, your appointment with {dealer_name} for "
+            f"{visit_time} to see the {car_desc} has been cancelled."
+        )
+        if dealer_phone: body += f"\nWant to reschedule? Call us at {dealer_phone}."
+    else:
+        body = build_customer_confirmation_body(
+            dealer_name=dealer_name, customer_name=customer_name,
+            visit_time=visit_time, car_desc=car_desc,
+            dealer_address=dealer_address, dealer_phone=dealer_phone,
+        )
+    ok, err = _send_sms(to_phone, twilio_number, body)
+    if ok:
+        app.logger.info("Customer appointment %s SMS sent to %s", action, to_phone)
+    else:
+        app.logger.warning("Customer appointment %s SMS failed for %s: %s",
+                            action, to_phone, err)
+
+
 # =========================
 # ALERT BODY HELPERS
 # =========================
@@ -2808,6 +3484,15 @@ Reply with bullet points only.""".strip()
 
 def ai_vehicle_detail_reply(customer_msg, vehicle_data, dealer_phone, history):
     history_snippet = " ".join((m.get("content") or "") for m in history[-4:])
+    dealer_phone_clean = normalize_phone(dealer_phone or "")
+    phone_rule = (
+        f"Only mention the dealership phone number ({dealer_phone_clean}) if the customer's question genuinely cannot be answered from the vehicle data above. "
+        f"If you DID answer their question, do NOT add 'feel free to call' or 'contact us at...' - the chat IS the contact channel. "
+        f"Never invent a phone number. If you do mention the phone, it must be exactly {dealer_phone_clean}."
+        if dealer_phone_clean
+        else "Do NOT include any phone number in your reply (we don't have one on file). "
+             "Suggest the customer reach out via this chat or schedule a visit instead."
+    )
     prompt = f"""You are a professional automotive sales consultant responding via SMS.
 
 A customer asked: "{customer_msg}"
@@ -2817,7 +3502,14 @@ Vehicle data (use ONLY this - do not guess):
 
 Recent conversation: {history_snippet or "(none)"}
 
-Write one natural, conversational SMS reply. 1-3 sentences. No bullet points. Do not reference spreadsheets or databases.""".strip()
+Write one natural, conversational SMS reply. 1-3 sentences. No bullet points. Do not reference spreadsheets or databases. Your job is to ANSWER questions in this chat - the customer chose to chat instead of call. Don't push them to call when you've already answered them.
+
+Phone number rule:
+- {phone_rule}
+
+CarFax rules:
+- If the vehicle data above contains a "CarFax report:" line with a URL, you MAY mention CarFax and you MUST include the URL in your reply (do not make the customer ask for it separately).
+- If no CarFax URL is present in the vehicle data, do NOT mention or recommend CarFax at all. Either answer with the info you do have, or briefly say you don't have that detail and suggest contacting the dealership.""".strip()
     try:
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -3130,11 +3822,12 @@ def ai_policy_reply(customer_msg, topic, policy_text, dealer_phone, history, cus
 
     if topic == "financing":
         gather_instruction = (
-            "If the customer has NOT shared their credit score yet, your reply MUST ask for it in a friendly way so the dealer can be prepared. Do NOT answer the financing question without asking for the credit score first. "
-            "If they HAVE already shared their credit score (check the conversation above), acknowledge it briefly, "
-            "then you MUST end your reply by asking them to schedule a visit - for example: "
-            "'Would you like to come in so we can go over your financing options in person?' "
-            "FORBIDDEN: do not include any URL, web link, or phone number in your reply - even if the policy text contains one - UNLESS the customer's latest message explicitly asks for a link, URL, website, or application form."
+            "FORBIDDEN: NEVER ask the customer for their credit score, credit history, SSN, date of birth, income, or any other financial/credit information over chat. The dealer collects that through a secure credit application, not in this conversation. "
+            "Reply in EXACTLY two short sentences in this order:\n"
+            "  Sentence 1 - one line summarizing financing using the policy text above. If the policy text contains a URL, include it as a plain URL (e.g. 'You can apply at https://example.com/apply'). NEVER use markdown link syntax like [text](url) - just paste the raw URL. If there is no URL in the policy text, say 'You can apply online or in person at the dealership.'\n"
+            "  Sentence 2 - a direct booking question, e.g. 'What time today or tomorrow works for you to come in and go over the options?'\n"
+            "Do NOT add a third sentence. Do NOT use bullet points. Do NOT use markdown brackets `[` or `]` anywhere in the reply. "
+            "FORBIDDEN: do not say 'stop by', 'feel free to visit', 'whenever you're ready', 'when you have time', or similar passive invitations - always ask for a specific time."
         )
     elif "warranty" in topic.lower() or "service" in topic.lower():
         gather_instruction = (
@@ -3146,10 +3839,11 @@ def ai_policy_reply(customer_msg, topic, policy_text, dealer_phone, history, cus
         )
     else:  # trade-ins
         gather_instruction = (
-            "If the customer has NOT shared their trade-in vehicle details yet, your reply MUST ask for them so the dealer can prepare a number. Specifically ask for: year, make, model, mileage, title status (clean/salvage/rebuilt), and overall condition. Ask for whichever pieces are still missing - if the customer has already shared some details (check the conversation above), only ask for the rest. Do NOT answer the trade-in question without asking for the missing details first. "
-            "If they HAVE already provided ALL the trade-in details, acknowledge them and redirect toward scheduling a visit "
-            "(e.g. 'Would you like to bring it in so we can take a look and give you a number?'). "
-            "FORBIDDEN: do not include any URL, web link, or phone number in your reply - even if the policy text contains one - UNLESS the customer's latest message explicitly asks for a link, URL, website, or application form."
+            "If the customer has NOT shared their trade-in vehicle details yet, your reply MUST ask for them so the dealer can have a ballpark range in mind before the visit (a firm number always requires an in-person inspection - never imply otherwise). Specifically ask for: year, make, model, mileage, title status (clean/salvage/rebuilt), and overall condition. Ask for whichever pieces are still missing - if the customer has already shared some details (check the conversation above), only ask for the rest. Do NOT answer the trade-in question without asking for the missing details first. "
+            "If they HAVE already provided ALL the trade-in details, you MUST briefly acknowledge them in ONE short sentence, then ASK FOR A SPECIFIC TIME to schedule a visit. Do NOT use vague phrases like 'stop by anytime' or 'feel free to come in' - those are passive and lose appointments. "
+            "Use a direct booking question like: 'What time works best for you to come in tomorrow or this week?' or 'Would you like to come in today or tomorrow to take a look?' - phrased so the customer's natural reply is a time/day. "
+            "FORBIDDEN: do not include any URL, web link, or phone number in your reply - even if the policy text contains one - UNLESS the customer's latest message explicitly asks for a link, URL, website, or application form. "
+            "FORBIDDEN: do not say 'stop by', 'feel free to visit', 'whenever you're ready', 'when you have time', or similar passive invitations - always ask for a specific time."
         )
 
     name_block = (
@@ -3158,12 +3852,24 @@ def ai_policy_reply(customer_msg, topic, policy_text, dealer_phone, history, cus
         "You do NOT know the customer's name. Do NOT invent one, do NOT use a single letter or initial, and do NOT use any placeholder like 'Hi there' followed by a stray character. Just start the reply without a name (e.g., 'Sure - we offer...')."
     )
 
+    dealer_phone_clean = normalize_phone(dealer_phone or "")
+    if dealer_phone_clean:
+        phone_rule = (
+            f"If you reference a phone number in your reply, you MUST use this exact number: {dealer_phone_clean}. "
+            f"Do NOT invent, guess, or make up any other phone number under any circumstances."
+        )
+    else:
+        phone_rule = (
+            "Do NOT include any phone number in your reply (we don't have one on file). "
+            "Suggest the customer continue here in chat or schedule a visit instead."
+        )
+
     prompt = f"""You are a professional automotive sales consultant responding via SMS.
 
 The customer asked about {topic}. Here is the dealership's {topic} policy:
 {policy_text}
 
-Dealer phone (only share if truly needed): {dealer_phone or "(not listed)"}
+Dealer phone (only share if truly needed): {dealer_phone_clean or "(not listed)"}
 
 {name_block}
 
@@ -3176,7 +3882,8 @@ Instructions:
 - Answer naturally using the policy text above. Keep it to 2-3 sentences.
 - {gather_instruction}
 - Do not repeat information already covered in the conversation.
-- Do not invent details not in the policy.""".strip()
+- Do not invent details not in the policy.
+- {phone_rule}""".strip()
 
     try:
         resp = openai_client.chat.completions.create(
@@ -3189,14 +3896,15 @@ Instructions:
         app.logger.warning("ai_policy_reply failed: %s", e)
         return ""
 
-    # Strip URLs and phone numbers unless the customer explicitly asked for one.
+    # Strip URLs and phone numbers unless the customer explicitly asked for one,
+    # OR the topic is financing (where we WANT to share the credit application URL).
     customer_asked_for_link = bool(re.search(
         r"\b(link|url|website|web\s*site|web\s*page|webpage|application\s*form|"
         r"apply\s*online|where\s*do\s*i\s*apply|send\s*me\s*the|page|site|"
         r"phone\s*number|number\s*to\s*call|who\s*do\s*i\s*call)\b",
         (customer_msg or "").lower(),
     ))
-    if not customer_asked_for_link:
+    if not customer_asked_for_link and topic != "financing":
         # Drop full URLs and standalone phone numbers, then tidy double spaces.
         reply = re.sub(r"https?://\S+", "", reply)
         reply = re.sub(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b", "", reply)
@@ -3244,6 +3952,99 @@ Rules:
     if not result or result.upper().startswith("NONE"):
         return ""
     return result.splitlines()[0].strip()
+
+
+_KNOWN_TRADE_IN_MAKES = {
+    "toyota", "honda", "ford", "chevy", "chevrolet", "nissan", "hyundai",
+    "kia", "subaru", "mazda", "bmw", "mercedes", "mercedes-benz", "audi",
+    "volkswagen", "vw", "lexus", "acura", "infiniti", "buick", "cadillac",
+    "gmc", "ram", "dodge", "jeep", "chrysler", "lincoln", "volvo",
+    "mitsubishi", "porsche", "tesla", "land rover", "range rover", "mini",
+    "fiat", "smart", "scion", "saturn", "saab", "pontiac", "oldsmobile",
+    "mercury", "plymouth", "isuzu", "suzuki", "jaguar", "bentley",
+    "rolls-royce", "ferrari", "lamborghini", "maserati", "alfa romeo",
+    "genesis", "polestar", "lucid", "rivian", "harley-davidson", "harley",
+}
+
+
+def _trade_in_missing_parts(history: List[Dict[str, Any]]) -> List[str]:
+    """Return list of trade-in details the customer hasn't shared yet.
+    Possible values: 'year', 'make and model', 'mileage',
+    'title status (clean/salvage/rebuilt)', 'overall condition'."""
+    text = " ".join(
+        (m.get("content") or "").lower()
+        for m in history if m.get("role") == "user"
+    )
+    has_year = bool(re.search(r"\b(19[5-9]\d|20[0-2]\d)\b", text))
+    # If the customer has named any common car make in this conversation,
+    # treat make+model as collected (model usually follows naturally).
+    has_make = any(
+        re.search(rf"\b{re.escape(m)}\b", text) for m in _KNOWN_TRADE_IN_MAKES
+    )
+    has_mileage = bool(re.search(
+        r"(\d{1,3}[\s,]?\d{3}|\d{1,3}\s*k)\s*(mi\b|miles?\b)|"
+        r"\b\d{2,3}\s*k\b",
+        text
+    ))
+    has_title = bool(re.search(
+        r"\b(clean|salvage|rebuilt|lien|branded|junk|rebuilt salvage)\s+title\b|"
+        r"\btitle\s+is\s+(clean|salvage|rebuilt|branded)\b",
+        text
+    ))
+    has_condition = bool(re.search(
+        r"\b(excellent|great|good|decent|fair|rough|poor|bad|beat[\s-]?up|"
+        r"like\s+new|mint|pristine|clean condition|"
+        r"in\s+(excellent|great|good|decent|fair|rough|poor)\s+(shape|condition)|"
+        r"runs\s+(well|fine|great|good|smooth)|drives\s+(well|fine|great|good|smooth)|"
+        r"needs\s+(work|repairs?|tlc)|some\s+(rust|damage|dents?)|"
+        r"a\s+little\s+(rough|beat))\b",
+        text
+    ))
+    missing = []
+    if not has_year:      missing.append("year")
+    if not has_make:      missing.append("make and model")
+    if not has_mileage:   missing.append("mileage")
+    if not has_title:     missing.append("title status (clean/salvage/rebuilt)")
+    if not has_condition: missing.append("overall condition")
+    return missing
+
+
+def _format_missing_list(items: List[str]) -> str:
+    """English-style join: ['a','b','c'] -> 'a, b, and c'."""
+    if not items: return ""
+    if len(items) == 1: return items[0]
+    if len(items) == 2: return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+
+def deterministic_trade_in_followup(summary: str, history: List[Dict[str, Any]],
+                                    confirmed_appt: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Build a fixed-template trade-in reply based on what the customer has
+    shared. Always returns a response when the conversation is in trade-in
+    flow - either asking for missing pieces or pivoting to scheduling.
+
+    If the customer ALREADY has a confirmed appointment, tie the trade-in
+    to that existing visit instead of asking for a new visit time."""
+    missing = _trade_in_missing_parts(history)
+    if missing:
+        return (
+            f"Thanks for sharing that. To round out the ballpark, "
+            f"could you also share the {_format_missing_list(missing)}?"
+        )
+    summary_text = summary or "your trade-in"
+    if confirmed_appt and confirmed_appt.get("visit_time"):
+        # Already booked - the trade-in will be appraised at the existing visit.
+        return (
+            f"Got it - {summary_text}. We'll add it to your appointment at "
+            f"{confirmed_appt['visit_time']} - the dealer will give you a firm "
+            f"number when they take a look in person then. See you then!"
+        )
+    # No appointment yet - pivot directly to scheduling, no passive language.
+    return (
+        f"Got it - {summary_text}. The dealer will give you a firm number once "
+        f"they can take a look in person. What day this week works for you "
+        f"to bring it in for the appraisal?"
+    )
 
 
 def ai_cold_followup_message(history, dealer_name, customer_name="", inventory_rows=None):
@@ -3298,7 +4099,7 @@ Dealership: {dealer_name or "the dealership"}
 Recent conversation:
 {chr(10).join(convo_lines) or "(No prior messages)"}
 
-Write a single short follow-up SMS (1-2 sentences). Reference what they were asking about if possible. Be warm but professional. {closing_instruction} Do not mention they went silent.""".strip()
+Write a single short follow-up SMS (1-2 sentences). Reference what they were asking about if possible. Be warm but professional. {closing_instruction} Do not mention they went silent. Do NOT include any phone number, address, or URL in your reply - keep the customer in this conversation.""".strip()
     try:
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -3386,12 +4187,14 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
     if isinstance(customer_name, dict):
         first, last, email = customer_name.get("name", ""), customer_name.get("last_name", ""), customer_name.get("email", "")
         trade_in = customer_name.get("trade_in_vehicle", "")
+        real_phone = customer_name.get("real_phone", "")
     else:
-        first, last, email, trade_in = (customer_name or ""), "", "", ""
+        first, last, email, trade_in, real_phone = (customer_name or ""), "", "", "", ""
     known_lines = []
     if first: known_lines.append(f"- First name: {first}")
     if last:  known_lines.append(f"- Last name: {last}")
     if email: known_lines.append(f"- Email: {email}")
+    if real_phone: known_lines.append(f"- Phone (for follow-up texts): {real_phone}")
     if trade_in: known_lines.append(f"- Trade-in vehicle (NOT for sale, customer is trading it in): {trade_in}")
     missing = [label for val, label in
                ((first, "first name"), (last, "last name"), (email, "email address")) if not val]
@@ -3408,7 +4211,7 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
         "\n=== CUSTOMER PROFILE ===\n"
         f"{known_block}\n{missing_block}\n"
         "Use the first name naturally in conversation when known. "
-        "Personal info (first/last name, email) is ONLY collected during the APPOINTMENT FLOW (STEP 1's combined ask) - never earlier. "
+        "Personal info (first/last name, email) is ONLY collected during the APPOINTMENT FLOW (the booking-flow steps below) - never earlier. "
         "Do NOT ask for it just because the customer expressed interest, said yes to a service question, or asked a general question."
         f"{trade_in_warning}"
     )
@@ -3439,6 +4242,10 @@ If a customer asks something else not covered by the data below: "I don't have t
 - NEVER offer to email details or promise anything outside this conversation.
 - NEVER guess vehicle condition, history, or issues.
 - NEVER use bullet points.
+- NEVER ask the customer for their credit score, credit history, social security number, date of birth, monthly income, banking details, or any other sensitive financial information. If the customer brings up financing or credit, point them to the dealer's secure credit application (online if a URL is in the policy text, otherwise in person at the dealership) and ask for a time to come in - do NOT collect any of that info in chat.
+- NEVER ask "what time works", "what time would work", "what day works", or any time/day question if the customer's latest message ALREADY contains a specific clock time for the visit (e.g. "tomorrow at 3pm", "Friday at 10am", "2pm today", "I can be there tomorrow at 2pm"). Treat the time they provided as the time and proceed to the next booking step (email if missing, otherwise the confirmation). This rule overrides any phrasing example below.
+- NEVER say "You're booked", "I'll confirm next", "about to confirm", "confirmation coming", or any variant that suggests the confirmation will come in a separate / future reply. The confirmation MUST happen in the same reply where you say it is happening. If you cannot include META_JSON in this reply (because something is genuinely missing), then do NOT use confirmation language - ask for whatever is missing instead.
+- NEVER write any of the following without including META_JSON in the SAME reply: "your appointment is confirmed", "appointment confirmed", "you're all set", "you're booked", "you are booked", "all set". Confirmation language without META_JSON is a silent booking failure - the dealer is never notified. If you write confirmation language, META_JSON MUST appear at the end of the same reply, exactly as specified in STEP 3.
 
 === BUSINESS OBJECTIVE ===
 Help the customer find the right vehicle and schedule an in-person visit. The goal is a confirmed appointment.
@@ -3452,28 +4259,36 @@ When the customer brings up a topic the dealer can act on - extended warranties,
 - This applies in addition to any other instructions; never ask more than ONE question in a single SMS reply.
 
 === APPOINTMENT FLOW ===
-The booking flow is STREAMLINED to minimize back-and-forth. Only collect personal info (name/email) when the customer actually wants to book - never just because they expressed interest or said "yes" to a service question.
+The booking flow is STREAMLINED. Personal info is ONLY collected when the customer actually wants to book - never just because they expressed interest or said "yes" to a service question. NOTE: First name, last name, and phone are collected up front during the welcome before the chat starts, so by the time the booking flow runs they are almost always already on file. The booking flow proceeds in three steps:
 
-STEP 1 - Combined ask (time + missing profile, in ONE reply)
-- When the customer wants to schedule/book a visit, in a SINGLE reply ask for the specific clock time AND any missing profile fields together.
-- Use the CURRENT DATE & TIME above to determine what day it is. Required: a SPECIFIC CLOCK TIME (e.g. "9am", "2:30pm"). A date alone is NOT enough.
-- Look at CUSTOMER PROFILE above. Identify what is missing (first name, last name, email). Ask only for what is missing.
+STEP 1 - Get a specific clock time (NEVER ask for email here)
+- When the customer wants to schedule/book a visit, ask ONLY for a specific clock time. Do NOT bundle the email request into this ask.
+- Required: a SPECIFIC CLOCK TIME (e.g. "9am", "2:30pm"). A date alone ("tomorrow", "Friday") is NOT enough - if the customer gives only a date, ask for the clock time.
+- Use the CURRENT DATE & TIME above to interpret words like "tomorrow" or "Friday afternoon".
 - Phrasing examples (keep your reply ≤155 chars when possible):
-  - All profile fields missing: "Sure - what time works for you, and could I get your first name, last name, and email to lock it in?"
-  - Only email missing: "Sure - what time works, and could I get your email to lock it in?"
-  - Profile already complete: "Sure - what time works for you?"
-- If the customer answers with only some of what you asked (e.g. gives a time but no email, or a name but no time), follow up ONCE with the missing piece(s), then stay in this step.
+  - Customer gave a date but no clock time: "Sure - what time tomorrow works for you?"
+  - Customer gave nothing time-related: "Sure - what time works for you?"
 - This applies even if hours are not listed; only reject a time if it clearly falls outside listed hours for that specific day.
+- Once a SPECIFIC CLOCK TIME is established (either in the customer's latest message or earlier in the conversation), proceed to STEP 2.
 
-STEP 2 - Confirm
-- Once you have BOTH a valid clock time AND a complete profile (first name, last name, email), confirm in a single reply - do NOT ask "Is that correct?":
-  "You're all set, [First Name]! Your appointment is confirmed for 3 PM today to view the 2018 Honda Accord. We look forward to seeing you!"
-- At the END of that confirmation reply only (hidden from customer), add exactly:
+STEP 2 - Ask for email (only if missing)
+- Trigger: a specific clock time has been established AND the customer's email is NOT yet on file (see CUSTOMER PROFILE above).
+- Ask for the email and ONLY the email. Do NOT re-ask for the time, name, last name, or phone.
+- Phrasing example (≤155 chars):
+  - "Got it - to lock in 2pm tomorrow, could I get your email?"
+- If email IS already on file, skip STEP 2 entirely and go straight to STEP 3.
+
+STEP 3 - Confirm (in this same reply, with META_JSON)
+- Trigger: a specific clock time has been established AND the customer has a complete profile (first name, last name, email all on file).
+- Use this EXACT template phrasing for the customer-facing text - do NOT paraphrase, do NOT use "You're booked" or "I'll confirm next" or any variant:
+  "You're all set, [First Name]! Your appointment is confirmed for [TIME] to view the [YEAR MAKE MODEL]. We look forward to seeing you!"
+- Then, on a NEW LINE at the very END of the SAME reply (hidden from customer by the system), add EXACTLY:
    META_JSON: {{"confirmed": true, "visit_time": "<human readable time>", "visit_time_iso": "<YYYY-MM-DDTHH:MM:SS>", "car_desc": "<year make model>", "customer_name": "<first name>", "customer_last_name": "<last name>", "customer_email": "<email>"}}
+- The user-visible template AND the META_JSON line are NOT optional - both must appear in the same reply. Without META_JSON, the booking is never recorded and the dealer is never notified. This is the most important rule in the entire flow.
 
 RESCHEDULES (very important)
 - A reschedule is when the customer asks to change the time of an EXISTING confirmed appointment (e.g. "can I move it to 10am instead", "reschedule for 3pm tomorrow", "an hour later").
-- For a reschedule, SKIP STEP 1 entirely (the profile is already on file). Go DIRECTLY to STEP 2 with the new time.
+- For a reschedule, SKIP STEP 1 and STEP 2 entirely (the profile is already on file). Go DIRECTLY to STEP 3 with the new time.
 - The reschedule confirmation reply MUST include the META_JSON marker exactly like a brand-new booking - without it, the dealer is not notified and the booking is not recorded. This is non-negotiable.
 - Example reschedule reply:
   "Certainly, Evan! Your appointment is now rescheduled for 10 AM today to view the 2023 Honda Accord Hybrid. We look forward to seeing you then!
@@ -3485,6 +4300,9 @@ OTHER RULES
    META_NAME: <first name>
    META_LAST_NAME: <last name>
    META_EMAIL: <email>
+   META_PHONE: <10-digit US phone number, digits only>
+
+- The widget welcome asks the customer for their phone number and name up front. If the customer provides them, capture both via META_NAME and META_PHONE markers in your reply. The phone goes to follow-up texts, not the booking flow - do NOT ask for it again during STEP 1.
 
 === DEALER INFO ===
 Name: {dealer_name}
@@ -3551,6 +4369,7 @@ def extract_meta(reply_text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
     reply_text, extracted_name = _pull_marker(reply_text, "META_NAME")
     reply_text, extracted_last = _pull_marker(reply_text, "META_LAST_NAME")
     reply_text, extracted_email = _pull_marker(reply_text, "META_EMAIL")
+    reply_text, extracted_phone = _pull_marker(reply_text, "META_PHONE")
 
     if meta:
         if meta.get("customer_name") and not extracted_name:
@@ -3560,12 +4379,13 @@ def extract_meta(reply_text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         if meta.get("customer_email") and not extracted_email:
             extracted_email = str(meta["customer_email"]).strip()
 
-    if extracted_name or extracted_last or extracted_email:
+    if extracted_name or extracted_last or extracted_email or extracted_phone:
         if meta is None:
             meta = {}
         if extracted_name:  meta["_extracted_name"] = extracted_name
         if extracted_last:  meta["_extracted_last_name"] = extracted_last
         if extracted_email: meta["_extracted_email"] = extracted_email
+        if extracted_phone: meta["_extracted_phone"] = extracted_phone
 
     return reply_text.strip(), meta
 
@@ -3588,17 +4408,27 @@ def send_appointment_reminders() -> None:
             mark_reminder_sent(appointment_id)
             continue
 
+        # For widget customers, customer_phone is "+web..." which Twilio
+        # can't reach; resolve to the real phone collected at the welcome.
+        outbound_phone = resolve_outbound_customer_phone(customer_phone, twilio_number)
+        if not outbound_phone or not outbound_phone.startswith("+"):
+            app.logger.warning(
+                "Reminder skipped for appt #%d: no real phone for %s",
+                appointment_id, customer_phone,
+            )
+            continue
+
         reminder_body = (
             f"This is a friendly reminder of your upcoming appointment at {visit_time} "
             f"to view the {car_desc}. Please reply Yes to confirm or No to cancel."
         )
-        ok, err = send_sms_to_customer(customer_phone=customer_phone, from_number=twilio_number, body=reminder_body)
+        ok, err = send_sms_to_customer(customer_phone=outbound_phone, from_number=twilio_number, body=reminder_body)
         if ok:
             mark_reminder_sent(appointment_id)
             save_message(customer_phone, twilio_number, "assistant", reminder_body)
             set_pending_reconfirmation(customer_phone, twilio_number, appt["dealer_notify_phone"],
                                        visit_time, car_desc, appointment_id)
-            app.logger.info("Sent reminder to %s for appt #%d", customer_phone, appointment_id)
+            app.logger.info("Sent reminder to %s for appt #%d", outbound_phone, appointment_id)
         else:
             app.logger.warning("Reminder failed for appt #%d: %s", appointment_id, err)
 
@@ -3632,9 +4462,24 @@ def send_cold_followups() -> None:
             mark_cold_followup_sent(customer_phone, twilio_number)
             continue
 
+        # Resolve the outbound number. For SMS customers this is the same
+        # as customer_phone; for widget customers it pulls real_phone from
+        # their profile (collected via the welcome gate). If we have no real
+        # number to text, skip without marking - we'll retry once they
+        # provide it.
+        outbound_phone = resolve_outbound_customer_phone(customer_phone, twilio_number)
+        if not outbound_phone or not outbound_phone.startswith("+"):
+            app.logger.info(
+                "Cold follow-up: no real phone for %s via %s yet, skipping",
+                customer_phone, twilio_number,
+            )
+            continue
+
         dealer        = select_dealer_for_twilio_number(dealers, twilio_number) if dealers else {}
         dealer_name   = get_row_field(dealer, DEALER_NAME_ALIASES) if dealer else ""
-        customer_name = get_customer_name(customer_phone, twilio_number)
+        customer_profile_local = get_customer_profile(customer_phone, twilio_number)
+        customer_name = customer_profile_local.get("name", "")
+        customer_last = customer_profile_local.get("last_name", "")
         history       = get_recent_messages(customer_phone, twilio_number, limit=10)
         try:
             inventory_rows = get_inventory_for_twilio(twilio_number)
@@ -3646,11 +4491,26 @@ def send_cold_followups() -> None:
             + "? We are happy to help with any questions."
         )
 
-        ok, err = send_sms_to_customer(customer_phone=customer_phone, from_number=twilio_number, body=followup_body)
+        ok, err = send_sms_to_customer(customer_phone=outbound_phone, from_number=twilio_number, body=followup_body)
         if ok:
             mark_cold_followup_sent(customer_phone, twilio_number)
             save_message(customer_phone, twilio_number, "assistant", followup_body)
-            app.logger.info("Sent cold follow-up to %s via %s", customer_phone, twilio_number)
+            app.logger.info("Sent cold follow-up to %s via %s", outbound_phone, twilio_number)
+
+            # One-shot dealer lead notification. Fires only when the cold
+            # follow-up itself fires (which is gated to once per customer
+            # via cold_followups table), so the dealer is texted at most once.
+            if dealer:
+                full_name = (customer_name + (" " + customer_last if customer_last else "")).strip() or "Unknown name"
+                lead_body = (
+                    f"Possible lead: {full_name} ({outbound_phone}) - "
+                    f"customer chatted but did not book a visit. "
+                    f"Consider reaching out."
+                )
+                try:
+                    notify_all_staff(dealer, twilio_number, lead_body)
+                except Exception as e:
+                    app.logger.warning("Lead notify failed for %s: %s", customer_phone, e)
         else:
             app.logger.warning("Cold follow-up failed for %s: %s", customer_phone, err)
 
@@ -3739,6 +4599,32 @@ def _reply_twiml(reply_body: str, customer_phone: str, twilio_number: str, *, se
     return str(twiml)
 
 
+def _silent_reply() -> str:
+    """Intentional no-reply: empty TwiML for SMS, silent flag for widget."""
+    try:
+        g.captured_reply = ""
+        g.captured_primer = None
+        g.captured_silent = True
+    except RuntimeError:
+        pass
+    return str(MessagingResponse())
+
+
+# Terse acknowledgments after a confirmed appointment - the customer is just
+# being polite, no reply needed. Matched only when the message is JUST the ack.
+_TERSE_ACK_RE = re.compile(
+    r"^\s*(?:"
+    r"ok(?:ay)?|kk?|k+|"
+    r"thanks?|thank\s+you|ty|tysm|thx|"
+    r"sounds?\s+(?:good|great|fine|nice)|"
+    r"perfect|great|cool|nice|awesome|sweet|"
+    r"got\s+it|gotcha|understood|noted|alright|all\s+right|"
+    r"see\s+(?:you|ya|u)(?:\s+(?:then|tomorrow|tmr|tmrw|soon|there))?"
+    r")[\s!.,?👍🙏👌✅]*$",
+    re.I,
+)
+
+
 @app.route("/sms", methods=["POST"])
 def sms_webhook():
     body        = (request.form.get("Body") or "").strip()
@@ -3748,7 +4634,123 @@ def sms_webhook():
         twiml = MessagingResponse()
         twiml.message("Sorry - missing phone routing info.")
         return str(twiml)
+
+    # Per-phone SMS abuse cap (resets on bot restart). Count keyed on the real
+    # customer phone, not the widget-bridged pseudo-phone, so abuse isn't
+    # bypassed by switching channels.
+    with _sms_abuse_lock:
+        _sms_abuse_counts[(from_number, to_number)] = (
+            _sms_abuse_counts.get((from_number, to_number), 0) + 1
+        )
+        count = _sms_abuse_counts[(from_number, to_number)]
+    if count > SMS_ABUSE_LIMIT + 1:
+        # Cap already enforced once; stay silent.
+        return str(MessagingResponse())
+    if count == SMS_ABUSE_LIMIT + 1:
+        # Look up the dealer phone for this twilio number so the notice tells
+        # the customer who to call. read_dealers() is cached, so this is cheap.
+        dealer_phone = ""
+        try:
+            dealer_row = select_dealer_for_twilio_number(read_dealers(), to_number)
+            dealer_phone = normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
+        except Exception as e:
+            app.logger.warning("SMS abuse notice: dealer lookup failed: %s", e)
+        notice = (
+            f"You have reached the message limit for this number. "
+            f"Please call the dealer directly at {dealer_phone} if you have any more questions."
+            if dealer_phone else SMS_ABUSE_NOTICE
+        )
+        twiml = MessagingResponse()
+        twiml.message(notice)
+        return str(twiml)
+
+    # Mark this request as inbound SMS so notify_customer_appointment can
+    # skip its duplicate text (the bot's reply goes back to the customer's
+    # phone automatically via TwiML).
+    g.is_sms_request = True
+    # Bridge: if this real phone previously used the widget for this dealer,
+    # route the SMS into that widget session so reschedules/cancels can find
+    # the appointment (which was saved under the +web<sessionid> pseudo-phone).
+    widget_session = find_widget_session_for_real_phone(from_number, to_number)
+    if widget_session:
+        app.logger.info("SMS from %s bridged to widget session %s", from_number, widget_session)
+        from_number = widget_session
     return _process_message(from_number, to_number, body)
+
+
+_PHONE_RE = re.compile(
+    r"(?:\+?1[\s\-.]?)?\(?(\d{3})\)?[\s\-.]?(\d{3})[\s\-.]?(\d{4})"
+)
+_NAME_INTRO_RE = re.compile(
+    r"(?:my\s+name\s+is|name'?s|i\s*am|i'?m|im|this\s+is|it'?s|its)\s+"
+    r"([A-Za-z][A-Za-z'\-]+)(?:\s+([A-Za-z][A-Za-z'\-]+))?",
+    re.I,
+)
+
+
+def _extract_phone_us(text: str) -> str:
+    """Return +1XXXXXXXXXX if a 10-digit US phone is present, else ''."""
+    m = _PHONE_RE.search(text or "")
+    if not m:
+        return ""
+    digits = m.group(1) + m.group(2) + m.group(3)
+    return "+1" + digits if len(digits) == 10 else ""
+
+
+_NAME_FILLER_WORDS = {
+    # conjunctions / prepositions / articles
+    "and", "but", "plus", "or", "also", "with", "the", "a", "an",
+    "from", "to", "of", "for", "by", "in", "on", "at", "as",
+    # possessives / pronouns
+    "my", "his", "her", "our", "their", "your", "i", "you", "he",
+    "she", "it", "we", "they", "me", "him", "us", "them",
+    # forms of "to be" / common verbs that should never start a name
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    "have", "has", "had", "do", "does", "did", "doing",
+    "can", "could", "will", "would", "should", "shall", "may",
+    "might", "must", "want", "need", "looking", "interested",
+    "see", "show", "tell", "give", "find", "get", "got",
+    "buy", "sell", "schedule", "book", "test", "drive",
+    # question words
+    "what", "who", "whom", "when", "where", "why", "how", "which",
+    "whats", "hows", "whens", "wheres",
+    # form labels / generic chrome
+    "number", "phone", "name", "names", "email", "here", "there",
+    "first", "last", "mr", "mrs", "ms", "dr",
+    # car-domain words that often appear in non-name questions
+    "car", "cars", "truck", "trucks", "suv", "suvs", "sedan",
+    "vehicle", "vehicles", "inventory", "available", "price",
+    "between", "under", "over",
+}
+
+
+def _looks_like_real_name(word: str) -> bool:
+    return bool(word) and word.lower() not in _NAME_FILLER_WORDS and is_valid_name(word)
+
+
+def _extract_name_parts(text: str) -> Tuple[str, str]:
+    """Return (first, last) extracted from text, or ('', '') if no confident match.
+
+    Two strategies:
+      1. Intro-phrase match: 'my name is X Y', 'i'm X Y', 'im X', 'this is X Y'.
+      2. Leading-words fallback: take the first 1-2 alpha words and treat them
+         as a name if they pass _looks_like_real_name. This lets us extract
+         names from messages like 'evan lee and my number is 5551234567'
+         where filler words appear LATER in the sentence.
+    """
+    cleaned = _PHONE_RE.sub(" ", text or "").strip()
+    intro = _NAME_INTRO_RE.search(cleaned)
+    if intro:
+        first = (intro.group(1) or "").strip()
+        last  = (intro.group(2) or "").strip()
+        if _looks_like_real_name(first):
+            return first, (last if _looks_like_real_name(last) else "")
+    words = re.findall(r"\b[A-Za-z][A-Za-z'\-]*\b", cleaned)
+    if not words or not _looks_like_real_name(words[0]):
+        return "", ""
+    first = words[0]
+    last  = words[1] if len(words) > 1 and _looks_like_real_name(words[1]) else ""
+    return first, last
 
 
 def _process_message(from_number: str, to_number: str, body: str):
@@ -3761,6 +4763,118 @@ def _process_message(from_number: str, to_number: str, body: str):
 
     customer_profile = get_customer_profile(from_number, to_number)
     customer_name = customer_profile["name"]
+
+    # ── PRIORITY 0: Widget profile gate. Customer must provide first name,
+    # last name, AND a real phone before the bot will answer anything. SMS
+    # users are exempt (their phone is the From number).
+    is_widget = from_number.startswith("+web")
+    def _profile_incomplete(p: Dict[str, str]) -> bool:
+        return not (p.get("name") and p.get("last_name") and p.get("real_phone"))
+    # Sanitize previously-saved name fields: if they look like junk (e.g.
+    # extracted from a question before the filler list was tightened), drop
+    # them so the gate re-prompts and we can capture the real name.
+    if is_widget:
+        sanitize_kwargs: Dict[str, Any] = {}
+        existing_name = (customer_profile.get("name") or "").strip()
+        existing_last = (customer_profile.get("last_name") or "").strip()
+        if existing_name and not _looks_like_real_name(existing_name):
+            sanitize_kwargs["name"] = ""
+        if existing_last and not _looks_like_real_name(existing_last):
+            sanitize_kwargs["last_name"] = ""
+        if sanitize_kwargs:
+            save_customer_profile(from_number, to_number, **sanitize_kwargs)
+            customer_profile = get_customer_profile(from_number, to_number)
+            customer_name = customer_profile["name"]
+            app.logger.info("Sanitized junk name fields for %s: %s", from_number, sanitize_kwargs)
+    if is_widget and _profile_incomplete(customer_profile):
+        save_kwargs: Dict[str, Any] = {}
+        if not customer_profile.get("real_phone"):
+            ph = _extract_phone_us(body)
+            if ph:
+                save_kwargs["real_phone"] = ph
+        if not customer_profile.get("name") or not customer_profile.get("last_name"):
+            first, last = _extract_name_parts(body)
+            if first and not customer_profile.get("name"):
+                save_kwargs["name"] = first
+                if last and not customer_profile.get("last_name"):
+                    save_kwargs["last_name"] = last
+            elif first and customer_profile.get("name") and not customer_profile.get("last_name"):
+                # First name already on file; customer is now providing the
+                # last name as a single word ("lee") -> save it as last_name.
+                save_kwargs["last_name"] = first
+        if save_kwargs:
+            save_customer_profile(from_number, to_number, **save_kwargs)
+            customer_profile = get_customer_profile(from_number, to_number)
+            customer_name = customer_profile["name"]
+
+            # First-time phone capture for this widget session: log the
+            # terms-acceptance + phone submission. The helper handles
+            # once-per-phone via INSERT OR IGNORE, so calling it here is
+            # safe even on later gate passes.
+            if "real_phone" in save_kwargs:
+                try:
+                    _dealers_for_log = read_dealers()
+                    _dealer_for_log  = select_dealer_for_twilio_number(_dealers_for_log, to_number)
+                    _dealer_name_log = get_row_field(_dealer_for_log, DEALER_NAME_ALIASES) if _dealer_for_log else ""
+                except Exception:
+                    _dealer_name_log = ""
+                log_terms_acceptance(
+                    real_phone=customer_profile.get("real_phone", ""),
+                    first_name=customer_profile.get("name", ""),
+                    last_name=customer_profile.get("last_name", ""),
+                    dealer_name=_dealer_name_log,
+                    twilio_number=to_number,
+                )
+
+        if _profile_incomplete(customer_profile):
+            missing = []
+            if not customer_profile.get("name"):       missing.append("first name")
+            if not customer_profile.get("last_name"):  missing.append("last name")
+            if not customer_profile.get("real_phone"): missing.append("phone number")
+            if len(missing) == 1:
+                missing_str = missing[0]
+            elif len(missing) == 2:
+                missing_str = " and ".join(missing)
+            else:
+                missing_str = ", ".join(missing[:-1]) + ", and " + missing[-1]
+            reply = (
+                f"Before I can help, could I please get your {missing_str}? "
+                "We use these to text you appointment confirmations and follow up "
+                "if you have questions later."
+            )
+            save_message(from_number, to_number, "assistant", reply)
+            return _reply_twiml(reply, from_number, to_number)
+
+        # Deferred-question recovery. If the gate just unlocked (profile became
+        # complete with this message) AND the customer's PRIOR message was a
+        # topic question we'd normally route through a dedicated handler
+        # (financing / trade-in / etc.), retroactively answer it now using the
+        # right handler so they don't need to re-ask.
+        recent_for_defer = get_recent_messages(from_number, to_number, limit=6)
+        prior_user_msg = ""
+        for m in reversed(recent_for_defer[:-1]):  # skip the just-saved current body
+            if m.get("role") == "user":
+                prior_user_msg = (m.get("content") or "").strip()
+                break
+        if prior_user_msg and _is_financing_question(prior_user_msg):
+            try:
+                _dealers_d = read_dealers()
+                _dealer_row_d = select_dealer_for_twilio_number(_dealers_d, to_number)
+                _dealer_phone_d = normalize_phone(get_row_field(_dealer_row_d, DEALER_NOTIFY_PHONE_ALIASES))
+                _financing_d = get_row_field(_dealer_row_d, DEALER_FINANCING_ALIASES)
+            except Exception:
+                _dealer_row_d, _dealer_phone_d, _financing_d = {}, "", ""
+            if _financing_d:
+                history_d = get_recent_messages(from_number, to_number, limit=8)
+                deferred_reply = ai_policy_reply(
+                    prior_user_msg, "financing", _financing_d, _dealer_phone_d,
+                    history_d, customer_name=customer_name,
+                ) or f"Regarding financing: {_financing_d}."
+                first_for_intro = (customer_profile.get("name") or "").strip()
+                intro = f"Thanks, {first_for_intro}! " if first_for_intro else "Thanks! "
+                full_reply = intro + deferred_reply
+                save_message(from_number, to_number, "assistant", full_reply)
+                return _reply_twiml(full_reply, from_number, to_number)
 
     try:
         dealers    = read_dealers()
@@ -3787,11 +4901,14 @@ def _process_message(from_number: str, to_number: str, body: str):
             clear_pending_reconfirmation(from_number, to_number)
             cancel_appointment(from_number, to_number)
             notify_all_staff(dealer_row, to_number, _dealer_cancellation_body(
-                customer_phone=from_number, customer_name=customer_name,
+                customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number, customer_name=customer_name,
                 customer_last_name=customer_profile["last_name"],
                 customer_email=customer_profile["email"],
                 dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
             ))
+            notify_customer_appointment(dealer_row, customer_phone=from_number,
+                twilio_number=to_number, customer_name=customer_name,
+                visit_time=visit_time, car_desc=car_desc, action="cancelled")
             reply = "Understood - we have removed that appointment. When would you prefer to reschedule your visit?"
             save_message(from_number, to_number, "assistant", reply)
             return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
@@ -3800,7 +4917,7 @@ def _process_message(from_number: str, to_number: str, body: str):
             clear_pending_reconfirmation(from_number, to_number)
             mark_reconfirmed(appointment_id)
             notify_all_staff(dealer_row, to_number, _dealer_reconfirm_body(
-                customer_phone=from_number, customer_name=customer_name,
+                customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number, customer_name=customer_name,
                 customer_last_name=customer_profile["last_name"],
                 customer_email=customer_profile["email"],
                 dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
@@ -3871,19 +4988,23 @@ def _process_message(from_number: str, to_number: str, body: str):
 
             additional_info = extract_customer_insights(get_recent_messages(from_number, to_number, limit=20))
             alert_body = (
-                _dealer_reschedule_body(customer_phone=from_number, customer_name=customer_name,
+                _dealer_reschedule_body(customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number, customer_name=customer_name,
                                         customer_last_name=customer_profile["last_name"],
                                         customer_email=customer_profile["email"],
                                         dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
                                         additional_info=additional_info)
                 if is_reschedule else
-                _dealer_alert_body(customer_phone=from_number, customer_name=customer_name,
+                _dealer_alert_body(customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number, customer_name=customer_name,
                                    customer_last_name=customer_profile["last_name"],
                                    customer_email=customer_profile["email"],
                                    dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
                                    additional_info=additional_info)
             )
             notify_all_staff(dealer_row, to_number, alert_body)
+            notify_customer_appointment(dealer_row, customer_phone=from_number,
+                twilio_number=to_number, customer_name=customer_name,
+                visit_time=visit_time, car_desc=car_desc,
+                action=("rescheduled" if is_reschedule else "confirmed"))
 
             reply = f"Your appointment is confirmed for {visit_time}. We look forward to seeing you."
             save_message(from_number, to_number, "assistant", reply)
@@ -3934,19 +5055,23 @@ def _process_message(from_number: str, to_number: str, body: str):
             clear_pending(from_number, to_number)
             additional_info = extract_customer_insights(get_recent_messages(from_number, to_number, limit=20))
             alert_body = (
-                _dealer_reschedule_body(customer_phone=from_number, customer_name=customer_name,
+                _dealer_reschedule_body(customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number, customer_name=customer_name,
                                         customer_last_name=customer_profile["last_name"],
                                         customer_email=customer_profile["email"],
                                         dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
                                         additional_info=additional_info)
                 if is_reschedule else
-                _dealer_alert_body(customer_phone=from_number, customer_name=customer_name,
+                _dealer_alert_body(customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number, customer_name=customer_name,
                                    customer_last_name=customer_profile["last_name"],
                                    customer_email=customer_profile["email"],
                                    dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
                                    additional_info=additional_info)
             )
             notify_all_staff(dealer_row, to_number, alert_body)
+            notify_customer_appointment(dealer_row, customer_phone=from_number,
+                twilio_number=to_number, customer_name=customer_name,
+                visit_time=visit_time, car_desc=car_desc,
+                action=("rescheduled" if is_reschedule else "confirmed"))
             reply = f"Perfect, {customer_name}! You're all set for {visit_time} to see the {car_desc}. We look forward to seeing you!"
             save_message(from_number, to_number, "assistant", reply)
             return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
@@ -3971,11 +5096,14 @@ def _process_message(from_number: str, to_number: str, body: str):
             cancel_appointment(from_number, to_number)
             clear_pending_cancellation(from_number, to_number)
             notify_all_staff(dealer_row, to_number, _dealer_cancellation_body(
-                customer_phone=from_number, customer_name=customer_name,
+                customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number, customer_name=customer_name,
                 customer_last_name=customer_profile["last_name"],
                 customer_email=customer_profile["email"],
                 dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
             ))
+            notify_customer_appointment(dealer_row, customer_phone=from_number,
+                twilio_number=to_number, customer_name=customer_name,
+                visit_time=visit_time, car_desc=car_desc, action="cancelled")
             reply = "Your appointment has been cancelled. If you would like to reschedule at any time, feel free to reach out."
             save_message(from_number, to_number, "assistant", reply)
             return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
@@ -4019,6 +5147,12 @@ def _process_message(from_number: str, to_number: str, body: str):
 
     # ── PRIORITY 4: Deterministic shortcuts ──────────────────────────────
     confirmed_appt = get_latest_appointment(from_number, to_number)
+
+    # ── PRIORITY 4.-1: Terse acknowledgment after a confirmed appointment.
+    # The booking is locked and the confirmation already said "look forward
+    # to seeing you" - "ok"/"thanks"/"sounds good" don't need a response.
+    if confirmed_appt and _TERSE_ACK_RE.match(body):
+        return _silent_reply()
 
     # ── PRIORITY 4.0: Greeting / menu - bare hellos or explicit help asks ──
     _is_greeting = bool(re.match(
@@ -4120,40 +5254,105 @@ def _process_message(from_number: str, to_number: str, body: str):
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
     if _is_financing_question(body):
-        financing = get_row_field(dealer_row, DEALER_FINANCING_ALIASES)
-        if financing:
-            history = get_recent_messages(from_number, to_number, limit=6)
-            reply_text = ai_policy_reply(body, "financing", financing, dealer_phone, history, customer_name=customer_name) or f"Regarding financing: {financing}."
-        else:
-            reply_text = build_unknown_answer(dealer_phone)
-        save_message(from_number, to_number, "assistant", reply_text)
-        return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+        # If the customer's message ALSO contains a clear booking time (e.g.
+        # "i can be there today at 5:30, financing with 600 credit score"),
+        # let it fall through to the LLM/booking flow which can handle both
+        # at once. The financing-only handler would otherwise reply passively
+        # and ignore the appointment intent.
+        _has_booking_time = bool(parse_visit_time_from_text(body)[0])
+        if not _has_booking_time:
+            financing = get_row_field(dealer_row, DEALER_FINANCING_ALIASES)
+            if financing:
+                history = get_recent_messages(from_number, to_number, limit=6)
+                reply_text = ai_policy_reply(body, "financing", financing, dealer_phone, history, customer_name=customer_name) or f"Regarding financing: {financing}."
+            else:
+                reply_text = build_unknown_answer(dealer_phone)
+            save_message(from_number, to_number, "assistant", reply_text)
+            return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
-    if re.search(r"\btrade[- ]?ins?\b", body, re.I):
+    # Trade-in trigger: the customer's message mentions "trade" OR the bot's
+    # last reply was clearly soliciting trade-in details (so the customer's
+    # follow-up answer routes back into the trade-in handler instead of
+    # falling through to the generic LLM, which loses the tightening rules).
+    _last_bot_msg = next(
+        (m.get("content", "") for m in reversed(get_recent_messages(from_number, to_number, limit=4))
+         if m.get("role") == "assistant"),
+        ""
+    ).lower()
+    # Specific phrases that mean the bot was clearly asking for trade-in
+    # DETAILS (not just mentioning trade-in in passing during booking).
+    _bot_just_asked_trade_in = bool(re.search(
+        r"year,?\s*make,?\s*model.*(mileage|title|condition)|"
+        r"round out the ballpark|"
+        r"title status\s*\(clean/salvage/rebuilt\)|"
+        r"mileage.*title.*condition|"
+        r"share the mileage|"
+        r"share the year",
+        _last_bot_msg,
+    ))
+    # If the bot was actually asking for booking info (name/email/time), this
+    # is the appointment flow - DON'T misroute the reply back to trade-in.
+    _bot_asked_for_booking_info = bool(re.search(
+        r"first name.*last name.*email|"
+        r"could i (please )?get your (first|name|email)|"
+        r"what time works|"
+        r"what day this week works|"
+        r"to (lock|finalize|confirm) (it |your |the )?(in|appointment)",
+        _last_bot_msg,
+    ))
+    _trade_in_trigger = (
+        re.search(r"\btrade[- ]?ins?\b", body, re.I) or _bot_just_asked_trade_in
+    ) and not _bot_asked_for_booking_info
+    if _trade_in_trigger:
         tradeins = get_row_field(dealer_row, DEALER_TRADEINS_ALIASES)
         history = get_recent_messages(from_number, to_number, limit=12)
         # Try to capture the trade-in vehicle if the customer has shared details.
         candidate_trade_in = extract_trade_in_vehicle(history + [{"role": "user", "content": body}])
         has_trade_in_on_file = bool((customer_profile.get("trade_in_vehicle") or "").strip())
 
-        if tradeins and not has_trade_in_on_file and not candidate_trade_in:
+        if (tradeins and not has_trade_in_on_file and not candidate_trade_in
+                and not _bot_just_asked_trade_in):
             # First trade-in inquiry with no details yet - answer deterministically
             # so menu option 3 and direct text both reliably collect car data.
             # The LLM-based path was sometimes giving a policy-only answer here.
             policy_clean = tradeins.rstrip(".") + "."
             reply_text = (
-                f"{policy_clean} To prepare an accurate offer, could you share the year, "
-                f"make, model, mileage, title status (clean/salvage/rebuilt), and overall "
-                f"condition of your vehicle?"
+                f"{policy_clean} A firm offer requires an in-person inspection, but if you "
+                f"share the year, make, model, mileage, title status (clean/salvage/rebuilt), "
+                f"and overall condition, the dealer can have a ballpark in mind before you visit."
             )
         elif tradeins:
-            reply_text = ai_policy_reply(body, "trade-ins", tradeins, dealer_phone, history[-6:], customer_name=customer_name) or f"Regarding trade-ins: {tradeins}."
+            # Bot already asked OR customer has shared partial info - use the
+            # deterministic followup which scans for what's still missing and
+            # pivots to scheduling once everything is collected.
+            reply_text = deterministic_trade_in_followup(candidate_trade_in, history, confirmed_appt=confirmed_appt)
+            if not reply_text:
+                reply_text = ai_policy_reply(body, "trade-ins", tradeins, dealer_phone, history[-6:], customer_name=customer_name) or f"Regarding trade-ins: {tradeins}."
         else:
             reply_text = build_unknown_answer(dealer_phone)
 
         if candidate_trade_in and candidate_trade_in != (customer_profile.get("trade_in_vehicle") or ""):
             save_customer_profile(from_number, to_number, trade_in_vehicle=candidate_trade_in)
             app.logger.info("Recorded trade-in vehicle for %s: %s", from_number, candidate_trade_in)
+            # If the customer already has a confirmed appointment, notify the
+            # dealer that a trade-in was added to it so staff can prep an
+            # appraisal in advance. Fires once per new trade-in summary.
+            if confirmed_appt and confirmed_appt.get("visit_time"):
+                _alert_outbound_phone = resolve_outbound_customer_phone(from_number, to_number) or from_number
+                _customer_full_name = (
+                    (customer_profile.get("name", "") + " " + customer_profile.get("last_name", "")).strip()
+                    or "Customer"
+                )
+                _trade_alert = (
+                    f"Trade-in update: {_customer_full_name} ({_alert_outbound_phone}) "
+                    f"added a trade-in to their {confirmed_appt['visit_time']} appointment"
+                    + (f" for the {confirmed_appt.get('car_desc')}" if confirmed_appt.get("car_desc") else "")
+                    + f". Trade-in details: {candidate_trade_in}."
+                )
+                try:
+                    notify_all_staff(dealer_row, to_number, _trade_alert)
+                except Exception as e:
+                    app.logger.warning("Trade-in update notify failed: %s", e)
         save_message(from_number, to_number, "assistant", reply_text)
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
@@ -4336,6 +5535,17 @@ def _process_message(from_number: str, to_number: str, body: str):
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
     # ── PRIORITY 4.7: Deterministic feature-filtered listing ────────────
+    # ── PRIORITY 4.7a: New arrivals listing ─────────────────────────────
+    # "What's new", "any new arrivals", "just got in" → list vehicles that
+    # don't have a posted price yet (those are typically the freshly-arrived
+    # units the dealer hasn't priced for the website). For dealers whose
+    # entire inventory has prices, this just returns "no new arrivals."
+    if _is_new_arrivals_question(body):
+        reply_text = _format_new_arrivals_listing(inventory_rows)
+        if reply_text:
+            save_message(from_number, to_number, "assistant", reply_text)
+            return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
     # "Diesel trucks", "any AWD SUVs", "convertibles", "trucks under 10k".
     # No make in the message, so 4.65 didn't fire - but the LLM was dropping
     # cars (e.g. surfaced 1 of 9 diesel vehicles). Filter inventory by
@@ -4459,6 +5669,11 @@ def _process_message(from_number: str, to_number: str, body: str):
             save_kwargs["last_name"] = meta["_extracted_last_name"]
         if meta.get("_extracted_email") and is_valid_email(meta["_extracted_email"]) and not customer_profile["email"]:
             save_kwargs["email"] = meta["_extracted_email"]
+        if meta.get("_extracted_phone") and not customer_profile.get("real_phone"):
+            normalized_phone = normalize_phone(meta["_extracted_phone"])
+            phone_digits = re.sub(r"\D", "", normalized_phone)
+            if normalized_phone.startswith("+1") and len(phone_digits) == 11:
+                save_kwargs["real_phone"] = normalized_phone
         if save_kwargs:
             save_customer_profile(from_number, to_number, **save_kwargs)
             customer_profile = get_customer_profile(from_number, to_number)
@@ -4492,9 +5707,10 @@ def _process_message(from_number: str, to_number: str, body: str):
                     from_number, to_number, dealer_phone, visit_time, visit_time_iso, car_desc or "a vehicle"
                 )
                 additional_info = extract_customer_insights(get_recent_messages(from_number, to_number, limit=20))
+                _alert_customer_phone = resolve_outbound_customer_phone(from_number, to_number) or from_number
                 alert_body = (
                     _dealer_reschedule_body(
-                        customer_phone=from_number, customer_name=customer_name,
+                        customer_phone=_alert_customer_phone, customer_name=customer_name,
                         customer_last_name=customer_profile["last_name"],
                         customer_email=customer_profile["email"],
                         dealership_line=to_number, visit_time=visit_time, car_desc=car_desc or "a vehicle",
@@ -4502,7 +5718,7 @@ def _process_message(from_number: str, to_number: str, body: str):
                     )
                     if is_reschedule else
                     _dealer_alert_body(
-                        customer_phone=from_number, customer_name=customer_name,
+                        customer_phone=_alert_customer_phone, customer_name=customer_name,
                         customer_last_name=customer_profile["last_name"],
                         customer_email=customer_profile["email"],
                         dealership_line=to_number, visit_time=visit_time, car_desc=car_desc or "a vehicle",
@@ -4510,6 +5726,10 @@ def _process_message(from_number: str, to_number: str, body: str):
                     )
                 )
                 notify_all_staff(dealer_row, to_number, alert_body)
+                notify_customer_appointment(dealer_row, customer_phone=from_number,
+                    twilio_number=to_number, customer_name=customer_name,
+                    visit_time=visit_time, car_desc=car_desc,
+                    action=("rescheduled" if is_reschedule else "confirmed"))
                 app.logger.info("Auto-booked appt #%d", appt_id)
             else:
                 # Legacy need_confirmation flow - keep for fallback
@@ -4526,9 +5746,15 @@ def _process_message(from_number: str, to_number: str, body: str):
 # appointments, primer_sent, etc.) work without any schema changes.
 # =========================
 import uuid as _uuid
+from flask import redirect, abort
 
+# Legacy single-tenant env vars - kept as fallback so existing deployments
+# keep working until the dealer fills in the new slug column in the sheet.
 WIDGET_DEALER_TWILIO_NUM = os.getenv("WIDGET_DEALER_TWILIO_NUM", "")
 WIDGET_DEALER_NAME       = os.getenv("WIDGET_DEALER_NAME", "Auto District Indy")
+# If set, visiting "/" (no slug) redirects to /widget/<this slug> so old
+# bookmarks / Render URLs without a slug still land somewhere sensible.
+WIDGET_DEFAULT_SLUG      = os.getenv("WIDGET_DEFAULT_SLUG", "")
 
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-change-me")
 
@@ -4541,23 +5767,105 @@ def _session_to_phone(session_id: str) -> str:
     return f"+web{cleaned}"
 
 
+def _resolve_widget_dealer(slug: str) -> Dict[str, str]:
+    """Look up a dealer by slug and return their widget branding fields.
+    Returns {} if no match - caller decides how to handle that (404 vs
+    fallback to env-var defaults)."""
+    try:
+        dealers = read_dealers()
+    except Exception as e:
+        app.logger.error("widget dealer lookup: sheet read failed: %s", e)
+        return {}
+    dealer = select_dealer_for_slug(dealers, slug)
+    if not dealer:
+        return {}
+    return get_widget_branding(dealer)
+
+
 @app.route("/")
-def widget_home():
+def widget_root():
+    # If a default slug is configured, send users there. Otherwise fall back
+    # to the legacy single-tenant rendering path using env-var name + Twilio
+    # number, so existing setups don't break before the sheet is updated.
+    if WIDGET_DEFAULT_SLUG:
+        return redirect(f"/widget/{WIDGET_DEFAULT_SLUG}", code=302)
+    if WIDGET_DEALER_TWILIO_NUM:
+        return render_template(
+            "index.html",
+            dealer_name=WIDGET_DEALER_NAME,
+            brand_color="#4a90e2",
+            logo_url="",
+            slug="",
+            terms_url=PRIMER_TERMS_URL,
+            has_new_arrivals=False,
+        )
+    return (
+        "<h1>No dealer specified</h1>"
+        "<p>Visit <code>/widget/&lt;dealer-slug&gt;</code> to load a dealer's widget.</p>",
+        404,
+    )
+
+
+@app.route("/widget/<slug>")
+def widget_for_dealer(slug):
+    branding = _resolve_widget_dealer(slug)
+    if not branding:
+        return (
+            f"<h1>Dealer not found</h1>"
+            f"<p>No dealer with slug <code>{slug}</code> in the sheet. "
+            f"Check the slug column for that dealer.</p>",
+            404,
+        )
+    # Show the "New Arrivals" sidebar button only for dealers that actually
+    # have unpriced (newly-arrived) vehicles in stock. Dealers whose entire
+    # inventory has prices (e.g. Auto District Indy) don't need the button.
+    has_new_arrivals = False
+    try:
+        conn = _db()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM inventory WHERE twilio_number=? "
+            "AND (price IS NULL OR price = '' OR price = '0')",
+            (branding["twilio_number"],),
+        ).fetchone()
+        conn.close()
+        has_new_arrivals = bool(row and row[0] > 0)
+    except Exception as e:
+        app.logger.warning("has_new_arrivals lookup failed for %s: %s", slug, e)
     return render_template(
         "index.html",
-        dealer_name=WIDGET_DEALER_NAME,
+        dealer_name=branding["name"],
+        brand_color=branding["brand_color"],
+        logo_url=branding["logo_url"],
+        slug=branding["slug"],
         terms_url=PRIMER_TERMS_URL,
+        has_new_arrivals=has_new_arrivals,
     )
 
 
 @app.route("/chat", methods=["POST"])
 def chat_webhook():
-    if not WIDGET_DEALER_TWILIO_NUM:
-        return jsonify({"error": "WIDGET_DEALER_TWILIO_NUM not configured"}), 500
-
     data = request.get_json(silent=True) or {}
     user_message = (data.get("message") or "").strip()
     session_id   = (data.get("session_id") or "").strip() or session.get("sid")
+    slug         = (data.get("slug") or "").strip()
+    # Self-healing real_phone: the widget echoes the customer's phone (from
+    # localStorage) on every chat, so if the DB was wiped (e.g. DEV_CLEAR_DB)
+    # we re-attach it without re-prompting the customer.
+    cached_phone = (data.get("real_phone") or "").strip()
+
+    # Resolve which dealer's Twilio number this chat targets. Slug from the
+    # widget page wins; fall back to the legacy env var so old single-tenant
+    # deployments keep working.
+    to_number = ""
+    if slug:
+        branding = _resolve_widget_dealer(slug)
+        if branding and branding["twilio_number"]:
+            to_number = branding["twilio_number"]
+    if not to_number:
+        to_number = WIDGET_DEALER_TWILIO_NUM
+
+    if not to_number:
+        return jsonify({"error": "no dealer resolved (missing slug and no fallback configured)"}), 400
 
     if not session_id:
         session_id = _uuid.uuid4().hex
@@ -4567,10 +5875,19 @@ def chat_webhook():
         return jsonify({"error": "empty message"}), 400
 
     from_number = _session_to_phone(session_id)
-    to_number   = WIDGET_DEALER_TWILIO_NUM
+
+    # Self-heal real_phone if the JS sent it but it's not on file (e.g. DB
+    # was wiped between visits but the widget kept the phone in localStorage).
+    if cached_phone:
+        normalized_cached = normalize_phone(cached_phone)
+        if normalized_cached.startswith("+1") and len(re.sub(r"\D", "", normalized_cached)) == 11:
+            existing = get_customer_profile(from_number, to_number).get("real_phone", "")
+            if not existing:
+                save_customer_profile(from_number, to_number, real_phone=normalized_cached)
 
     g.captured_reply  = None
     g.captured_primer = None
+    g.captured_silent = False
 
     try:
         _process_message(from_number, to_number, user_message)
@@ -4578,19 +5895,265 @@ def chat_webhook():
         app.logger.error("chat _process_message failed: %s", e)
         return jsonify({"error": "processing error"}), 500
 
-    reply = g.get("captured_reply") or "Sorry, I had trouble processing that. Could you try again?"
+    silent = bool(g.get("captured_silent"))
+    if silent:
+        reply = ""
+    else:
+        reply = g.get("captured_reply") or "Sorry, I had trouble processing that. Could you try again?"
     primer = g.get("captured_primer")
 
     return jsonify({
         "reply": reply,
         "primer": primer,
+        "silent": silent,
         "session_id": session_id,
     })
 
 
+@app.route("/widget/welcome", methods=["POST"])
+def widget_welcome():
+    """Generate the proactive welcome message shown right after a customer
+    accepts terms and enters the chat. Replaces the SMS-style FYI primer for
+    widget users by both introducing the bot's capabilities and asking for the
+    customer's phone + name upfront. Saves the welcome to conversation history
+    and marks the primer as sent so it won't be appended again later."""
+    data = request.get_json(silent=True) or {}
+    session_id = (data.get("session_id") or "").strip()
+    slug       = (data.get("slug") or "").strip()
+    if not session_id or not slug:
+        return jsonify({"error": "missing session_id or slug"}), 400
+
+    branding = _resolve_widget_dealer(slug)
+    if not branding or not branding.get("twilio_number"):
+        return jsonify({"error": "dealer not found"}), 404
+
+    twilio_number = branding["twilio_number"]
+    customer_key  = _session_to_phone(session_id)
+    dealer_name   = branding.get("name") or "us"
+
+    # If the welcome (or any primer) was already sent to this session, skip.
+    if has_primer_been_sent(customer_key, twilio_number):
+        return jsonify({"welcome": ""})
+
+    profile   = get_customer_profile(customer_key, twilio_number)
+    has_name  = bool((profile.get("name") or "").strip())
+    has_phone = bool((profile.get("real_phone") or "").strip())
+
+    if has_name and has_phone:
+        welcome = (
+            f"Hi! I'm the AI assistant for {dealer_name}. I can help with inventory, "
+            "vehicles, financing, and scheduling a visit. Replies are AI-assisted - "
+            "reply STOP at any time to opt out."
+        )
+    else:
+        welcome = (
+            f"Hi! I'm the AI assistant for {dealer_name}. I can help with inventory, "
+            "vehicles, financing, and scheduling a visit.\n\n"
+            "Before we get started, could I get your first name, last name, and phone "
+            "number? We use these so we can text you appointment confirmations and "
+            "follow up if you have any questions later.\n\n"
+            "Replies are AI-assisted - reply STOP at any time to opt out."
+        )
+
+    save_message(customer_key, twilio_number, "assistant", welcome)
+    mark_primer_sent(customer_key, twilio_number)
+
+    terms_note = f"Review our terms anytime here: {PRIMER_TERMS_URL}"
+    return jsonify({"welcome": welcome, "terms_note": terms_note})
+
+
+@app.route("/widget/register-phone", methods=["POST"])
+def widget_register_phone():
+    """Save the customer's real phone number against their widget session.
+    The widget collects this on open (required) so we can text appointment
+    confirmations, reminders, and follow-ups to a real number instead of the
+    +web<sessionid> pseudo-phone we use as a DB key."""
+    data = request.get_json(silent=True) or {}
+    session_id = (data.get("session_id") or "").strip()
+    slug       = (data.get("slug") or "").strip()
+    raw_phone  = (data.get("phone") or "").strip()
+    if not session_id or not slug or not raw_phone:
+        return jsonify({"error": "missing session_id, slug, or phone"}), 400
+
+    normalized = normalize_phone(raw_phone)
+    digits = re.sub(r"\D", "", normalized)
+    # Require a 10-digit US number (E.164 with leading +1).
+    if not (normalized.startswith("+1") and len(digits) == 11):
+        return jsonify({"error": "invalid phone number"}), 400
+
+    branding = _resolve_widget_dealer(slug)
+    if not branding or not branding.get("twilio_number"):
+        return jsonify({"error": "dealer not found"}), 404
+
+    customer_key = _session_to_phone(session_id)  # +web<sessionid>
+    save_customer_profile(customer_key, branding["twilio_number"],
+                          real_phone=normalized)
+    return jsonify({"ok": True, "phone": normalized})
+
+
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "dealer": WIDGET_DEALER_NAME})
+    return jsonify({"ok": True, "default_dealer": WIDGET_DEALER_NAME})
+
+
+# Embed bubble loader served at top-level path so dealers paste a clean URL.
+# Re-exposes static/embed.js without the /static/ prefix.
+@app.route("/embed.js")
+def embed_js():
+    from flask import send_from_directory, make_response
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    resp = make_response(send_from_directory(static_dir, "embed.js"))
+    resp.headers["Content-Type"] = "application/javascript; charset=utf-8"
+    # Browsers can cache for an hour; bump the version in the snippet if you
+    # ever need to bust the cache mid-day.
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
+# Lightweight branding endpoint the embed loader hits to color the bubble.
+# Returned with CORS wide-open so embed.js can fetch it from any dealer's
+# website (cross-origin call from their domain to ours).
+@app.route("/widget-config")
+def widget_config():
+    slug = (request.args.get("dealer") or "").strip()
+    if not slug:
+        resp = jsonify({"error": "missing dealer slug"})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp, 400
+    branding = _resolve_widget_dealer(slug)
+    if not branding:
+        resp = jsonify({"error": "dealer not found"})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp, 404
+    resp = jsonify({
+        "dealer_name": branding["name"],
+        "brand_color": branding["brand_color"],
+        "logo_url":    branding["logo_url"],
+        "slug":        branding["slug"],
+    })
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+
+# Simple admin index that lists every dealer's copy-paste embed snippet.
+# Password-gated by the ADMIN_PASSWORD env var (default "5643"). Visit:
+#     https://<your-render-url>/admin
+# and enter the password. Stays unlocked for the browser session.
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "5643")
+
+
+def _admin_authed() -> bool:
+    return bool(session.get("admin_ok"))
+
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin_index():
+    # Login form submission
+    if request.method == "POST":
+        if (request.form.get("password") or "").strip() == ADMIN_PASSWORD:
+            session["admin_ok"] = True
+        else:
+            return _admin_login_page(error="Wrong password.")
+        # Fall through to render the dashboard
+
+    if not _admin_authed():
+        return _admin_login_page()
+
+    # Build dealer rows from the sheet
+    try:
+        dealers = read_dealers()
+    except Exception as e:
+        return f"<h1>Admin</h1><p>Sheet read failed: {e}</p>", 500
+
+    # Prefer PUBLIC_BASE_URL env var (set in Render to e.g.
+    # https://dealer-chat-widget.onrender.com) so the snippets always show the
+    # production URL even when /admin is accessed locally. Falls back to the
+    # current request's host if the env var isn't set.
+    base_url = (os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+                or request.url_root.rstrip("/"))
+    rows_html = []
+    for d in dealers:
+        name        = get_row_field(d, DEALER_NAME_ALIASES) or "(unnamed dealer)"
+        twilio_num  = normalize_phone(get_row_field(d, TWILIO_NUMBER_ALIASES))
+        explicit    = _normalize_slug(get_row_field(d, SLUG_ALIASES))
+        slug        = explicit or _normalize_slug(name)
+        if not slug:
+            continue  # nothing to embed for unnamed/unkeyed dealers
+        snippet = (
+            f'<script src="{base_url}/embed.js?dealer={slug}"></script>'
+        )
+        widget_url = f"{base_url}/widget/{slug}"
+        slug_label = "" if explicit else " <em>(derived from name)</em>"
+        rows_html.append(f"""
+        <article class="dealer">
+          <h2>{name}</h2>
+          <p class="meta">slug: <code>{slug}</code>{slug_label} &middot; twilio: <code>{twilio_num or '(none)'}</code></p>
+          <p><strong>Widget preview:</strong> <a href="{widget_url}" target="_blank">{widget_url}</a></p>
+          <p><strong>Embed snippet</strong> (paste this on the dealer's site, before <code>&lt;/body&gt;</code>):</p>
+          <div class="snippet-row">
+            <textarea readonly rows="2" onclick="this.select()">{snippet}</textarea>
+            <button type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value).then(()=>{{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500);}})">Copy</button>
+          </div>
+        </article>
+        """)
+
+    if not rows_html:
+        rows_html.append("<p>No dealers found in the sheet yet.</p>")
+
+    body = "\n".join(rows_html)
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Admin · Embed codes</title>
+<style>
+  body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width: 880px; margin: 24px auto; padding: 0 16px; color: #222; }}
+  h1 {{ margin-bottom: 4px; }}
+  .topbar {{ display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e5e7eb; padding-bottom:12px; margin-bottom:20px; }}
+  .topbar a {{ color:#6b7280; text-decoration:none; font-size:14px; }}
+  .dealer {{ border:1px solid #e5e7eb; border-radius:10px; padding:16px 18px; margin-bottom:16px; background:#fafafa; }}
+  .dealer h2 {{ margin: 0 0 4px 0; font-size: 18px; }}
+  .meta {{ color:#666; font-size:13px; margin:0 0 10px 0; }}
+  code {{ background:#eef0f3; padding:1px 5px; border-radius:4px; font-size:13px; }}
+  textarea {{ flex:1; font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12.5px; padding:10px; border:1px solid #ccc; border-radius:6px; resize:vertical; min-height:48px; }}
+  .snippet-row {{ display:flex; gap:8px; align-items:flex-start; }}
+  .snippet-row button {{ background:#1f2937; color:#fff; border:none; padding:9px 14px; border-radius:6px; cursor:pointer; font-size:13px; }}
+  .snippet-row button:hover {{ background:#111827; }}
+  a {{ color:#1f2937; }}
+</style></head>
+<body>
+  <div class="topbar">
+    <h1>Dealer embed codes</h1>
+    <a href="/admin/logout">Log out</a>
+  </div>
+  <p style="color:#555">Each dealer's row below has a copy-paste snippet. Hand it to the dealer (or their web person) — they paste it once on their site and the chat bubble appears on every page.</p>
+  {body}
+</body></html>"""
+
+
+def _admin_login_page(error: str = "") -> str:
+    err_html = f'<p style="color:#b91c1c;font-size:14px;">{error}</p>' if error else ""
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Admin login</title>
+<style>
+  body {{ font-family: -apple-system,BlinkMacSystemFont,sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; background:#f3f4f6; }}
+  form {{ background:#fff; padding:28px 32px; border-radius:10px; box-shadow:0 4px 20px rgba(0,0,0,0.08); width:300px; }}
+  h1 {{ font-size:20px; margin:0 0 16px 0; }}
+  input[type=password] {{ width:100%; padding:10px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:15px; box-sizing:border-box; margin-bottom:12px; }}
+  button {{ width:100%; padding:10px; background:#1f2937; color:#fff; border:none; border-radius:6px; font-size:15px; cursor:pointer; }}
+  button:hover {{ background:#111827; }}
+</style></head>
+<body>
+  <form method="POST" action="/admin">
+    <h1>Admin login</h1>
+    {err_html}
+    <input type="password" name="password" placeholder="Password" autofocus required>
+    <button type="submit">Enter</button>
+  </form>
+</body></html>"""
+
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop("admin_ok", None)
+    return redirect("/admin", code=302)
 
 
 @app.route("/debug/inventory")
@@ -4608,16 +6171,22 @@ def debug_inventory():
             (WIDGET_DEALER_TWILIO_NUM,),
         ).fetchone()[0]
         sample = conn.execute(
-            "SELECT year, make, model FROM inventory WHERE twilio_number=? LIMIT 5",
+            "SELECT year, make, model, mileage, price FROM inventory WHERE twilio_number=? LIMIT 10",
             (WIDGET_DEALER_TWILIO_NUM,),
         ).fetchall()
+        with_mileage = conn.execute(
+            "SELECT COUNT(*) FROM inventory WHERE twilio_number=? AND mileage <> '' AND mileage IS NOT NULL",
+            (WIDGET_DEALER_TWILIO_NUM,),
+        ).fetchone()[0]
         conn.close()
         return jsonify({
             "widget_dealer_twilio_num": WIDGET_DEALER_TWILIO_NUM,
             "rows_for_widget_dealer": widget_count,
+            "rows_with_mileage": with_mileage,
             "all_dealer_groups": [{"twilio_number": tn, "count": n} for tn, n in all_groups],
             "sample_rows_for_widget_dealer": [
-                {"year": y, "make": mk, "model": md} for y, mk, md in sample
+                {"year": y, "make": mk, "model": md, "mileage": mi, "price": pr}
+                for y, mk, md, mi, pr in sample
             ],
         })
     except Exception as e:
