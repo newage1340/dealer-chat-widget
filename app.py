@@ -5305,8 +5305,15 @@ def _process_message(from_number: str, to_number: str, body: str):
         r"to (lock|finalize|confirm) (it |your |the )?(in|appointment)",
         _last_bot_msg,
     ))
+    # Match noun forms ("trade-in", "trade in", "trade ins") AND verb forms
+    # ("trade my X in", "trade in my X", "trading", "trading my car"). Without
+    # the verb-form patterns, "I want to trade my vehicle in" misses entirely
+    # and the bot skips collecting trade-in details.
     _trade_in_trigger = (
-        re.search(r"\btrade[- ]?ins?\b", body, re.I) or _bot_just_asked_trade_in
+        re.search(r"\btrade[- ]?ins?\b", body, re.I)
+        or re.search(r"\btrade\s+(?:my|in|that|this|the|a|it)\b", body, re.I)
+        or re.search(r"\btrading\b", body, re.I)
+        or _bot_just_asked_trade_in
     ) and not _bot_asked_for_booking_info
     if _trade_in_trigger:
         tradeins = get_row_field(dealer_row, DEALER_TRADEINS_ALIASES)
