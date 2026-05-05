@@ -8,6 +8,10 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None  # type: ignore
 
 import gspread
 from flask import Flask, request, g, jsonify, render_template, session
@@ -28,6 +32,26 @@ TWILIO_ACCOUNT_SID           = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN            = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
 DB_PATH                      = os.getenv("DB_PATH", r"C:\twilio-bot2\bot.db")
+# Dealer's local timezone — used when formatting "current time" for the LLM
+# prompt and when parsing customer-supplied appointment times. On Render the
+# server clock is UTC, but the dealers are in Indianapolis, so without this
+# the LLM thinks "now" is 4-5 hours later than it really is and rejects
+# valid same-day appointment times. Override per deployment via DEALER_TZ.
+DEALER_TZ_NAME               = os.getenv("DEALER_TZ", "America/Indiana/Indianapolis")
+try:
+    DEALER_TZ = ZoneInfo(DEALER_TZ_NAME) if ZoneInfo else None
+except Exception:
+    DEALER_TZ = None
+
+
+def _now_local() -> datetime:
+    """Current wall-clock time in the dealer's timezone, returned tz-naive
+    so it composes with the rest of the codebase's naive-datetime arithmetic."""
+    if DEALER_TZ is None:
+        return datetime.now()
+    return datetime.now(DEALER_TZ).replace(tzinfo=None)
+
+
 REMINDER_LEAD_MINUTES        = 60
 COLD_FOLLOWUP_AFTER_MINUTES  = 30
 COLD_FOLLOWUP_MAX_AGE_HOURS  = 72
@@ -1231,7 +1255,7 @@ def clear_cold_followup(customer_phone, twilio_number):
 
 
 def get_upcoming_unreminded_appointments() -> List[Dict[str, Any]]:
-    now = datetime.now()
+    now = _now_local()
     window_end = now + timedelta(minutes=REMINDER_LEAD_MINUTES + 5)
     conn = _db()
     rows = conn.execute("""
@@ -1286,7 +1310,7 @@ def parse_visit_time_from_text(text: str, now: Optional[datetime] = None) -> Tup
     raw = (text or "").strip()
     if not raw:
         return "", ""
-    now = now or datetime.now()
+    now = now or _now_local()
     lowered = raw.lower()
     tm = re.search(r"\b(1[0-2]|0?[1-9])(?::([0-5][0-9]))?\s*(am|pm)\b", lowered)
     if not tm:
@@ -1373,7 +1397,7 @@ def parse_relative_offset(text: str) -> Optional[timedelta]:
 
 def format_visit_time_display(dt: datetime, now: Optional[datetime] = None) -> str:
     """Format a datetime like '3pm' or '3:30pm tomorrow' for display in confirmations."""
-    now = now or datetime.now()
+    now = now or _now_local()
     hour_12 = int(dt.strftime("%I"))
     ampm = dt.strftime("%p").lower()
     base = f"{hour_12}{ampm}" if dt.minute == 0 else f"{hour_12}:{dt.minute:02d}{ampm}"
@@ -3079,7 +3103,7 @@ def _detect_day_in_message(msg: str) -> Optional[str]:
     if not msg:
         return None
     s = msg.lower()
-    today = datetime.now()
+    today = _now_local()
     if re.search(r"\btomorrow\b", s):
         return (today + timedelta(days=1)).strftime("%A")
     if re.search(r"\b(today|tonight|right now|now)\b", s):
@@ -3098,8 +3122,8 @@ def _hours_response_for_day(hours_str: str, asked_day: str) -> Optional[str]:
     status = parsed.get(asked_day)
     if status is None:
         return None
-    today_name = datetime.now().strftime("%A")
-    tomorrow_name = (datetime.now() + timedelta(days=1)).strftime("%A")
+    today_name = _now_local().strftime("%A")
+    tomorrow_name = (_now_local() + timedelta(days=1)).strftime("%A")
     if asked_day == today_name:
         day_phrase = f"today ({asked_day})"
     elif asked_day == tomorrow_name:
@@ -4318,7 +4342,7 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
         if content:
             convo_lines.append(f"{'Customer' if m.get('role')=='user' else 'Consultant'}: {content}")
     convo_text = "\n".join(convo_lines) or "(No prior messages)"
-    current_time_str = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+    current_time_str = _now_local().strftime("%A, %B %d, %Y at %I:%M %p")
 
     if isinstance(customer_name, dict):
         first, last, email = customer_name.get("name", ""), customer_name.get("last_name", ""), customer_name.get("email", "")
