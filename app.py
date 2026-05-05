@@ -426,7 +426,10 @@ def _utc_now_iso() -> str:
 
 
 def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    # timeout=30: how long a query waits for a write lock before raising
+    # "database is locked". Default is 5s, which isn't enough during the
+    # initial inventory scrape (lots of inserts back-to-back).
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -434,6 +437,12 @@ def _db() -> sqlite3.Connection:
 def init_db() -> None:
     conn = _db()
     with conn:
+        # WAL mode lets readers proceed while a writer is active, instead of
+        # blocking. Critical for serving chat requests during the inventory
+        # scrape. The setting is persisted in the DB file, so this is a no-op
+        # after the first run.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS inventory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
