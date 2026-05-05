@@ -5957,7 +5957,24 @@ def _process_message(from_number: str, to_number: str, body: str):
             normalized_phone = normalize_phone(meta["_extracted_phone"])
             phone_digits = re.sub(r"\D", "", normalized_phone)
             if normalized_phone.startswith("+1") and len(phone_digits) == 11:
-                save_kwargs["real_phone"] = normalized_phone
+                # Defense against LLM-hallucinated phone numbers: the 10-digit
+                # form MUST appear in something the customer actually typed
+                # (current message or any prior user turn). Without this check
+                # the LLM can invent a phone number that looks structurally
+                # valid (10 digits, +1 prefix) and the system will save it as
+                # the customer's real_phone — leading to wrong-number leads.
+                local_digits = phone_digits[1:]  # strip leading "1"
+                _user_typed_digits = re.sub(r"\D", "", body or "")
+                for _m in get_recent_messages(from_number, to_number, limit=20):
+                    if _m.get("role") == "user":
+                        _user_typed_digits += " " + re.sub(r"\D", "", _m.get("content") or "")
+                if local_digits and local_digits in _user_typed_digits:
+                    save_kwargs["real_phone"] = normalized_phone
+                else:
+                    app.logger.warning(
+                        "Rejected META_PHONE %s — digits not present in customer messages (likely LLM hallucination)",
+                        normalized_phone,
+                    )
         if save_kwargs:
             save_customer_profile(from_number, to_number, **save_kwargs)
             customer_profile = get_customer_profile(from_number, to_number)
@@ -6297,14 +6314,31 @@ def widget_clear_session():
     customer_key  = _session_to_phone(session_id)
     twilio_number = branding["twilio_number"]
 
-    # Look up the customer's real phone BEFORE deleting customer_names so we
-    # can wipe cold_followups history for every sibling session — otherwise
-    # the cross-session follow-up dedup would still see this human as
-    # already-followed-up after the reset.
+    # Look up the customer's real phone BEFORE deleting anything so we can
+    # find every sibling session this human ever had with this dealer (each
+    # browser tab / Clear Chat / device creates a fresh +web<sessionid>).
+    # Wipe must span ALL of them — otherwise the cold-followup scheduler
+    # would later pick up a sibling session that still has messages and
+    # text the customer about a conversation they think they deleted.
     real_phone_for_reset = (get_customer_profile(customer_key, twilio_number)
                             .get("real_phone", "") or "").strip()
+
+    # Collect every customer_phone we need to wipe: the current session
+    # plus all siblings tied to the same real phone.
+    sibling_keys: set = {customer_key}
     if real_phone_for_reset:
-        clear_followup_history_for_real_phone(real_phone_for_reset, twilio_number)
+        try:
+            conn = _db()
+            sibling_rows = conn.execute(
+                "SELECT customer_phone FROM customer_names "
+                "WHERE real_phone=? AND twilio_number=?",
+                (real_phone_for_reset, twilio_number),
+            ).fetchall()
+            conn.close()
+            for r in sibling_rows:
+                sibling_keys.add(r["customer_phone"])
+        except Exception as e:
+            app.logger.warning("widget_clear_session sibling lookup failed: %s", e)
 
     tables = (
         "messages",
@@ -6319,17 +6353,21 @@ def widget_clear_session():
     try:
         conn = _db()
         with conn:
-            for t in tables:
-                conn.execute(
-                    f"DELETE FROM {t} WHERE customer_phone=? AND twilio_number=?",
-                    (customer_key, twilio_number),
-                )
+            for ck in sibling_keys:
+                for t in tables:
+                    conn.execute(
+                        f"DELETE FROM {t} WHERE customer_phone=? AND twilio_number=?",
+                        (ck, twilio_number),
+                    )
         conn.close()
     except Exception as e:
         app.logger.warning("widget_clear_session DB delete failed: %s", e)
         return jsonify({"error": "clear failed"}), 500
 
-    app.logger.info("Widget session cleared for %s on %s", customer_key, twilio_number)
+    app.logger.info(
+        "Widget session cleared for %s on %s (wiped %d session(s))",
+        customer_key, twilio_number, len(sibling_keys),
+    )
     return jsonify({"ok": True})
 
 
