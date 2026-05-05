@@ -1142,6 +1142,31 @@ def mark_cold_followup_sent(customer_phone, twilio_number):
     conn.close()
 
 
+def mark_all_sessions_followed_up(real_phone: str, twilio_number: str) -> None:
+    """When a cold follow-up goes out, mark EVERY session that shares the
+    same real_phone (i.e. the same human) as already followed-up. Without
+    this, a customer who used the widget multiple times — each clear/restart
+    creates a fresh session_id — would receive one cold follow-up per
+    abandoned session, all firing at once when the scheduler ticks."""
+    if not real_phone or not twilio_number:
+        return
+    try:
+        conn = _db()
+        with conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO cold_followups (customer_phone, twilio_number, sent_at)
+                SELECT customer_phone, ?, ?
+                FROM customer_names
+                WHERE real_phone=? AND twilio_number=?
+                """,
+                (twilio_number, _utc_now_iso(), real_phone, twilio_number),
+            )
+        conn.close()
+    except Exception as e:
+        app.logger.warning("mark_all_sessions_followed_up failed for %s: %s", real_phone, e)
+
+
 def clear_cold_followup(customer_phone, twilio_number):
     conn = _db()
     with conn:
@@ -2735,17 +2760,21 @@ def _format_generic_listing(rows: List[Dict[str, Any]], limit: int = 10) -> str:
 
 
 def _extract_car_from_last_bot_message(history: List[Dict[str, Any]], inventory_rows: List[Dict[str, Any]]):
-    """Find the vehicle the bot most recently mentioned. Returns None if the
-    most recent assistant message named multiple distinct vehicles (e.g. a
-    listing) - the caller should fall through to the LLM rather than guess."""
+    """Find the vehicle the bot most recently discussed. Walks back through
+    assistant messages until one references a single vehicle. Returns None if
+    we hit a listing (2+ year+make pairs) before finding a single-vehicle
+    message — listings are ambiguous, so the caller should route through the
+    LLM rather than guess.
+
+    Walking back is critical: when the bot's most recent reply was a generic
+    fallback like "I don't have that information", the customer's next
+    follow-up ("what about a vin") would otherwise lose all vehicle context."""
     for msg in reversed(history):
         if msg.get("role") != "assistant":
             continue
         content = (msg.get("content") or "").lower()
         # Detect listing context: 2+ "<year> <make>" mentions usually means
-        # the bot was enumerating vehicles, not talking about one. In that
-        # case we return None so the caller can route through the LLM with
-        # full conversation context.
+        # the bot was enumerating vehicles, not talking about one.
         year_make_pairs = set(re.findall(r"\b(19[5-9]\d|20[0-2]\d)\s+([a-z][a-z\-]+)", content))
         if len(year_make_pairs) >= 2:
             return None
@@ -2790,7 +2819,11 @@ def _extract_car_from_last_bot_message(history: List[Dict[str, Any]], inventory_
                     score += 2
             if score > best_score:
                 best_score, best_row = score, r
-        return best_row
+        if best_row:
+            return best_row
+        # No vehicle in this assistant message (likely a generic fallback or
+        # acknowledgment) — keep walking back to an earlier one that did
+        # discuss a specific car.
     return None
 
 
@@ -3097,6 +3130,49 @@ def _dealer_info_response(dealer: Dict[str, Any], dealer_phone: str, msg: str = 
 # =========================
 # INTENT DETECTORS
 # =========================
+
+def _is_have_any_question(msg: str) -> Optional[str]:
+    """Detect 'do you have any X' / 'got any X' / 'are there any X' style
+    queries and return the search term X (lowercased). Returns None for
+    generic terms like 'cars'/'vehicles' (those go through the listing
+    handlers) or when the pattern doesn't match.
+
+    Used to deterministically search the full inventory text for sub-brand
+    or trim words like AMG / TRD / SRT — words that live inside the model
+    or description string and that the LLM tends to miss when scanning
+    inventory by year/make/model alone."""
+    msg = (msg or "").strip().lower()
+    msg = re.sub(r"[?.!,]+$", "", msg).strip()
+    if not msg:
+        return None
+    patterns = [
+        r"^(?:do\s+(?:you|ya|y'?all)|d'?ya)\s+(?:have|got|carry)\s+any\s+(.+)$",
+        r"^(?:got|have|carrying|carry)\s+any\s+(.+)$",
+        r"^(?:are\s+there|is\s+there)\s+any\s+(.+)$",
+        r"^any\s+(.+?)\s+(?:in\s+stock|available|left|on\s+the\s+lot|on\s+(?:your|the)\s+lot)$",
+    ]
+    for pat in patterns:
+        m = re.match(pat, msg)
+        if not m:
+            continue
+        term = m.group(1).strip()
+        term = re.sub(
+            r"\s+(in\s+stock|available|left|here|on\s+the\s+lot|on\s+(?:your|the)\s+lot|right\s+now|currently)$",
+            "",
+            term,
+        ).strip()
+        # Generic listing terms — let the existing listing/inventory handlers
+        # deal with these (price filters, generic browse, etc).
+        generic = {
+            "cars", "car", "vehicles", "vehicle", "trucks", "truck",
+            "suvs", "suv", "sedans", "sedan", "vans", "van",
+            "stuff", "options", "rides", "wheels", "things",
+        }
+        if not term or term in generic:
+            return None
+        return term
+    return None
+
 
 def _is_stock_number_question(msg):
     return bool(re.search(r"\b(stock|stock\s*#|stock\s*number)\b", (msg or "").lower()))
@@ -4450,74 +4526,126 @@ def send_cold_followups() -> None:
         app.logger.error("Cold follow-up: sheet read failed: %s", e)
         dealers = []
 
+    def _safe_mark(cp, tn):
+        """Mark a cold follow-up as sent. Returns True on success, False on
+        DB error. Failures must NOT raise — they'd otherwise kill the loop
+        and cause every remaining customer to be re-eligible next cycle,
+        producing a retry storm of duplicate SMS."""
+        try:
+            mark_cold_followup_sent(cp, tn)
+            return True
+        except Exception as e:
+            app.logger.warning("Cold follow-up: mark_sent failed for %s on %s: %s", cp, tn, e)
+            return False
+
+    # In-cycle dedupe: a single customer may have several sessions all
+    # eligible at once (each clearChat / new browser session creates a new
+    # +web<id> customer_phone). Without dedupe, all sessions sharing the
+    # same real_phone would fire SMS to the same number simultaneously.
+    seen_outbound: set = set()
+
     for convo in cold:
         customer_phone = convo["customer_phone"]
         twilio_number  = convo["twilio_number"]
 
-        if get_latest_appointment(customer_phone, twilio_number):
-            mark_cold_followup_sent(customer_phone, twilio_number)
-            continue
-        if get_pending(customer_phone, twilio_number):
-            continue
-        last_msg = get_last_customer_message(customer_phone, twilio_number)
-        if last_msg and DISINTEREST_RE.search(last_msg):
-            mark_cold_followup_sent(customer_phone, twilio_number)
-            continue
-        if normalize_phone(customer_phone) == normalize_phone(twilio_number):
-            mark_cold_followup_sent(customer_phone, twilio_number)
-            continue
-
-        # Resolve the outbound number. For SMS customers this is the same
-        # as customer_phone; for widget customers it pulls real_phone from
-        # their profile (collected via the welcome gate). If we have no real
-        # number to text, skip without marking - we'll retry once they
-        # provide it.
-        outbound_phone = resolve_outbound_customer_phone(customer_phone, twilio_number)
-        if not outbound_phone or not outbound_phone.startswith("+"):
-            app.logger.info(
-                "Cold follow-up: no real phone for %s via %s yet, skipping",
-                customer_phone, twilio_number,
-            )
-            continue
-
-        dealer        = select_dealer_for_twilio_number(dealers, twilio_number) if dealers else {}
-        dealer_name   = get_row_field(dealer, DEALER_NAME_ALIASES) if dealer else ""
-        customer_profile_local = get_customer_profile(customer_phone, twilio_number)
-        customer_name = customer_profile_local.get("name", "")
-        customer_last = customer_profile_local.get("last_name", "")
-        history       = get_recent_messages(customer_phone, twilio_number, limit=10)
+        # Per-customer try/except: one customer's failure must not kill the
+        # loop and re-expose every other eligible customer next cycle.
         try:
-            inventory_rows = get_inventory_for_twilio(twilio_number)
-        except Exception:
-            inventory_rows = []
-        followup_body = ai_cold_followup_message(history, dealer_name, customer_name, inventory_rows) or (
-            "Just wanted to follow up - are you still interested in stopping by"
-            + (f" {dealer_name}" if dealer_name else "")
-            + "? We are happy to help with any questions."
-        )
+            if get_latest_appointment(customer_phone, twilio_number):
+                _safe_mark(customer_phone, twilio_number)
+                continue
+            if get_pending(customer_phone, twilio_number):
+                continue
+            last_msg = get_last_customer_message(customer_phone, twilio_number)
+            if last_msg and DISINTEREST_RE.search(last_msg):
+                _safe_mark(customer_phone, twilio_number)
+                continue
+            if normalize_phone(customer_phone) == normalize_phone(twilio_number):
+                _safe_mark(customer_phone, twilio_number)
+                continue
 
-        ok, err = send_sms_to_customer(customer_phone=outbound_phone, from_number=twilio_number, body=followup_body)
-        if ok:
-            mark_cold_followup_sent(customer_phone, twilio_number)
-            save_message(customer_phone, twilio_number, "assistant", followup_body)
-            app.logger.info("Sent cold follow-up to %s via %s", outbound_phone, twilio_number)
-
-            # One-shot dealer lead notification. Fires only when the cold
-            # follow-up itself fires (which is gated to once per customer
-            # via cold_followups table), so the dealer is texted at most once.
-            if dealer:
-                full_name = (customer_name + (" " + customer_last if customer_last else "")).strip() or "Unknown name"
-                lead_body = (
-                    f"Possible lead: {full_name} ({outbound_phone}) - "
-                    f"customer chatted but did not book a visit. "
-                    f"Consider reaching out."
+            # Resolve the outbound number. For SMS customers this is the same
+            # as customer_phone; for widget customers it pulls real_phone from
+            # their profile (collected via the welcome gate). If we have no real
+            # number to text, skip without marking - we'll retry once they
+            # provide it.
+            outbound_phone = resolve_outbound_customer_phone(customer_phone, twilio_number)
+            if not outbound_phone or not outbound_phone.startswith("+"):
+                app.logger.info(
+                    "Cold follow-up: no real phone for %s via %s yet, skipping",
+                    customer_phone, twilio_number,
                 )
+                continue
+
+            # Sibling-session dedupe: if another session sharing this real
+            # phone already fired in the current cycle, just mark this one
+            # as sent (so it stops being eligible) and move on. Prevents
+            # the burst of identical SMSes after a restart when a customer
+            # has multiple abandoned sessions.
+            if outbound_phone in seen_outbound:
+                _safe_mark(customer_phone, twilio_number)
+                continue
+
+            dealer        = select_dealer_for_twilio_number(dealers, twilio_number) if dealers else {}
+            dealer_name   = get_row_field(dealer, DEALER_NAME_ALIASES) if dealer else ""
+            customer_profile_local = get_customer_profile(customer_phone, twilio_number)
+            customer_name = customer_profile_local.get("name", "")
+            customer_last = customer_profile_local.get("last_name", "")
+            history       = get_recent_messages(customer_phone, twilio_number, limit=10)
+            try:
+                inventory_rows = get_inventory_for_twilio(twilio_number)
+            except Exception:
+                inventory_rows = []
+            followup_body = ai_cold_followup_message(history, dealer_name, customer_name, inventory_rows) or (
+                "Just wanted to follow up - are you still interested in stopping by"
+                + (f" {dealer_name}" if dealer_name else "")
+                + "? We are happy to help with any questions."
+            )
+
+            # Mark BEFORE sending so a transient DB lock after the SMS goes
+            # out doesn't cause a retry storm next cycle. Trade-off: if marking
+            # fails we skip this customer entirely (one missed follow-up beats
+            # six duplicate SMSes).
+            if not _safe_mark(customer_phone, twilio_number):
+                continue
+            # Persistently mark every other session sharing this real phone
+            # so future cycles don't re-fire if more sibling sessions age
+            # into the cold window later.
+            try:
+                mark_all_sessions_followed_up(outbound_phone, twilio_number)
+            except Exception as e:
+                app.logger.warning("Cold follow-up sibling-mark failed for %s: %s", outbound_phone, e)
+            seen_outbound.add(outbound_phone)
+
+            ok, err = send_sms_to_customer(customer_phone=outbound_phone, from_number=twilio_number, body=followup_body)
+            if ok:
                 try:
-                    notify_all_staff(dealer, twilio_number, lead_body)
+                    save_message(customer_phone, twilio_number, "assistant", followup_body)
                 except Exception as e:
-                    app.logger.warning("Lead notify failed for %s: %s", customer_phone, e)
-        else:
-            app.logger.warning("Cold follow-up failed for %s: %s", customer_phone, err)
+                    app.logger.warning("Cold follow-up save_message failed for %s: %s", customer_phone, e)
+                app.logger.info("Sent cold follow-up to %s via %s", outbound_phone, twilio_number)
+
+                # One-shot dealer lead notification. Fires only when the cold
+                # follow-up itself fires (which is gated to once per customer
+                # via cold_followups table), so the dealer is texted at most once.
+                if dealer:
+                    full_name = (customer_name + (" " + customer_last if customer_last else "")).strip() or "Unknown name"
+                    lead_body = (
+                        f"Possible lead: {full_name} ({outbound_phone}) - "
+                        f"customer chatted but did not book a visit. "
+                        f"Consider reaching out."
+                    )
+                    try:
+                        notify_all_staff(dealer, twilio_number, lead_body)
+                    except Exception as e:
+                        app.logger.warning("Lead notify failed for %s: %s", customer_phone, e)
+            else:
+                app.logger.warning("Cold follow-up failed for %s: %s", customer_phone, err)
+        except Exception as e:
+            app.logger.error(
+                "Cold follow-up iteration crashed for %s on %s: %s",
+                customer_phone, twilio_number, e,
+            )
 
 
 def start_scheduler() -> None:
@@ -5612,6 +5740,46 @@ def _process_message(from_number: str, to_number: str, body: str):
         if reply_text:
             save_message(from_number, to_number, "assistant", reply_text)
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
+    # ── PRIORITY 4.95: "do you have any X" with sub-brand/trim search ────
+    # The LLM tends to miss sub-brand or trim words that live inside the
+    # model string (AMG, TRD, SRT, M Sport, ZR1) and falsely answer "no".
+    # Substring-search the full row text + description so these queries
+    # never fall back to LLM hallucinations. Skips when the term is a known
+    # year/make/model — those have their own handlers further down.
+    _have_any_term = _is_have_any_question(body)
+    if _have_any_term and not _body_mentions_car(body, inventory_rows):
+        _stopwords = {"the", "a", "an", "of", "for", "with", "and", "or",
+                      "but", "is", "are", "any", "some", "this", "that",
+                      "in", "on", "at"}
+        def _depluralize(t):
+            return t[:-1] if len(t) >= 4 and t.endswith("s") and not t.endswith("ss") else t
+        _q_tokens = [
+            _depluralize(t)
+            for t in re.split(r"[^a-z0-9]+", _have_any_term)
+            if t and len(t) >= 2 and t not in _stopwords
+        ]
+        if _q_tokens:
+            _q_matches = []
+            for r in inventory_rows:
+                hay = (_row_text_for_match(r) + " " + str(r.get("Description", "") or "")).lower()
+                if all(re.search(rf"\b{re.escape(t)}s?\b", hay) for t in _q_tokens):
+                    _q_matches.append(r)
+            if _q_matches:
+                lines = [f"Yes, here's what we have matching '{_have_any_term}':"]
+                for r in _q_matches[:25]:
+                    price = str(r.get("Price", "")).strip()
+                    line = f"- {_vehicle_title(r)}"
+                    if price:
+                        line += f": ${price}"
+                    lines.append(line)
+                if len(_q_matches) > 25:
+                    lines.append(f"...and {len(_q_matches) - 25} more.")
+                lines.append("")
+                lines.append("Would you like more details on any of these?")
+                reply_text = "\n".join(lines)
+                save_message(from_number, to_number, "assistant", reply_text)
+                return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
     # ── PRIORITY 5: Full AI conversation ─────────────────────────────────
     history  = get_recent_messages(from_number, to_number, limit=14)
