@@ -1,0 +1,28 @@
+ <div class="main-header-status"><span class="status-dot"></span>Online</div>
+      </div>
+
+      <div class="chat-window" id="chatWindow">
+        <div class="message assistant">
+          <div class="avatar">AI</div>
+          <div class="bubble">
+            Welcome to <strong>{{ dealer_name }}</strong>! I can help you browse inventory, answer questions about specific vehicles, or schedule a visit. Use the menu on the left or just type your question below.
+          </div>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <textarea
+          id="userInput"
+          placeholder="Ask about a vehicle, financing, trade-in, or scheduling..."
+          rows="1"
+          onkeydown="handleKey(event)"
+        ></textarea>
+        <button id="sendBtn" onclick="sendMessage()" aria-label="Send">&#10148;</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
