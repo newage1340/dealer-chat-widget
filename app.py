@@ -460,13 +460,15 @@ def _db() -> sqlite3.Connection:
 
 def init_db() -> None:
     conn = _db()
+    # PRAGMA journal_mode=WAL MUST run outside a transaction — SQLite silently
+    # ignores the change if executed inside one (which is what `with conn:`
+    # opens). WAL mode lets readers run concurrently with writers; without it
+    # the DB falls back to default DELETE mode, where any chat request that
+    # happens during a scrape's row-by-row writes will hit "database is
+    # locked" once the 30s busy timeout expires.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     with conn:
-        # WAL mode lets readers proceed while a writer is active, instead of
-        # blocking. Critical for serving chat requests during the inventory
-        # scrape. The setting is persisted in the DB file, so this is a no-op
-        # after the first run.
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS inventory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
