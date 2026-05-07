@@ -6,6 +6,8 @@ import sqlite3
 import logging
 import threading
 import time
+import smtplib
+from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 try:
@@ -32,6 +34,12 @@ TWILIO_ACCOUNT_SID           = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN            = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
 DB_PATH                      = os.getenv("DB_PATH", r"C:\twilio-bot2\bot.db")
+# Gmail SMTP — used to email dealers/staff in addition to SMS, when the
+# dealer sheet has email columns filled in. GMAIL_APP_PASSWORD must be a
+# Google App Password (not the account password); requires 2FA on the account.
+GMAIL_USER                   = os.getenv("GMAIL_USER", "")
+GMAIL_APP_PASSWORD           = os.getenv("GMAIL_APP_PASSWORD", "")
+NOTIFY_FROM_EMAIL            = os.getenv("NOTIFY_FROM_EMAIL", "") or GMAIL_USER
 # Dealer's local timezone — used when formatting "current time" for the LLM
 # prompt and when parsing customer-supplied appointment times. On Render the
 # server clock is UTC, but the dealers are in Indianapolis, so without this
@@ -388,6 +396,16 @@ SALESMAN_PHONES_ALIASES = {
     "salesman phone numbers", "salesman phones", "salesman phone",
     "staff phone numbers", "staff phones", "notification phones",
 }
+DEALER_NOTIFY_EMAIL_ALIASES = {
+    "dealer email", "dealership email", "dealer email address",
+    "dealership email address", "email", "email address",
+    "notification email", "primary email",
+}
+SALESMAN_EMAILS_ALIASES = {
+    "salesman emails", "salesman email", "salesman email addresses",
+    "staff emails", "staff email", "staff email addresses",
+    "notification emails",
+}
 WEBSITE_URL_ALIASES = {
     "website url", "website", "dealer website", "dealership website",
     "inventory website", "url", "site url",
@@ -439,6 +457,26 @@ def get_salesman_phones(dealer_row: Dict[str, Any]) -> List[str]:
         return []
     parts = re.split(r"[,;\n]+", raw)
     return [normalize_phone(p.strip()) for p in parts if p.strip() and normalize_phone(p.strip())]
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def normalize_email(e: str) -> str:
+    e = (e or "").strip().strip("<>").strip()
+    return e if _EMAIL_RE.match(e) else ""
+
+
+def get_dealer_email(dealer_row: Dict[str, Any]) -> str:
+    return normalize_email(get_row_field(dealer_row, DEALER_NOTIFY_EMAIL_ALIASES))
+
+
+def get_salesman_emails(dealer_row: Dict[str, Any]) -> List[str]:
+    raw = get_row_field(dealer_row, SALESMAN_EMAILS_ALIASES)
+    if not raw:
+        return []
+    parts = re.split(r"[,;\s]+", raw)
+    return [normalize_email(p) for p in parts if normalize_email(p)]
 
 
 # =========================
@@ -3393,6 +3431,27 @@ def _send_sms(to: str, from_number: str, body: str) -> Tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
+def _send_email(to: str, subject: str, body: str) -> Tuple[bool, str]:
+    to = normalize_email(to)
+    if not to:
+        return False, "Missing recipient email"
+    if not (GMAIL_USER and GMAIL_APP_PASSWORD):
+        return False, "Missing Gmail credentials"
+    try:
+        msg = EmailMessage()
+        msg["From"] = NOTIFY_FROM_EMAIL or GMAIL_USER
+        msg["To"] = to
+        msg["Subject"] = (subject or "Notification")[:200]
+        msg.set_content(body)
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as s:
+            s.starttls()
+            s.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            s.send_message(msg)
+        return True, "sent"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
 def notify_all_staff(dealer_row: Dict[str, Any], from_number: str, body: str) -> None:
     dealer_ph = normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
     salesman_phones = get_salesman_phones(dealer_row)
@@ -3406,21 +3465,47 @@ def notify_all_staff(dealer_row: Dict[str, Any], from_number: str, body: str) ->
             seen.add(np)
             phones.append(np)
 
-    if not phones:
-        app.logger.warning("No notification phones found for %s - skipping",
+    # Same merge for emails
+    dealer_em = get_dealer_email(dealer_row)
+    salesman_emails = get_salesman_emails(dealer_row)
+    emails: List[str] = []
+    seen_em = set()
+    for raw in ([dealer_em] if dealer_em else []) + salesman_emails:
+        ne = normalize_email(raw)
+        if ne and ne.lower() not in seen_em:
+            seen_em.add(ne.lower())
+            emails.append(ne)
+
+    if not phones and not emails:
+        app.logger.warning("No notification phones or emails found for %s - skipping",
                            get_row_field(dealer_row, DEALER_NAME_ALIASES))
         return
 
-    app.logger.info("Notifying %d phone(s): %s", len(phones), phones)
-    for phone in phones:
-        if phone == normalize_phone(from_number):
-            app.logger.warning("Skipping staff notify: To == From (%s)", phone)
-            continue
-        ok, err = _send_sms(phone, from_number, body)
-        if ok:
-            app.logger.info("Staff notified: %s", phone)
-        else:
-            app.logger.warning("Staff notify failed for %s: %s", phone, err)
+    if phones:
+        app.logger.info("Notifying %d phone(s): %s", len(phones), phones)
+        for phone in phones:
+            if phone == normalize_phone(from_number):
+                app.logger.warning("Skipping staff notify: To == From (%s)", phone)
+                continue
+            ok, err = _send_sms(phone, from_number, body)
+            if ok:
+                app.logger.info("Staff notified: %s", phone)
+            else:
+                app.logger.warning("Staff notify failed for %s: %s", phone, err)
+
+    if emails:
+        # Subject = first non-empty line of body, body unchanged
+        subject = next((ln.strip() for ln in body.splitlines() if ln.strip()),
+                       "Dealership notification")
+        dealer_name = get_row_field(dealer_row, DEALER_NAME_ALIASES) or "Dealership"
+        subject = f"[{dealer_name}] {subject}"
+        app.logger.info("Notifying %d email(s): %s", len(emails), emails)
+        for email in emails:
+            ok, err = _send_email(email, subject, body)
+            if ok:
+                app.logger.info("Staff emailed: %s", email)
+            else:
+                app.logger.warning("Staff email failed for %s: %s", email, err)
 
 
 def send_sms_to_customer(*, customer_phone: str, from_number: str, body: str) -> Tuple[bool, str]:
