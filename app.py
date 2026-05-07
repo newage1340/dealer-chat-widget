@@ -6350,6 +6350,26 @@ def widget_welcome():
     return jsonify({"welcome": welcome, "terms_note": terms_note})
 
 
+@app.route("/widget/history", methods=["POST"])
+def widget_history():
+    """Return saved conversation history for a widget session so the chat
+    re-hydrates after a page refresh instead of showing an empty window."""
+    data = request.get_json(silent=True) or {}
+    session_id = (data.get("session_id") or "").strip()
+    slug       = (data.get("slug") or "").strip()
+    if not session_id or not slug:
+        return jsonify({"messages": []})
+
+    branding = _resolve_widget_dealer(slug)
+    if not branding or not branding.get("twilio_number"):
+        return jsonify({"messages": []})
+
+    twilio_number = branding["twilio_number"]
+    customer_key  = _session_to_phone(session_id)
+    msgs = get_recent_messages(customer_key, twilio_number, limit=MAX_MESSAGES_PER_CHAT)
+    return jsonify({"messages": msgs})
+
+
 @app.route("/widget/register-phone", methods=["POST"])
 def widget_register_phone():
     """Save the customer's real phone number against their widget session.
