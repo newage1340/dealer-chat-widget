@@ -898,11 +898,11 @@ def is_valid_name(s: str) -> bool:
 
 
 def missing_profile_field(profile: Dict[str, str]) -> Optional[str]:
-    """Return a human-readable label for the next missing/invalid field, or None if profile is complete."""
+    """Return a human-readable label for the next missing/invalid field, or None if profile is complete.
+    Last name is intentionally NOT required - it's optional metadata that should
+    never block a booking."""
     if not profile.get("name"):
         return "first name"
-    if not profile.get("last_name"):
-        return "last name"
     if not is_valid_email(profile.get("email", "")):
         return "email address"
     return None
@@ -3556,10 +3556,17 @@ def build_customer_confirmation_body(*, dealer_name: str, customer_name: str,
     """Friendly customer-facing appointment confirmation SMS. Distinct from
     the operational dealer/salesman alert, which has different info."""
     name_part = f"Hi {customer_name}! " if customer_name else "Hi! "
-    body = (
-        f"{name_part}Your appointment with {dealer_name} is confirmed for "
-        f"{visit_time} to see the {car_desc}."
-    )
+    is_general = (car_desc or "").strip().lower() in {"", "general visit", "general", "visit"}
+    if is_general:
+        body = (
+            f"{name_part}Your appointment with {dealer_name} is confirmed for "
+            f"{visit_time}."
+        )
+    else:
+        body = (
+            f"{name_part}Your appointment with {dealer_name} is confirmed for "
+            f"{visit_time} to see the {car_desc}."
+        )
     if dealer_address:
         body += f"\n\nAddress: {dealer_address}"
     if dealer_phone:
@@ -3590,7 +3597,11 @@ def notify_customer_appointment(dealer_row: Dict[str, Any], *, customer_phone: s
     dealer_address = get_row_field(dealer_row, DEALER_ADDRESS_ALIASES)
     dealer_phone = normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
     if action == "rescheduled":
+        is_general = (car_desc or "").strip().lower() in {"", "general visit", "general", "visit"}
         body = (
+            f"Hi {customer_name}! Your appointment with {dealer_name} has been "
+            f"rescheduled to {visit_time}."
+            if is_general else
             f"Hi {customer_name}! Your appointment with {dealer_name} has been "
             f"rescheduled to {visit_time} to see the {car_desc}."
         )
@@ -3598,7 +3609,11 @@ def notify_customer_appointment(dealer_row: Dict[str, Any], *, customer_phone: s
         if dealer_phone:   body += f"\nQuestions? Call us at {dealer_phone}."
         body += "\n\nSee you then!"
     elif action == "cancelled":
+        is_general = (car_desc or "").strip().lower() in {"", "general visit", "general", "visit"}
         body = (
+            f"Hi {customer_name}, your appointment with {dealer_name} for "
+            f"{visit_time} has been cancelled."
+            if is_general else
             f"Hi {customer_name}, your appointment with {dealer_name} for "
             f"{visit_time} to see the {car_desc} has been cancelled."
         )
@@ -4240,10 +4255,13 @@ def _trade_in_missing_parts(history: List[Dict[str, Any]]) -> List[str]:
     ))
     has_condition = bool(re.search(
         r"\b(excellent|great|good|decent|fair|rough|poor|bad|beat[\s-]?up|"
-        r"like\s+new|mint|pristine|clean condition|"
-        r"in\s+(excellent|great|good|decent|fair|rough|poor)\s+(shape|condition)|"
-        r"runs\s+(well|fine|great|good|smooth)|drives\s+(well|fine|great|good|smooth)|"
+        r"like\s+new|mint|pristine|nice|perfect|solid|"
+        r"clean(?!\s+title)(?!,\s*and\s+\w+\s+title)|"  # "clean" but NOT "clean title"
+        r"pretty\s+(clean|nice|good|solid|decent)|"
+        r"in\s+(excellent|great|good|decent|fair|rough|poor|nice|solid)\s+(shape|condition)|"
+        r"runs\s+(well|fine|great|good|smooth|strong)|drives\s+(well|fine|great|good|smooth|straight)|"
         r"needs\s+(work|repairs?|tlc)|some\s+(rust|damage|dents?)|"
+        r"no\s+(rust|damage|dents?|issues|problems|major\s+issues|major\s+problems)|"
         r"a\s+little\s+(rough|beat))\b",
         text
     ))
@@ -4443,10 +4461,22 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
     if email: known_lines.append(f"- Email: {email}")
     if real_phone: known_lines.append(f"- Phone (for follow-up texts): {real_phone}")
     if trade_in: known_lines.append(f"- Trade-in vehicle (NOT for sale, customer is trading it in): {trade_in}")
-    missing = [label for val, label in
-               ((first, "first name"), (last, "last name"), (email, "email address")) if not val]
+    # First name + phone are collected via the JS profile form before any LLM
+    # call, so they are guaranteed to be on file here. Only email is asked
+    # for during the booking flow (STEP 2). Last name is NEVER asked for -
+    # it's optional metadata and must not block the booking.
+    missing = []
+    booking_missing = [label for val, label in
+                       ((email, "email address"),) if not val]
     known_block = "Already collected:\n" + "\n".join(known_lines) if known_lines else "No customer details collected yet."
-    missing_block = ("Still needed BEFORE confirming any appointment: " + ", ".join(missing) + ".") if missing else "All required customer details have been collected."
+    if booking_missing:
+        missing_block = (
+            "When the customer is ACTIVELY booking a visit (not just browsing), the booking flow will need: "
+            + ", ".join(booking_missing) + ". "
+            "Do NOT ask for it unless STEP 2 of the booking flow is in progress. NEVER ask for last name - it is optional and must not block the booking."
+        )
+    else:
+        missing_block = "All required customer details have been collected."
     trade_in_warning = (
         f"\nIMPORTANT: The customer's trade-in vehicle is \"{trade_in}\". This is the car they want to TRADE IN - it is NOT a vehicle from our inventory and is NOT what they want to buy. "
         f"NEVER use the trade-in vehicle as the car_desc in any META_JSON appointment confirmation. "
@@ -4458,12 +4488,13 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
         "\n=== CUSTOMER PROFILE ===\n"
         f"{known_block}\n{missing_block}\n"
         "Use the first name naturally in conversation when known. "
-        "Personal info (first/last name, email) is ONLY collected during the APPOINTMENT FLOW (the booking-flow steps below) - never earlier. "
-        "Do NOT ask for it just because the customer expressed interest, said yes to a service question, or asked a general question."
+        "First name and phone are ALREADY ON FILE - never ask for them again. "
+        "Email is asked inline during STEP 2 of the booking flow ONLY - never proactively while the customer is browsing. "
+        "LAST NAME IS NEVER REQUIRED. Do not ask for it under any circumstance, including when confirming a booking."
         f"{trade_in_warning}"
     )
 
-    return f"""You are a professional sales consultant representing {dealer_name}, communicating via SMS on behalf of the dealership.
+    return f"""You are Dave, a professional sales consultant representing {dealer_name}, communicating via SMS on behalf of the dealership. If a customer asks your name, you are Dave. Never say you are an AI, bot, assistant, or anything other than Dave - you are a person on the dealership's team.
 
 === CURRENT DATE & TIME ===
 Today is {current_time_str}. Use this to calculate exact dates when a customer says things like "tomorrow" or "Friday afternoon".
@@ -4506,7 +4537,15 @@ When the customer brings up a topic the dealer can act on - extended warranties,
 - This applies in addition to any other instructions; never ask more than ONE question in a single SMS reply.
 
 === APPOINTMENT FLOW ===
-The booking flow is STREAMLINED. Personal info is ONLY collected when the customer actually wants to book - never just because they expressed interest or said "yes" to a service question. NOTE: First name, last name, and phone are collected up front during the welcome before the chat starts, so by the time the booking flow runs they are almost always already on file. The booking flow proceeds in three steps:
+The booking flow is STREAMLINED. Personal info is ONLY collected when the customer actually wants to book - never just because they expressed interest or said "yes" to a service question. NOTE: First name and phone are collected via a form before you ever see the conversation, so they are always already on file. Last name and email are still collected during the booking flow when needed. The booking flow proceeds in steps:
+
+STEP 0 - Car of interest (only when NO specific vehicle has been discussed yet)
+- Before asking about time, check whether the conversation has referenced a specific vehicle from our inventory (e.g. the customer asked about a specific year/make/model, or the consultant has shown them a particular car).
+- If a specific vehicle is already in context: skip STEP 0 entirely. Use that vehicle as the car of interest.
+- If NO specific vehicle has been discussed AND the customer asks to schedule a visit (e.g. "I'd like to come in", "can I schedule an appointment", "what time can I stop by"): point that out and ask if they're interested in a particular vehicle, in ONE message. Phrasing example (≤200 chars): "Of course! Just so I can have it ready - is there a specific vehicle you're interested in seeing, or is this more of a general visit?"
+- If the customer names a vehicle: use that as the car of interest, proceed to STEP 1.
+- If the customer says no / just looking / general visit / browsing / similar: the car of interest is "general visit". Proceed to STEP 1. In STEP 3 META_JSON, set car_desc to "general visit".
+- Ask STEP 0 at most ONCE per booking attempt. Never re-ask if the customer has already given a yes/no answer.
 
 STEP 1 - Get a specific clock time (NEVER ask for email here)
 - When the customer wants to schedule/book a visit, ask ONLY for a specific clock time. Do NOT bundle the email request into this ask.
@@ -4516,21 +4555,34 @@ STEP 1 - Get a specific clock time (NEVER ask for email here)
   - Customer gave a date but no clock time: "Sure - what time tomorrow works for you?"
   - Customer gave nothing time-related: "Sure - what time works for you?"
 - This applies even if hours are not listed; only reject a time if it clearly falls outside listed hours for that specific day.
-- Once a SPECIFIC CLOCK TIME is established (either in the customer's latest message or earlier in the conversation), proceed to STEP 2.
+- Once a SPECIFIC CLOCK TIME is established (either in the customer's latest message or earlier in the conversation), proceed to STEP 1.5 (if a specific vehicle was chosen) or STEP 2 (if general visit).
+
+STEP 1.5 - Questions / trade-in / financing check (ONLY when a specific vehicle is the car of interest; SKIP for general visits)
+- Trigger: a specific clock time has been established AND the car of interest is a specific vehicle (NOT "general visit") AND STEP 1.5 has not been asked yet in this booking attempt.
+- Ask in ONE message whether the customer has any other questions about the vehicle, a trade-in they'd like the dealer to look at, or if they're interested in financing. Phrasing example (≤220 chars): "Got it - 2pm tomorrow for the [year make model]. Any other questions about it, are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
+- If the customer responds with questions: answer them using the inventory data, then in the SAME reply ask the email question to advance to STEP 2 (e.g. "Yes - it has all-wheel drive and a panoramic roof. To lock in 2pm tomorrow, could I get your email?"). Don't loop back to STEP 1.5 again.
+- If the customer mentions a trade-in:
+   - If they ALREADY specified the trade-in vehicle (a year/make/model or at least make+model, e.g. "I have a 2018 honda accord", "yes, a Tacoma"): acknowledge it briefly and ask the email question in the SAME reply (e.g. "Great - we'll have someone take a look at the Accord. To lock in 2pm tomorrow, could I get your email?"). The trade-in details are captured automatically; you don't need any markers.
+   - If they only said they HAVE a trade-in WITHOUT specifying the vehicle (e.g. "yes I have a trade", "i also have a trade in", "i'd like to trade something in"): do NOT ask for email yet. First ask what vehicle they're trading in (e.g. "Got it - what vehicle would you like to trade in?"). Once they tell you, then in the next turn acknowledge it and ask for the email.
+- If the customer is interested in financing: briefly confirm the dealer offers financing per the dealer info, note that the team will be ready to discuss it at the visit, then ask the email question in the SAME reply (e.g. "Yes, we offer financing - the team will go over options with you when you're here. To lock in 2pm tomorrow, could I get your email?").
+- If the customer says no / nothing / they're good: proceed straight to STEP 2 in the SAME reply ("Perfect - to lock in 2pm tomorrow, could I get your email?").
+- The customer may answer multiple at once (e.g. "yes I have a 2018 Accord and want financing"). Acknowledge both naturally in one reply, then advance to STEP 2 (or, if the trade-in vehicle wasn't specified, ask for it instead of email).
+- Ask STEP 1.5 at most ONCE per booking attempt. Never re-ask the multi-part STEP 1.5 question once they've answered - but DO follow up on missing trade-in details if they said they have one without naming it.
 
 STEP 2 - Ask for email (only if missing)
-- Trigger: a specific clock time has been established AND the customer's email is NOT yet on file (see CUSTOMER PROFILE above).
+- Trigger: STEP 1.5 has completed (or was skipped because car_desc is "general visit") AND the customer's email is NOT yet on file (see CUSTOMER PROFILE above).
 - Ask for the email and ONLY the email. Do NOT re-ask for the time, name, last name, or phone.
 - Phrasing example (≤155 chars):
   - "Got it - to lock in 2pm tomorrow, could I get your email?"
 - If email IS already on file, skip STEP 2 entirely and go straight to STEP 3.
 
 STEP 3 - Confirm (in this same reply, with META_JSON)
-- Trigger: a specific clock time has been established AND the customer has a complete profile (first name, last name, email all on file).
-- Use this EXACT template phrasing for the customer-facing text - do NOT paraphrase, do NOT use "You're booked" or "I'll confirm next" or any variant:
-  "You're all set, [First Name]! Your appointment is confirmed for [TIME] to view the [YEAR MAKE MODEL]. We look forward to seeing you!"
+- Trigger: a specific clock time has been established AND the customer has first name + email on file. Last name is NOT required and MUST NOT be asked for.
+- Use the appropriate template phrasing for the customer-facing text - do NOT paraphrase further, do NOT use "You're booked" or "I'll confirm next" or any variant:
+  - With a specific vehicle: "You're all set, [First Name]! Your appointment is confirmed for [TIME] to view the [YEAR MAKE MODEL]. We look forward to seeing you!"
+  - General visit (no specific vehicle): "You're all set, [First Name]! Your appointment is confirmed for [TIME]. We look forward to seeing you!"
 - Then, on a NEW LINE at the very END of the SAME reply (hidden from customer by the system), add EXACTLY:
-   META_JSON: {{"confirmed": true, "visit_time": "<human readable time>", "visit_time_iso": "<YYYY-MM-DDTHH:MM:SS>", "car_desc": "<year make model>", "customer_name": "<first name>", "customer_last_name": "<last name>", "customer_email": "<email>"}}
+   META_JSON: {{"confirmed": true, "visit_time": "<human readable time>", "visit_time_iso": "<YYYY-MM-DDTHH:MM:SS>", "car_desc": "<year make model or 'general visit'>", "customer_name": "<first name>", "customer_email": "<email>"}}
 - The user-visible template AND the META_JSON line are NOT optional - both must appear in the same reply. Without META_JSON, the booking is never recorded and the dealer is never notified. This is the most important rule in the entire flow.
 
 RESCHEDULES (very important)
@@ -4539,7 +4591,7 @@ RESCHEDULES (very important)
 - The reschedule confirmation reply MUST include the META_JSON marker exactly like a brand-new booking - without it, the dealer is not notified and the booking is not recorded. This is non-negotiable.
 - Example reschedule reply:
   "Certainly, Evan! Your appointment is now rescheduled for 10 AM today to view the 2023 Honda Accord Hybrid. We look forward to seeing you then!
-   META_JSON: {{"confirmed": true, "visit_time": "10am today", "visit_time_iso": "2026-04-25T10:00:00", "car_desc": "2023 Honda Accord Hybrid", "customer_name": "Evan", "customer_last_name": "Lee", "customer_email": "evanssc49@icloud.com"}}"
+   META_JSON: {{"confirmed": true, "visit_time": "10am today", "visit_time_iso": "2026-04-25T10:00:00", "car_desc": "2023 Honda Accord Hybrid", "customer_name": "Evan", "customer_email": "evanssc49@icloud.com"}}"
 
 OTHER RULES
 - Do NOT include META_JSON in any other message.
@@ -4549,7 +4601,7 @@ OTHER RULES
    META_EMAIL: <email>
    META_PHONE: <10-digit US phone number, digits only>
 
-- The widget welcome asks the customer for their phone number and name up front. If the customer provides them, capture both via META_NAME and META_PHONE markers in your reply. The phone goes to follow-up texts, not the booking flow - do NOT ask for it again during STEP 1.
+- First name and phone are collected via a form that pops up after the customer's first message, BEFORE you ever respond. By the time you see a conversation, those two fields are already on file. Do NOT ask for first name or phone in chat - only ask for last name and email when the booking flow requires them.
 
 === DEALER INFO ===
 Name: {dealer_name}
@@ -4907,6 +4959,245 @@ def _reply_twiml(reply_body: str, customer_phone: str, twilio_number: str, *, se
     return str(twiml)
 
 
+def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: str = "") -> bool:
+    """Server-side guard for STEP 1.5 of the booking flow. The LLM frequently
+    jumps from STEP 1 (time) straight to STEP 2 (email) without first asking
+    the customer about questions/financing/trade-in. When we detect the LLM's
+    reply is asking for email AND we're booking a specific vehicle AND
+    STEP 1.5 hasn't been asked yet, we rewrite the reply to the STEP 1.5
+    question instead. Returns True if the reply was overridden."""
+    captured = (g.get("captured_reply") or "").strip()
+    if not captured:
+        return False
+
+    captured_lower = captured.lower()
+    is_step_1_5_reply = (
+        "trade-in" in captured_lower
+        and "financing" in captured_lower
+        and "?" in captured
+    )
+
+    # Is this an email-request reply?
+    asks_email = bool(re.search(r"\bemail\b", captured, re.I)) and "?" in captured
+    if not asks_email:
+        # Even when we don't override, if the LLM just did STEP 1.5 naturally
+        # we want a pending appointment record so downstream handlers
+        # (especially the trade-in followup) can reference the visit time +
+        # car the customer just settled on. Without this the trade-in handler
+        # asks "what day works for you?" even though a time has been given.
+        if is_step_1_5_reply:
+            try:
+                pending = get_pending(from_number, to_number)
+                if not pending:
+                    history = get_recent_messages(from_number, to_number, limit=10)
+                    car_desc = ""
+                    visit_time = ""
+                    for m in history[::-1]:
+                        if m.get("role") != "assistant":
+                            continue
+                        c = m.get("content") or ""
+                        if not car_desc:
+                            car_m = re.search(
+                                r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,5})",
+                                c,
+                            )
+                            if car_m:
+                                car_desc = car_m.group(1).strip().rstrip(".,!?")
+                                car_desc = re.sub(
+                                    r"\s+(currently|is|was|will|now|now,|available|here|today|tomorrow).*$",
+                                    "", car_desc, flags=re.I,
+                                ).strip()
+                        if not visit_time:
+                            t_m = re.search(
+                                r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))(?:\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday))?\b",
+                                c, re.I,
+                            )
+                            if t_m:
+                                visit_time = t_m.group(0).strip()
+                        if car_desc and visit_time:
+                            break
+                    if car_desc and visit_time:
+                        _, visit_time_iso = parse_visit_time_from_text(visit_time)
+                        set_pending(from_number, to_number, dealer_phone or "",
+                                    visit_time, visit_time_iso or "", car_desc)
+                        app.logger.info(
+                            "Set pending after natural STEP 1.5: %s for %s",
+                            visit_time, car_desc,
+                        )
+            except Exception as e:
+                app.logger.warning("Set-pending after STEP 1.5 failed: %s", e)
+        return False
+
+    # Skip widget-only customers? No - this guard applies to widget too.
+    history = get_recent_messages(from_number, to_number, limit=14)
+
+    # If the customer mentioned a trade-in but appraisal details (mileage,
+    # title status, condition) are still missing, ask for those first instead
+    # of asking for email. The dealer needs the appraisal info captured
+    # in-conversation so it ends up on the alert.
+    _trade_keywords_re = re.compile(
+        r"\b(trade|trading)[\s\-]?in\b|\bhave\s+a\s+trade\b|\btrade\s+something|\bgot\s+a\s+trade\b",
+        re.I,
+    )
+    _trade_mentioned_by_customer = any(
+        _trade_keywords_re.search(m.get("content") or "")
+        for m in history if m.get("role") == "user"
+    )
+    if _trade_mentioned_by_customer:
+        # Count how many trade-in detail follow-ups we've already asked so we
+        # vary phrasing and stop after 3 rounds (avoids a regex-mismatch loop
+        # while still pursuing the missing piece across a couple of turns).
+        _ask_phrases = ("round out the ballpark", "got it - and what", "got it - one more", "and the ")
+        followup_count = sum(
+            1 for m in history if m.get("role") == "assistant"
+            and any(p in (m.get("content") or "").lower() for p in _ask_phrases)
+        )
+        trade_missing_parts = _trade_in_missing_parts(history)
+        if trade_missing_parts and followup_count < 3:
+            # Try to capture the trade-in vehicle first so the profile is
+            # up-to-date when the dealer alert fires later.
+            try:
+                candidate = extract_trade_in_vehicle(history)
+                if candidate:
+                    existing = (get_customer_profile(from_number, to_number).get("trade_in_vehicle") or "").strip()
+                    if candidate != existing:
+                        save_customer_profile(from_number, to_number, trade_in_vehicle=candidate)
+            except Exception as e:
+                app.logger.warning("trade-in capture during email-gate failed: %s", e)
+            if followup_count == 0:
+                new_reply = (
+                    f"Thanks for sharing that. To round out the ballpark, could "
+                    f"you also share the {_format_missing_list(trade_missing_parts)}?"
+                )
+            elif followup_count == 1:
+                if len(trade_missing_parts) == 1:
+                    new_reply = f"Got it - and what's the {trade_missing_parts[0]}?"
+                else:
+                    new_reply = f"Got it - one more thing - the {_format_missing_list(trade_missing_parts)}?"
+            else:
+                if len(trade_missing_parts) == 1:
+                    new_reply = f"And the {trade_missing_parts[0]}?"
+                else:
+                    new_reply = f"And the {_format_missing_list(trade_missing_parts)}?"
+            try:
+                conn = _db()
+                with conn:
+                    row = conn.execute(
+                        "SELECT id FROM messages WHERE customer_phone=? AND twilio_number=? "
+                        "AND role='assistant' ORDER BY id DESC LIMIT 1",
+                        (from_number, to_number),
+                    ).fetchone()
+                    if row:
+                        conn.execute("UPDATE messages SET content=? WHERE id=?",
+                                     (new_reply, row["id"]))
+                conn.close()
+            except Exception as e:
+                app.logger.warning("trade-in followup rewrite (DB) failed: %s", e)
+            g.captured_reply = new_reply
+            app.logger.info("Injected trade-in detail followup (overrode LLM email ask) for %s", from_number)
+            return True
+
+    # Already asked STEP 1.5? Look for the "trade-in" + "financing" combo in
+    # any recent assistant message.
+    for m in history:
+        if m.get("role") == "assistant":
+            c = (m.get("content") or "").lower()
+            if "trade-in" in c and "financing" in c:
+                return False
+
+    # Pull car_desc + visit_time from pending if set, else from recent assistant
+    # context (regex over the recent bot messages for "for the YEAR MAKE MODEL"
+    # and a "Npm/am" pattern).
+    pending = get_pending(from_number, to_number)
+    car_desc = ""
+    visit_time = ""
+    visit_time_iso = ""
+    if pending:
+        car_desc = (pending.get("car_desc") or "").strip()
+        visit_time = (pending.get("visit_time") or "").strip()
+        visit_time_iso = (pending.get("visit_time_iso") or "").strip()
+
+    if not car_desc or not visit_time:
+        for m in history[::-1]:
+            if m.get("role") != "assistant":
+                continue
+            c = m.get("content") or ""
+            if not car_desc:
+                # Look for ANY year+make+model pattern in the bot's recent
+                # messages, not just "for the YEAR ...". The LLM phrasing
+                # varies ("see the 2022 BMW X7", "the 2022 BMW X7 is...").
+                car_m = re.search(
+                    r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,5})",
+                    c,
+                )
+                if car_m:
+                    car_desc = car_m.group(1).strip().rstrip(".,!?")
+                    # Trim trailing words that are clearly not part of the car
+                    # name (e.g. "currently available", "is available").
+                    car_desc = re.sub(
+                        r"\s+(currently|is|was|will|now|now,|available|here|today|tomorrow).*$",
+                        "", car_desc, flags=re.I,
+                    ).strip()
+            if not visit_time:
+                t_m = re.search(
+                    r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))(?:\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday))?\b",
+                    c, re.I,
+                )
+                if t_m:
+                    visit_time = t_m.group(0).strip()
+            if car_desc and visit_time:
+                break
+
+    # If we couldn't identify a specific car, this is a general visit - leave
+    # the email ask alone.
+    _car_lower = car_desc.lower()
+    if not car_desc or _car_lower in {"general visit", "general", "a vehicle", "visit"}:
+        return False
+
+    # Build the deterministic STEP 1.5 message.
+    new_reply = (
+        f"Got it - {visit_time} for the {car_desc}. Any other questions "
+        f"about it, are you interested in financing, or do you have a "
+        f"trade-in you'd like us to take a look at?"
+    ) if visit_time else (
+        f"Got it - for the {car_desc}. Any other questions about it, are you "
+        f"interested in financing, or do you have a trade-in you'd like us to "
+        f"take a look at?"
+    )
+
+    # Make sure a pending appointment exists so the next-turn pending block
+    # picks up the customer's answer (especially trade-in details).
+    if visit_time and not pending:
+        if not visit_time_iso:
+            _, visit_time_iso = parse_visit_time_from_text(visit_time)
+        try:
+            set_pending(from_number, to_number, dealer_phone or "",
+                        visit_time, visit_time_iso or "", car_desc)
+        except Exception as e:
+            app.logger.warning("set_pending during step-1.5 inject failed: %s", e)
+
+    # Replace the last assistant message in the DB so history reflects the
+    # rewritten reply instead of the LLM's email ask.
+    try:
+        conn = _db()
+        with conn:
+            row = conn.execute(
+                "SELECT id FROM messages WHERE customer_phone=? AND twilio_number=? "
+                "AND role='assistant' ORDER BY id DESC LIMIT 1",
+                (from_number, to_number),
+            ).fetchone()
+            if row:
+                conn.execute("UPDATE messages SET content=? WHERE id=?",
+                             (new_reply, row["id"]))
+        conn.close()
+    except Exception as e:
+        app.logger.warning("step 1.5 reply rewrite (DB) failed: %s", e)
+
+    g.captured_reply = new_reply
+    app.logger.info("Injected STEP 1.5 reply (overrode LLM email ask) for %s", from_number)
+    return True
+
+
 def _silent_reply() -> str:
     """Intentional no-reply: empty TwiML for SMS, silent flag for widget."""
     try:
@@ -5072,12 +5363,14 @@ def _process_message(from_number: str, to_number: str, body: str):
     customer_profile = get_customer_profile(from_number, to_number)
     customer_name = customer_profile["name"]
 
-    # ── PRIORITY 0: Widget profile gate. Customer must provide first name,
-    # last name, AND a real phone before the bot will answer anything. SMS
-    # users are exempt (their phone is the From number).
+    # ── PRIORITY 0: Widget profile gate. Customer must provide first name
+    # AND a real phone before the bot will answer anything. Last name is no
+    # longer required at this gate - it's collected later (during STEP 2 of
+    # the booking flow) since the in-chat profile form only takes first name
+    # and phone. SMS users are exempt (their phone is the From number).
     is_widget = from_number.startswith("+web")
     def _profile_incomplete(p: Dict[str, str]) -> bool:
-        return not (p.get("name") and p.get("last_name") and p.get("real_phone"))
+        return not (p.get("name") and p.get("real_phone"))
     # Sanitize previously-saved name fields: if they look like junk (e.g.
     # extracted from a question before the filler list was tightened), drop
     # them so the gate re-prompts and we can capture the real name.
@@ -5137,7 +5430,6 @@ def _process_message(from_number: str, to_number: str, body: str):
         if _profile_incomplete(customer_profile):
             missing = []
             if not customer_profile.get("name"):       missing.append("first name")
-            if not customer_profile.get("last_name"):  missing.append("last name")
             if not customer_profile.get("real_phone"): missing.append("phone number")
             if len(missing) == 1:
                 missing_str = missing[0]
@@ -5268,18 +5560,86 @@ def _process_message(from_number: str, to_number: str, body: str):
         # Opportunistically capture an email address from the body (the customer may
         # be replying directly to "could I get your email" - without a yes/no/time).
         email_scan = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", body)
+        email_just_captured = False
         if email_scan and not customer_profile["email"] and is_valid_email(email_scan.group(0)):
             save_customer_profile(from_number, to_number, email=email_scan.group(0))
             customer_profile = get_customer_profile(from_number, to_number)
             customer_name = customer_profile["name"]
+            email_just_captured = True
 
-        if NO_RE.search(body):
+        # Auto-book on email capture: when the customer provides their email
+        # and that completes the profile (and any in-progress trade-in info is
+        # also done), don't make them re-confirm with "yes/no" - just log the
+        # appointment and send the confirmation. This is the user's preferred
+        # flow: email → booked.
+        if email_just_captured and not missing_profile_field(customer_profile):
+            _trade_on_file_now = (customer_profile.get("trade_in_vehicle") or "").strip()
+            _history_for_trade = get_recent_messages(from_number, to_number, limit=14)
+            _trade_missing_now = _trade_in_missing_parts(_history_for_trade) if _trade_on_file_now else []
+            if not _trade_missing_now:
+                pending_notify_phone = normalize_phone(pending.get("dealer_notify_phone", "")) or dealer_phone
+                visit_time = pending["visit_time"]
+                visit_time_iso = pending.get("visit_time_iso", "")
+                car_desc = pending["car_desc"]
+                appt_id, is_reschedule = log_appointment(
+                    from_number, to_number, pending_notify_phone,
+                    visit_time, visit_time_iso, car_desc,
+                )
+                clear_pending(from_number, to_number)
+                additional_info = extract_customer_insights(get_recent_messages(from_number, to_number, limit=20))
+                _alert_phone = resolve_outbound_customer_phone(from_number, to_number) or from_number
+                alert_body = (
+                    _dealer_reschedule_body(customer_phone=_alert_phone, customer_name=customer_name,
+                                            customer_last_name=customer_profile["last_name"],
+                                            customer_email=customer_profile["email"],
+                                            dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
+                                            additional_info=additional_info)
+                    if is_reschedule else
+                    _dealer_alert_body(customer_phone=_alert_phone, customer_name=customer_name,
+                                       customer_last_name=customer_profile["last_name"],
+                                       customer_email=customer_profile["email"],
+                                       dealership_line=to_number, visit_time=visit_time, car_desc=car_desc,
+                                       additional_info=additional_info)
+                )
+                notify_all_staff(dealer_row, to_number, alert_body)
+                notify_customer_appointment(dealer_row, customer_phone=from_number,
+                    twilio_number=to_number, customer_name=customer_name,
+                    visit_time=visit_time, car_desc=car_desc,
+                    action=("rescheduled" if is_reschedule else "confirmed"))
+                _is_general = car_desc.lower().strip() in {"", "general visit", "general", "visit", "a vehicle"}
+                if _is_general:
+                    reply = f"You're all set, {customer_name}! Your appointment is confirmed for {visit_time}. We look forward to seeing you!"
+                else:
+                    reply = f"You're all set, {customer_name}! Your appointment is confirmed for {visit_time} to view the {car_desc}. We look forward to seeing you!"
+                save_message(from_number, to_number, "assistant", reply)
+                return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
+
+        # Cancellation signal: only treat the message as a cancel if it's a SHORT
+        # "no" reply (no other meaningful content). The previous broad NO_RE
+        # match clobbered the pending appointment whenever the customer's
+        # message happened to contain "no", "not", or "don't" as part of a
+        # larger answer (e.g. "no questions, but I have a trade-in"). Now we
+        # require a terse no-only message OR a strong disinterest phrase.
+        body_compact = re.sub(r"[^\w\s]", "", body).strip().lower()
+        is_short_no = bool(re.fullmatch(r"(no|nah|nope|cancel|never\s*mind|nevermind|forget\s*it)\b\s*\.?", body_compact))
+        if is_short_no or DISINTEREST_RE.search(body):
             clear_pending(from_number, to_number)
             reply = "Of course - what time would work best for you?"
             save_message(from_number, to_number, "assistant", reply)
             return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
 
-        if YES_RE.search(body):
+        # Detect financing interest UP FRONT so it isn't swallowed by the
+        # YES_RE/affirmation match below. Customers often phrase financing
+        # answers as "ok great i'd also like to finance it" - YES_RE matches
+        # "ok great" and the financing piece gets dropped.
+        _financing_keywords_re = re.compile(
+            r"\b(financ|loan|monthly\s+payment|down\s+payment|apr|interest\s+rate|"
+            r"finance\s+it|need\s+financing|want\s+financing|interested\s+in\s+financ)\b",
+            re.I,
+        )
+        _early_financing_mention = bool(_financing_keywords_re.search(body))
+
+        if YES_RE.search(body) and not _early_financing_mention:
             pending_notify_phone = normalize_phone(pending.get("dealer_notify_phone", "")) or dealer_phone
             visit_time, visit_time_iso, car_desc = pending["visit_time"], pending.get("visit_time_iso", ""), pending["car_desc"]
 
@@ -5384,15 +5744,198 @@ def _process_message(from_number: str, to_number: str, body: str):
             save_message(from_number, to_number, "assistant", reply)
             return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
 
+        # Vague trade-in mention? If the customer says they have a trade-in but
+        # didn't include a year/make/model, ask for the vehicle BEFORE we move
+        # on to ask for missing profile fields. The dealer needs to know what
+        # they're appraising.
+        _trade_keywords_re = re.compile(
+            r"\b(trade|trading)[\s\-]?in\b|\bhave\s+a\s+trade\b|\btrade\s+something|\bgot\s+a\s+trade\b",
+            re.I,
+        )
+        _vehicle_year_re = re.compile(r"\b(19|20)\d{2}\b")
+        _vehicle_make_re = re.compile(
+            r"\b(toyota|honda|ford|chevrolet|chevy|gmc|jeep|dodge|ram|chrysler|nissan|"
+            r"hyundai|kia|mazda|subaru|volkswagen|vw|bmw|mercedes|mercedes-benz|audi|"
+            r"lexus|infiniti|acura|cadillac|buick|lincoln|porsche|land[\s-]*rover|"
+            r"range[\s-]*rover|tesla|volvo|mitsubishi|fiat|alfa|mini|maserati|jaguar|"
+            r"bentley|rolls|smart|saab|pontiac|saturn|hummer|isuzu|suzuki|genesis|"
+            r"polestar|rivian|lucid|aston[\s-]*martin|ferrari|lamborghini|mclaren)\b",
+            re.I,
+        )
+        mentions_trade = bool(_trade_keywords_re.search(body))
+        has_vehicle_specifier = bool(_vehicle_year_re.search(body)) or bool(_vehicle_make_re.search(body))
+        already_has_trade_on_file = bool((customer_profile.get("trade_in_vehicle") or "").strip())
+        if mentions_trade and not has_vehicle_specifier and not already_has_trade_on_file:
+            reply = "Got it - what vehicle would you like to trade in? (year, make, and model if you have it)"
+            save_message(from_number, to_number, "assistant", reply)
+            return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
+
+        # Customer message includes trade-in details (year+make, even without the
+        # word "trade" if it follows a bot question about trade-in) - extract and
+        # save the trade-in vehicle so it shows up on the dealer alert. We do
+        # this before the catch-all reply so the profile is up-to-date when we
+        # tell the customer "thanks". Re-runs on subsequent turns too, so the
+        # mileage/title/condition added in follow-up messages get folded in.
+        if has_vehicle_specifier or mentions_trade or already_has_trade_on_file:
+            try:
+                history = get_recent_messages(from_number, to_number, limit=14)
+                candidate_trade_in = extract_trade_in_vehicle(history)
+                existing = (customer_profile.get("trade_in_vehicle") or "").strip()
+                if candidate_trade_in and candidate_trade_in != existing:
+                    save_customer_profile(from_number, to_number, trade_in_vehicle=candidate_trade_in)
+                    customer_profile = get_customer_profile(from_number, to_number)
+                    app.logger.info("Captured/updated trade-in vehicle for %s: %s",
+                                    from_number, candidate_trade_in)
+            except Exception as e:
+                app.logger.warning("Trade-in extraction failed in pending block: %s", e)
+
         next_missing = missing_profile_field(customer_profile)
-        if next_missing:
-            reply = (f"Thanks! Could I also get your {next_missing} so I can lock in "
-                     f"{pending['visit_time']} for the {pending['car_desc']}?")
+
+        # Detect if the customer just expressed financing interest. The pending
+        # block intercepts the message before the LLM can craft a tailored
+        # reply, so without this we'd fall through to a flat "Thanks!" without
+        # acknowledging the financing question at all.
+        _financing_keywords_re = re.compile(
+            r"\b(financ|loan|monthly\s+payment|down\s+payment|apr|interest\s+rate|"
+            r"finance\s+it|need\s+financing|want\s+financing|interested\s+in\s+financ)\b",
+            re.I,
+        )
+        mentions_financing = bool(_financing_keywords_re.search(body))
+
+        # If a trade-in is in play, prefer the existing
+        # `deterministic_trade_in_followup` flow which collects the dealer's
+        # appraisal-relevant details (mileage, title status, condition) before
+        # we ask for the email. Only fall through to the email/confirm reply
+        # once those details have been gathered.
+        # Treat the conversation as trade-in context if EITHER the customer
+        # explicitly said "trade", or a trade is on file from a prior turn,
+        # OR the customer just gave a vehicle specifier (year and/or make)
+        # right after the bot asked about trade-ins. This catches replies
+        # like "i have a 2012 honda accord" that don't include the word
+        # "trade" but are clearly trade-in answers.
+        _bot_just_asked_trade_in = False
+        for m in get_recent_messages(from_number, to_number, limit=4):
+            if m.get("role") == "assistant":
+                _c = (m.get("content") or "").lower()
+                if "trade-in" in _c or "trade in" in _c:
+                    _bot_just_asked_trade_in = True
+                    break
+        _trade_on_file = (customer_profile.get("trade_in_vehicle") or "").strip()
+        _trade_active = (
+            bool(_trade_on_file)
+            or mentions_trade
+            or (has_vehicle_specifier and _bot_just_asked_trade_in)
+        )
+        if _trade_active:
+            history_for_trade = get_recent_messages(from_number, to_number, limit=14)
+            trade_missing_parts = _trade_in_missing_parts(history_for_trade)
+            # Count how many trade-in detail follow-ups we've already sent so
+            # we vary the phrasing and stop after 3 rounds (so a customer with
+            # an unusual answer doesn't get trapped).
+            _ask_phrases = ("round out the ballpark", "got it - and what", "got it - one more", "and the ")
+            followup_count = sum(
+                1 for m in history_for_trade if m.get("role") == "assistant"
+                and any(p in (m.get("content") or "").lower() for p in _ask_phrases)
+            )
+            if trade_missing_parts and followup_count < 3:
+                if followup_count == 0:
+                    reply = (
+                        f"Thanks for sharing that. To round out the ballpark, could "
+                        f"you also share the {_format_missing_list(trade_missing_parts)}?"
+                    )
+                elif followup_count == 1:
+                    if len(trade_missing_parts) == 1:
+                        reply = f"Got it - and what's the {trade_missing_parts[0]}?"
+                    else:
+                        reply = f"Got it - one more thing - the {_format_missing_list(trade_missing_parts)}?"
+                else:
+                    if len(trade_missing_parts) == 1:
+                        reply = f"And the {trade_missing_parts[0]}?"
+                    else:
+                        reply = f"And the {_format_missing_list(trade_missing_parts)}?"
+                save_message(from_number, to_number, "assistant", reply)
+                return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
+            # All trade-in details captured - acknowledge and proceed to the
+            # email request (or final confirmation if email is already on file).
+            if next_missing:
+                reply = (
+                    f"Got it - we'll have someone take a look at the {_trade_on_file or 'trade-in'}. "
+                    f"To lock in {pending['visit_time']} for the {pending['car_desc']}, "
+                    f"could I get your {next_missing}?"
+                )
+            else:
+                reply = (
+                    f"Got it - we'll have someone take a look at the {_trade_on_file or 'trade-in'}. "
+                    f"To confirm - shall I keep your appointment at {pending['visit_time']} "
+                    f"for the {pending['car_desc']}? Reply Yes or No."
+                )
+            save_message(from_number, to_number, "assistant", reply)
+            return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
+
+        # If the customer is asking an actual question (about the vehicle,
+        # policies, etc.) and it doesn't match the trade-in/financing/yes/no
+        # patterns we've already handled, fall through to the LLM so it can
+        # answer properly. Without this, the pending block always intercepts
+        # with the email-ask catch-all and ignores the customer's question.
+        _looks_like_question = (
+            "?" in body
+            or bool(re.match(
+                r"^\s*(what|how|is|does|can|do|are|will|won't|why|when|where|which|who|"
+                r"any|tell\s+me|i\s+have\s+a\s+question|got\s+a\s+question)\b",
+                body, re.I,
+            ))
+        )
+        if _looks_like_question and not mentions_financing and not _trade_active:
+            # Skip the catch-all and let _process_message continue to the LLM.
+            # The pending appointment stays set so the LLM sees it via history
+            # and the next-turn flow still works.
+            pass  # fall through past the catch-all (handled below)
+            _pending_skip_catchall = True
         else:
-            reply = (f"To confirm - shall I keep your appointment at {pending['visit_time']} "
-                     f"for the {pending['car_desc']}? Reply Yes or No.")
-        save_message(from_number, to_number, "assistant", reply)
-        return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
+            _pending_skip_catchall = False
+
+        # If the customer mentioned financing, acknowledge that we offer it and
+        # the team will go over options at the visit, then ask for email. If
+        # the dealer's financing policy text contains a URL, surface it as a
+        # preapproval link the customer can start before the visit.
+        if mentions_financing:
+            _financing_policy = (get_row_field(dealer_row, DEALER_FINANCING_ALIASES) or "").strip()
+            _preapproval_url_m = re.search(r"https?://\S+", _financing_policy) if _financing_policy else None
+            _preapproval_url = _preapproval_url_m.group(0).rstrip(".,)") if _preapproval_url_m else ""
+            if _preapproval_url:
+                _financing_line = (
+                    f"Got it - we offer financing and the team will go over options with you "
+                    f"when you're here. If you'd like, you can get preapproved beforehand here: "
+                    f"{_preapproval_url}"
+                )
+            else:
+                _financing_line = (
+                    f"Got it - we offer financing and the team will go over options with you "
+                    f"when you're here."
+                )
+            if next_missing:
+                reply = (
+                    f"{_financing_line} To lock in {pending['visit_time']} for the "
+                    f"{pending['car_desc']}, could I get your {next_missing}?"
+                )
+            else:
+                reply = (
+                    f"{_financing_line} To confirm - shall I keep your appointment at "
+                    f"{pending['visit_time']} for the {pending['car_desc']}? Reply Yes or No."
+                )
+            save_message(from_number, to_number, "assistant", reply)
+            return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
+
+        if not _pending_skip_catchall:
+            if next_missing:
+                reply = (f"Thanks! Could I also get your {next_missing} so I can lock in "
+                         f"{pending['visit_time']} for the {pending['car_desc']}?")
+            else:
+                reply = (f"To confirm - shall I keep your appointment at {pending['visit_time']} "
+                         f"for the {pending['car_desc']}? Reply Yes or No.")
+            save_message(from_number, to_number, "assistant", reply)
+            return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
+        # else: fall through to LLM so a customer question gets a real answer
 
     # ── PRIORITY 2.5: Pending cancellation ───────────────────────────────
     pending_cancel = get_pending_cancellation(from_number, to_number)
@@ -5639,8 +6182,19 @@ def _process_message(from_number: str, to_number: str, body: str):
         elif tradeins:
             # Bot already asked OR customer has shared partial info - use the
             # deterministic followup which scans for what's still missing and
-            # pivots to scheduling once everything is collected.
-            reply_text = deterministic_trade_in_followup(candidate_trade_in, history, confirmed_appt=confirmed_appt)
+            # pivots to scheduling once everything is collected. Treat a
+            # PENDING appointment the same as a confirmed one for this purpose
+            # so the trade-in followup ties to the visit the customer just
+            # picked instead of asking them to pick another day.
+            _appt_for_trade = confirmed_appt
+            if not _appt_for_trade:
+                _pending_for_trade = get_pending(from_number, to_number)
+                if _pending_for_trade and _pending_for_trade.get("visit_time"):
+                    _appt_for_trade = {
+                        "visit_time": _pending_for_trade["visit_time"],
+                        "car_desc": _pending_for_trade.get("car_desc", ""),
+                    }
+            reply_text = deterministic_trade_in_followup(candidate_trade_in, history, confirmed_appt=_appt_for_trade)
             if not reply_text:
                 reply_text = ai_policy_reply(body, "trade-ins", tradeins, dealer_phone, history[-6:], customer_name=customer_name) or f"Regarding trade-ins: {tradeins}."
         else:
@@ -6086,8 +6640,28 @@ def _process_message(from_number: str, to_number: str, body: str):
             if missing:
                 # AI tried to confirm but profile is incomplete. Hold as pending and override the reply.
                 set_pending(from_number, to_number, dealer_phone, visit_time, visit_time_iso, car_desc or "a vehicle")
-                reply_text = (f"I have your appointment for {visit_time} on hold. "
-                              f"Could I please get your {missing} so I can lock it in?")
+                # If the booking is for a specific vehicle (not a general visit) AND we still
+                # need an email, fold STEP 1.5 (questions/financing/trade-in) into the same
+                # message so the customer gets that one chance to flag interest before we
+                # lock it in. For general visits or non-email missing fields, keep the
+                # original concise prompt.
+                _car_desc_lower = (car_desc or "").strip().lower()
+                _is_specific_car = bool(_car_desc_lower) and _car_desc_lower not in {"general visit", "general", "visit", "a vehicle"}
+                if missing == "email address" and _is_specific_car:
+                    # Ask STEP 1.5 questions WITHOUT bundling the email ask. The
+                    # LLM will pick up the email request on the next turn after
+                    # the customer answers (and will follow up for trade-in
+                    # vehicle details if needed). Bundling both into one message
+                    # caused the LLM to treat any single answer as "all done"
+                    # and skip collecting trade-in details.
+                    reply_text = (
+                        f"Got it - {visit_time} for the {car_desc}. Any other questions "
+                        f"about it, are you interested in financing, or do you have a "
+                        f"trade-in you'd like us to take a look at?"
+                    )
+                else:
+                    reply_text = (f"I have your appointment for {visit_time} on hold. "
+                                  f"Could I please get your {missing} so I can lock it in?")
                 app.logger.info("Held auto-book for missing profile field: %s", missing)
             elif meta.get("confirmed"):
                 # Auto-book immediately - no pending confirmation needed
@@ -6150,8 +6724,10 @@ app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-change-me")
 def _session_to_phone(session_id: str) -> str:
     """Map a browser session id to a stable phone-like identifier so the
     existing routing logic (which keys everything on customer_phone) works
-    without modification."""
-    cleaned = re.sub(r"[^a-zA-Z0-9]", "", session_id)[:18]
+    without modification. We keep up to 32 cleaned chars so two browser
+    sessions whose ids share a long common prefix (e.g. produced by the
+    same Math.random pattern) don't collide on the customer_phone key."""
+    cleaned = re.sub(r"[^a-zA-Z0-9]", "", session_id)[:32]
     return f"+web{cleaned}"
 
 
@@ -6273,6 +6849,27 @@ def chat_webhook():
             if not existing:
                 save_customer_profile(from_number, to_number, real_phone=normalized_cached)
 
+    # Profile gate: before processing the customer's actual question, require
+    # first name + 10-digit phone. We don't run the LLM or save the message;
+    # the JS shows a profile form, the customer fills it in, then re-sends the
+    # original message which now passes this gate.
+    profile = get_customer_profile(from_number, to_number)
+    needs_name  = not (profile.get("name") or "").strip()
+    needs_phone = not (profile.get("real_phone") or "").strip()
+    if needs_name or needs_phone:
+        gate_reply = (
+            "Sure, I can help with that. Before I do, could I get your first name "
+            "and 10-digit phone number? We use these so we can text you "
+            "appointment confirmations and follow up if you have any questions."
+        )
+        return jsonify({
+            "reply": gate_reply,
+            "needs_profile": True,
+            "missing": {"name": needs_name, "phone": needs_phone},
+            "pending_message": user_message,
+            "session_id": session_id,
+        })
+
     g.captured_reply  = None
     g.captured_primer = None
     g.captured_silent = False
@@ -6282,6 +6879,17 @@ def chat_webhook():
     except Exception as e:
         app.logger.error("chat _process_message failed: %s", e)
         return jsonify({"error": "processing error"}), 500
+
+    # STEP 1.5 enforcement. The LLM doesn't reliably ask the
+    # questions/financing/trade-in question before requesting the email - it
+    # often skips straight to "could I get your email?". When that happens, we
+    # rewrite the reply server-side so STEP 1.5 always fires before STEP 2.
+    try:
+        _maybe_inject_step_1_5(from_number, to_number, dealer_phone=normalize_phone(
+            get_row_field(_resolve_widget_dealer(slug) or {}, DEALER_NOTIFY_PHONE_ALIASES) if slug else ""
+        ))
+    except Exception as e:
+        app.logger.warning("step 1.5 injection check failed: %s", e)
 
     silent = bool(g.get("captured_silent"))
     if silent:
@@ -6323,31 +6931,19 @@ def widget_welcome():
     if has_primer_been_sent(customer_key, twilio_number):
         return jsonify({"welcome": ""})
 
-    profile   = get_customer_profile(customer_key, twilio_number)
-    has_name  = bool((profile.get("name") or "").strip())
-    has_phone = bool((profile.get("real_phone") or "").strip())
-
-    if has_name and has_phone:
-        welcome = (
-            f"Hi! I'm the AI assistant for {dealer_name}. I can help with inventory, "
-            "vehicles, financing, and scheduling a visit. Replies are AI-assisted - "
-            "reply STOP at any time to opt out."
-        )
-    else:
-        welcome = (
-            f"Hi! I'm the AI assistant for {dealer_name}. I can help with inventory, "
-            "vehicles, financing, and scheduling a visit.\n\n"
-            "Before we get started, could I get your first name, last name, and phone "
-            "number? We use these so we can text you appointment confirmations and "
-            "follow up if you have any questions later.\n\n"
-            "Replies are AI-assisted - reply STOP at any time to opt out."
-        )
+    welcome = (
+        f"Hi, my name is Dave with {dealer_name}. I can help with inventory, "
+        "vehicles, financing, and scheduling a visit — or type MENU for more options.\n\n"
+        f"By communicating with our assistant, you agree to our [terms]({PRIMER_TERMS_URL}). "
+        "Reply STOP to opt out anytime."
+    )
+    welcome_followup = "How can I help you?"
 
     save_message(customer_key, twilio_number, "assistant", welcome)
+    save_message(customer_key, twilio_number, "assistant", welcome_followup)
     mark_primer_sent(customer_key, twilio_number)
 
-    terms_note = f"Review our terms anytime here: {PRIMER_TERMS_URL}"
-    return jsonify({"welcome": welcome, "terms_note": terms_note})
+    return jsonify({"welcome": welcome, "welcome_followup": welcome_followup})
 
 
 @app.route("/widget/history", methods=["POST"])
@@ -6368,6 +6964,39 @@ def widget_history():
     customer_key  = _session_to_phone(session_id)
     msgs = get_recent_messages(customer_key, twilio_number, limit=MAX_MESSAGES_PER_CHAT)
     return jsonify({"messages": msgs})
+
+
+@app.route("/widget/profile", methods=["POST"])
+def widget_profile():
+    """Save first name + 10-digit phone collected via the in-chat profile form
+    that pops up after the customer's first message. Required before the LLM
+    will respond to any question."""
+    data = request.get_json(silent=True) or {}
+    session_id = (data.get("session_id") or "").strip()
+    slug       = (data.get("slug") or "").strip()
+    name       = (data.get("name") or "").strip()
+    phone_raw  = (data.get("phone") or "").strip()
+
+    if not session_id or not slug:
+        return jsonify({"error": "missing session_id or slug"}), 400
+    if not name:
+        return jsonify({"error": "missing name"}), 400
+
+    digits = re.sub(r"\D", "", phone_raw)
+    if len(digits) != 10:
+        return jsonify({"error": "phone must be 10 digits"}), 400
+    normalized_phone = "+1" + digits
+
+    branding = _resolve_widget_dealer(slug)
+    if not branding or not branding.get("twilio_number"):
+        return jsonify({"error": "dealer not found"}), 404
+
+    twilio_number = branding["twilio_number"]
+    customer_key  = _session_to_phone(session_id)
+
+    save_customer_profile(customer_key, twilio_number,
+                          name=name, real_phone=normalized_phone)
+    return jsonify({"ok": True})
 
 
 @app.route("/widget/register-phone", methods=["POST"])
