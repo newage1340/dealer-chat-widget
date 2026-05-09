@@ -7058,6 +7058,15 @@ def widget_clear_session():
     # text the customer about a conversation they think they deleted.
     real_phone_for_reset = (get_customer_profile(customer_key, twilio_number)
                             .get("real_phone", "") or "").strip()
+    # If the current session's row hasn't recorded a real_phone yet (fresh
+    # session after a refresh), accept the cached real_phone the JS sends
+    # from localStorage so we can still find sibling sessions to wipe.
+    if not real_phone_for_reset:
+        cached_phone = (data.get("real_phone") or "").strip()
+        if cached_phone:
+            normalized_cached = normalize_phone(cached_phone)
+            if normalized_cached.startswith("+1") and len(re.sub(r"\D", "", normalized_cached)) == 11:
+                real_phone_for_reset = normalized_cached
 
     # Collect every customer_phone we need to wipe: the current session
     # plus all siblings tied to the same real phone.
