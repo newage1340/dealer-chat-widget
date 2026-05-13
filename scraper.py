@@ -31,6 +31,38 @@ def _parse_mileage(raw: str) -> str:
     return re.sub(r"[^\d]", "", raw) or ""
 
 
+def _parse_fee(raw: str) -> str:
+    """Parse a fee string like '$239' or '$37.50' to a normalized 'NNN.NN' or 'NNN'."""
+    if not raw:
+        return ""
+    m = re.search(r"(\d{1,5}(?:\.\d{1,2})?)", raw.replace(",", ""))
+    return m.group(1) if m else ""
+
+
+def _extract_doc_fee(price_text: str, html: str) -> str:
+    """Find the dealer's doc fee in the price block first, then anywhere on the page."""
+    for src in (price_text or "", html or ""):
+        m = re.search(r"doc(?:ument(?:ary)?)?\s*fee[^$\d]{0,40}\$?\s*([\d,]+(?:\.\d{1,2})?)", src, re.I)
+        if m:
+            return _parse_fee(m.group(1))
+    return ""
+
+
+def _extract_title_tag_fee(html: str) -> str:
+    """Find a title-and-tag processing fee mentioned anywhere on the page (usually fine print)."""
+    if not html:
+        return ""
+    patterns = [
+        r"title\s*(?:and|&|/|,)?\s*tag(?:\s*processing)?\s*(?:fee)?[^$\d]{0,40}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+        r"\$?\s*([\d,]+(?:\.\d{1,2})?)[^.\n]{0,40}title\s*(?:and|&|/|,)?\s*tag",
+    ]
+    for pat in patterns:
+        m = re.search(pat, html, re.I)
+        if m:
+            return _parse_fee(m.group(1))
+    return ""
+
+
 _MAKE_CAPS = {
     "bmw": "BMW", "gmc": "GMC", "ram": "RAM", "vw": "VW",
     "kia": "Kia", "jeep": "Jeep",
@@ -73,6 +105,20 @@ def _normalize_url(url: str) -> str:
     """Strip query params and fragments so the same page isn't visited twice."""
     p = urlparse(url)
     return f"{p.scheme}://{p.netloc}{p.path}"
+
+
+def _build_page_url(base_url: str, page_num: int) -> str:
+    """Append ?page=N or &page=N to a URL, preserving any existing query
+    string. e.g. 'https://x.com/inv?clearall=1' + page 2 →
+    'https://x.com/inv?clearall=1&page=2'."""
+    from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+    parts = urlparse(base_url)
+    query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+    # Replace any existing page=... or strip and re-add
+    query_pairs = [(k, v) for (k, v) in query_pairs if k.lower() != "page"]
+    query_pairs.append(("page", str(page_num)))
+    new_query = urlencode(query_pairs)
+    return urlunparse(parts._replace(query=new_query))
 
 
 def _extract_spec(pattern: str, text: str) -> str:
@@ -120,6 +166,55 @@ def _load_page_playwright(browser, url: str, attempts: int = 3) -> str:
         finally:
             page.close()
     logger.warning("Playwright failed for %s after %d attempts: %s", url, attempts, last_err)
+    return ""
+
+
+def _load_page_playwright_with_scroll(browser, url: str, max_scrolls: int = 20,
+                                       attempts: int = 3) -> str:
+    """Load a page and scroll to the bottom repeatedly so lazy-loaded content
+    (e.g. inventory cards loaded on scroll) gets rendered before we read the
+    HTML. Returns final HTML after content stops growing or max_scrolls hits."""
+    from playwright.sync_api import TimeoutError as PWTimeout
+    last_err: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        page = browser.new_page()
+        try:
+            page.set_extra_http_headers({"User-Agent": UA})
+            goto_timeout_ms = 30000 if attempt == 1 else 60000
+            page.goto(url, wait_until="domcontentloaded", timeout=goto_timeout_ms)
+            try:
+                page.wait_for_load_state("networkidle", timeout=12000)
+            except PWTimeout:
+                pass
+            # Scroll until page height stops growing (no more lazy content) or
+            # we hit the safety cap.
+            prev_height = 0
+            stable_passes = 0
+            for i in range(max_scrolls):
+                cur_height = page.evaluate("document.body.scrollHeight")
+                if cur_height == prev_height:
+                    stable_passes += 1
+                    if stable_passes >= 2:
+                        break
+                else:
+                    stable_passes = 0
+                prev_height = cur_height
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=4000)
+                except PWTimeout:
+                    pass
+                page.wait_for_timeout(500)  # small grace period for late renders
+            return page.content()
+        except Exception as e:
+            last_err = e
+            if attempt < attempts:
+                logger.info("Playwright scroll attempt %d/%d failed for %s: %s — retrying",
+                            attempt, attempts, url, e)
+                time.sleep(2)
+        finally:
+            page.close()
+    logger.warning("Playwright (scroll) failed for %s after %d attempts: %s", url, attempts, last_err)
     return ""
 
 
@@ -180,6 +275,9 @@ def _ds_scrape_detail_page(html: str, detail_url: str = "") -> Optional[Dict[str
     if not price_m:
         price_m = re.search(r"\$\s*([\d,]+)", price_text)
     price = _parse_price(price_m.group(1)) if price_m else ""
+
+    doc_fee = _extract_doc_fee(price_text, html)
+    title_tag_fee = _extract_title_tag_fee(html)
 
     ext_color    = _extract_spec(r"Exterior\s*Color[:\s]+([^:]+?)(?=Interior|Stock|Mileage|Engine|Fuel|Trans|Title|VIN|$)", specs_text)
     int_color    = _extract_spec(r"Interior\s*Color[:\s]+([^:]+?)(?=Exterior|Stock|Mileage|Engine|Fuel|Trans|Title|VIN|$)", specs_text)
@@ -245,6 +343,8 @@ def _ds_scrape_detail_page(html: str, detail_url: str = "") -> Optional[Dict[str
         "Stock":       stock,
         "Description": full_description,
         "DetailURL":   detail_url,
+        "DocFee":      doc_fee,
+        "TitleTagFee": title_tag_fee,
     }
 
 
@@ -477,7 +577,9 @@ def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             try:
-                # Load first page and detect platform
+                # Load first page and detect platform. Quick load just to
+                # detect — if it's dealercarsearch we re-load with scrolling
+                # so lazy-loaded inventory cards get picked up.
                 first_html = _load_page_playwright(browser, url)
                 if not first_html:
                     return []
@@ -489,7 +591,12 @@ def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0
                 if platform == "dealercarsearch":
                     collect_fn = _dcs_collect_detail_links
                     detail_fn  = _dcs_scrape_detail_page
-                    paginate   = False  # single page, no pagination
+                    paginate   = True
+                    # Re-load with scrolling first so any lazy-loaded cards on
+                    # page 1 also get picked up.
+                    scrolled = _load_page_playwright_with_scroll(browser, url)
+                    if scrolled:
+                        first_html = scrolled
                 else:
                     collect_fn = _ds_collect_detail_links
                     detail_fn  = _ds_scrape_detail_page
@@ -500,8 +607,13 @@ def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0
 
                 pages = range(1, max_pages + 1) if paginate else range(1, 2)
                 for page_num in pages:
-                    page_url = url if page_num == 1 else f"{url}?page={page_num}"
-                    html = first_html if page_num == 1 else _load_page_playwright(browser, page_url)
+                    page_url = url if page_num == 1 else _build_page_url(url, page_num)
+                    if page_num == 1:
+                        html = first_html
+                    elif platform == "dealercarsearch":
+                        html = _load_page_playwright_with_scroll(browser, page_url)
+                    else:
+                        html = _load_page_playwright(browser, page_url)
                     if not html:
                         break
                     links = collect_fn(html, url)
