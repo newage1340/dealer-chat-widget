@@ -83,7 +83,11 @@ _sms_abuse_lock = threading.Lock()
 
 PRIMER_TERMS_URL = os.getenv(
     "PRIMER_TERMS_URL",
-    "https://docs.google.com/document/d/1Klia9h9ANWUaL-2P4yoPtUppqSFHv0-o7oM8B3jEwGU/view",
+    "https://inventiq.net/terms.html",
+)
+PRIMER_PRIVACY_URL = os.getenv(
+    "PRIMER_PRIVACY_URL",
+    "https://inventiq.net/privacy.html",
 )
 CAPABILITY_PRIMER = (
     "FYI - I can help with inventory, vehicles, financing, or scheduling a visit. "
@@ -650,6 +654,15 @@ def init_db() -> None:
             )
         """)
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS dealer_fees (
+                twilio_number  TEXT PRIMARY KEY,
+                doc_fee        TEXT NOT NULL DEFAULT '',
+                title_tag_fee  TEXT NOT NULL DEFAULT '',
+                updated_at     TEXT NOT NULL
+            )
+        """)
+
         if DEV_CLEAR_DB:
             app.logger.warning("DEV_CLEAR_DB=1 - wiping appointments, pending, messages, cold_followups, customer_names, terms_acceptance_log")
             conn.execute("DELETE FROM appointments")
@@ -673,6 +686,56 @@ def init_db() -> None:
 # =========================
 # SQLITE - INVENTORY
 # =========================
+
+def save_dealer_fees(twilio_number: str, doc_fee: str, title_tag_fee: str) -> None:
+    """Upsert this dealer's scraped fees. Empty strings overwrite nothing — they
+    let us refresh just one field without wiping the other when only that one
+    was found on the page."""
+    tn = normalize_phone(twilio_number)
+    if not tn:
+        return
+    if not doc_fee and not title_tag_fee:
+        return
+    conn = _db()
+    with conn:
+        existing = conn.execute(
+            "SELECT doc_fee, title_tag_fee FROM dealer_fees WHERE twilio_number=?", (tn,)
+        ).fetchone()
+        new_doc = doc_fee if doc_fee else (existing["doc_fee"] if existing else "")
+        new_tt  = title_tag_fee if title_tag_fee else (existing["title_tag_fee"] if existing else "")
+        conn.execute(
+            "INSERT INTO dealer_fees (twilio_number, doc_fee, title_tag_fee, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(twilio_number) DO UPDATE SET "
+            "doc_fee=excluded.doc_fee, title_tag_fee=excluded.title_tag_fee, updated_at=excluded.updated_at",
+            (tn, new_doc, new_tt, _utc_now_iso()),
+        )
+    conn.close()
+
+
+def get_dealer_fees(twilio_number: str) -> Dict[str, float]:
+    """Return {'doc_fee': float, 'title_tag_fee': float} for a dealer (zeros if not configured)."""
+    tn = normalize_phone(twilio_number)
+    out = {"doc_fee": 0.0, "title_tag_fee": 0.0}
+    if not tn:
+        return out
+    conn = _db()
+    row = conn.execute(
+        "SELECT doc_fee, title_tag_fee FROM dealer_fees WHERE twilio_number=?", (tn,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return out
+    try:
+        out["doc_fee"] = float(row["doc_fee"]) if row["doc_fee"] else 0.0
+    except (ValueError, TypeError):
+        pass
+    try:
+        out["title_tag_fee"] = float(row["title_tag_fee"]) if row["title_tag_fee"] else 0.0
+    except (ValueError, TypeError):
+        pass
+    return out
+
 
 def get_inventory_for_twilio(twilio_number: str) -> List[Dict[str, Any]]:
     tn = normalize_phone(twilio_number)
@@ -751,6 +814,10 @@ def refresh_inventory_for_twilio(twilio_number: str, website_url: str, max_vehic
                 detail_url, _utc_now_iso(),
             ))
         conn.close()
+        # Doc fee + title/tag are the same across all this dealer's cars, so any
+        # detail page that exposes them updates the dealer-level cache. Silent
+        # no-op if both are empty.
+        save_dealer_fees(tn, v.get("DocFee", ""), v.get("TitleTagFee", ""))
 
     vehicles = scrape_dealer_inventory(
         website_url,
@@ -1693,6 +1760,13 @@ def _body_mentions_car(body: str, rows: List[Dict[str, Any]]) -> bool:
                 or (len(tok) == 2 and any(c.isdigit() for c in tok) and any(c.isalpha() for c in tok))
             ):
                 return True
+        # Also match the model's nameplate with all non-alphanumeric stripped
+        # (e.g. "Cr-V" → "crv", "F-150" → "f150"). Customers type the squashed
+        # form ("crv") that the dash-separated version doesn't match.
+        for nameplate in model.split():
+            squashed = re.sub(r"[^a-z0-9]", "", nameplate)
+            if squashed and len(squashed) >= 3 and squashed in b_words:
+                return True
         # Hyphenated make components (e.g. "mercedes" from "Mercedes-Benz")
         if "-" in make:
             for part in make.split("-"):
@@ -1774,10 +1848,82 @@ def _row_price_int(r: Dict[str, Any]) -> int:
         return 0
 
 
-def _format_price_listing(rows: List[Dict[str, Any]], min_p: Optional[int], max_p: Optional[int]) -> str:
+_MOTORCYCLE_MAKES = {
+    "harleydavidson", "harley", "ducati", "indianmotorcycle", "aprilia",
+    "ktm", "vespa", "motoguzzi", "buell", "royalenfield", "victorymotorcycles",
+    "huskvarna", "husqvarna", "bimota", "mvagusta",
+}
+_CAR_BODY_TRIM_RE = re.compile(
+    r"\b(4-?door|sedan|suv|hatchback|coupe|truck|van|wagon|convertible|crew\s*cab|double\s*cab|supercrew|extended\s*cab)\b",
+    re.I,
+)
+_MOTORCYCLE_TRIM_RE = re.compile(
+    r"\b(cruiser|sportbike|sport\s*bike|street\s*bike|dirt\s*bike|dual\s*sport|motorcycle|moped|scooter)\b",
+    re.I,
+)
+
+
+def _is_motorcycle(r: Dict[str, Any]) -> bool:
+    """Detect motorcycles so they can be filtered out of 'cars' queries."""
+    make = re.sub(r"[^a-z]+", "", str(r.get("Make", "")).lower())
+    if make in _MOTORCYCLE_MAKES:
+        return True
+    trim = str(r.get("Trim", "")).lower()
+    # If the trim names a car body, it's a car (even if "Cruiser" appears in model name like PT Cruiser).
+    if _CAR_BODY_TRIM_RE.search(trim):
+        return False
+    if _MOTORCYCLE_TRIM_RE.search(trim):
+        return True
+    return False
+
+
+def _find_exact_year_make_match(body: str, rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """If the body explicitly names a year AND a make (or first model word) that
+    appear together in a single inventory row, return that row. Beats the fuzzy
+    matcher when the customer is unambiguous ('2019 ram', '2023 honda accord')."""
+    if not body or not rows:
+        return None
+    b = body.lower()
+    year_m = re.search(r"\b(19|20)\d{2}\b", b)
+    if not year_m:
+        return None
+    year = year_m.group(0)
+    candidates: List[Dict[str, Any]] = []
+    for r in rows:
+        if str(r.get("Year", "")).strip() != year:
+            continue
+        make_lower = str(r.get("Make", "")).strip().lower()
+        model_lower = str(r.get("Model", "")).strip().lower()
+        make_first = make_lower.split()[0] if make_lower else ""
+        model_first = model_lower.split()[0] if model_lower else ""
+        make_hit  = bool(make_first)  and re.search(rf"\b{re.escape(make_first)}\b", b)
+        model_hit = bool(model_first) and re.search(rf"\b{re.escape(model_first)}\b", b)
+        if make_hit or model_hit:
+            candidates.append(r)
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    # Multiple rows match year+make (e.g. two 2019 RAMs). Prefer one whose model
+    # word ALSO appears in the body, otherwise return the first.
+    for r in candidates:
+        model_tokens = [t for t in str(r.get("Model", "")).strip().lower().split() if len(t) >= 2]
+        if any(re.search(rf"\b{re.escape(t)}\b", b) for t in model_tokens):
+            return r
+    return candidates[0]
+
+
+def _wants_cars_only(body: str) -> bool:
+    """True when the customer explicitly asks for 'car' / 'cars' (intent: exclude motorcycles)."""
+    return bool(body) and bool(re.search(r"\bcars?\b", body, re.I))
+
+
+def _format_price_listing(rows: List[Dict[str, Any]], min_p: Optional[int], max_p: Optional[int], cars_only: bool = False) -> str:
     """Deterministic, complete listing of inventory rows that match a price filter."""
     matching = []
     for r in rows:
+        if cars_only and _is_motorcycle(r):
+            continue
         p = _row_price_int(r)
         if p <= 0:
             continue
@@ -1801,16 +1947,25 @@ def _format_price_listing(rows: List[Dict[str, Any]], min_p: Optional[int], max_
     if not matching:
         return empty + " Would you like to widen the price range?"
     LIST_LIMIT = 5
+    # When there's a max budget, show the 5 highest-priced vehicles within range —
+    # the picks closest to the customer's stated budget. A customer saying "under
+    # $20k" usually has $20k to spend; leading with the top of their budget is more
+    # relevant than the cheapest in inventory. Sorted descending so the cap shows
+    # first. Customers can ask "any more?" / "what else?" to page through the rest.
+    if max_p is not None and len(matching) > LIST_LIMIT:
+        picks = list(reversed(matching[-LIST_LIMIT:]))
+    else:
+        picks = matching[:LIST_LIMIT]
     lines = [header]
-    for p, r in matching[:LIST_LIMIT]:
+    for p, r in picks:
         year  = str(r.get("Year",  "")).strip()
         make  = str(r.get("Make",  "")).strip()
         model = str(r.get("Model", "")).strip()
         title = " ".join(s for s in [year, make, model] if s)
         lines.append(f"- {title}: ${p:,}")
     lines.append("")
-    if len(matching) > LIST_LIMIT:
-        lines.append(f"...and {len(matching) - LIST_LIMIT} more. Tell me a make, year, or anything else and I'll narrow it down.")
+    if len(matching) > len(picks):
+        lines.append(f"...and {len(matching) - len(picks)} more in this range. Tell me a make, year, or anything else and I'll narrow it down.")
     else:
         lines.append("Would you like more details on any of these, or to schedule a visit?")
     return "\n".join(lines)
@@ -2240,7 +2395,10 @@ def _extract_make_filters(body: str, rows: List[Dict[str, Any]]) -> List[str]:
     listing_intent = bool(re.search(
         r"\b(any|other|more|what|which|list|show|all|got|"
         r"do you have|are there|is there|carry|stock|"
-        r"got any|have you got)\b",
+        r"got any|have you got|"
+        r"looking\s+for|interested\s+in|want|wanting|need|"
+        r"i\s+(?:want|need|like|would\s+like)|find\s+me|"
+        r"show\s+me|how\s+about|what\s+about)\b",
         b,
     ))
     if not listing_intent:
@@ -3046,6 +3204,53 @@ def should_force_unknown_answer(reply_text: str) -> bool:
     return bool(UNKNOWN_PATTERNS.search(text))
 
 
+def _format_vehicle_essentials(r: Dict[str, Any], prior_reply: str) -> str:
+    """Build a deterministic essentials sentence (price, mileage, issues) for vehicle-info
+    replies. Skips any item already covered in the bot's immediately-prior reply so the
+    customer doesn't see the same numbers twice. Returns '' when everything was already
+    covered. Caller is expected to follow this with an LLM-generated features blurb."""
+    if not r:
+        return ""
+    prior = (prior_reply or "").lower()
+
+    parts: List[str] = []
+
+    price = _row_price_int(r)
+    prior_has_price = bool(re.search(r"\$\s*\d|internet\s*price|priced\s+at", prior))
+    if price > 0 and not prior_has_price:
+        parts.append(f"is priced at ${price:,}")
+
+    mileage_raw = re.sub(r"[^\d]", "", str(r.get("Mileage", "")))
+    prior_has_mileage = bool(re.search(r"\d[\d,]*\s*miles?\b", prior))
+    if mileage_raw and not prior_has_mileage:
+        try:
+            mileage_int = int(mileage_raw)
+            if mileage_int > 0:
+                parts.append(f"has {mileage_int:,} miles")
+        except ValueError:
+            pass
+
+    prior_has_issues = bool(re.search(
+        r"\b(carfax|no\s+(?:known\s+)?issues?|known\s+issues?|reconditioned|"
+        r"disclosed\s+concerns?|clean\s+title)\b", prior
+    ))
+    if not prior_has_issues:
+        issues = " | ".join(get_row_field_values(r, ISSUE_NOTE_HEADER_ALIASES)).strip()
+        if issues:
+            parts.append(f"has the following disclosed concerns: {issues}")
+        else:
+            parts.append("comes with no known issues and a clean CARFAX")
+
+    if not parts:
+        return ""
+    title = _vehicle_title(r)
+    if len(parts) == 1:
+        return f"The {title} {parts[0]}."
+    if len(parts) == 2:
+        return f"The {title} {parts[0]} and {parts[1]}."
+    return f"The {title} {parts[0]}, {parts[1]}, and {parts[2]}."
+
+
 def _issue_response_for_match(r):
     title   = _vehicle_title(r)
     issues  = " | ".join(get_row_field_values(r, ISSUE_NOTE_HEADER_ALIASES)).strip()
@@ -3403,6 +3608,71 @@ def _is_financing_question(msg):
         r"pay\s*monthly|monthly\s*installment|afford|buy\s*here\s*pay\s*here|bhph)\b",
         (msg or "").lower(),
     ))
+
+
+def _is_price_breakdown_question(msg):
+    """Direct price questions that should get a full breakdown (Internet → Doc → Purchase).
+    Skips budget-filter queries like 'under 20k' or 'between 10k and 15k' — those are listings."""
+    m = (msg or "").lower()
+    if not m:
+        return False
+    # Listing/filter language → not a single-vehicle price question
+    if re.search(r"\b(under|less\s+than|below|cheaper\s+than|over|more\s+than|above|between|"
+                 r"max(?:imum)?|min(?:imum)?|up\s+to|no\s+more\s+than|at\s+least)\b\s*\$?\d", m):
+        return False
+    return bool(re.search(
+        r"(\bdoc(?:ument(?:ary)?)?\s*fee\b|"
+        r"\bout[\s-]?the[\s-]?door\b|\bo\.?t\.?d\.?\b|\bdrive[\s-]?away\b|"
+        r"\btotal\s*(?:price|cost|amount)\b|\ball[\s-]?in(?:clusive)?\b|"
+        r"\bwith\s*(?:all\s*)?fees?\b|\bwhat\s*fees?\b|"
+        r"\b(?:any|other|extra|additional|more)\s+(?:\w+\s+){0,2}(?:fees?|costs?|charges?)\b|"
+        r"\bare\s+there\s+(?:any\s+)?(?:other\s+|extra\s+|additional\s+|hidden\s+)?(?:fees?|costs?|charges?)\b|"
+        r"\bprice\s*breakdown\b|\bbreak\s*(?:it|the\s*price)?\s*down\b|"
+        r"\bwhat(?:'s|\s+is|\s+would\s+be|\s+would\s+the)\s+(?:the\s+)?(?:price|cost|final\s+price|total)\b|"
+        r"\bprice\s+of\s+(?:the|that|this|it)\b|"
+        r"\bwhat(?:'?s|\s+is|\s+does)\s+\S+(?:\s+\S+){0,3}\s+cost\b|"
+        r"\bhow\s+much\s+(?:is|are|does|for|costs?|would|will|total|do\s+you\s+want)\b|"
+        r"\bis\s+(?:that|this|it|\$?\s*[\d,]+(?:\.\d{1,2})?(?:k|K)?)\s+(?:the\s+)?(?:final|total)(?:\s+price|\s+cost)?\b|"
+        r"\bare\s+(?:those|these|they)\s+(?:the\s+)?(?:final|total)(?:\s+prices?|\s+costs?)?\b|"
+        r"\bis\s+that\s+(?:all|everything|the\s+total)\b|"
+        r"\bfinal\s+prices?\b|"
+        r"\banything\s+(?:else\s+)?(?:on\s+top|added|additional)\b)",
+        m,
+    ))
+
+
+def _fmt_money(amount: float) -> str:
+    """$2,800 if integer, $37.50 if fractional."""
+    if amount == int(amount):
+        return f"${int(amount):,}"
+    return f"${amount:,.2f}"
+
+
+def _format_price_breakdown(match: Dict[str, Any], fees: Dict[str, float]) -> Optional[str]:
+    """Render a 3-line price breakdown (Internet → Doc → Purchase) plus title/tag note.
+    Returns None if the dealer has no doc fee configured — caller should fall through."""
+    internet_price = _row_price_int(match)
+    if internet_price <= 0:
+        return None
+    doc_fee = fees.get("doc_fee", 0.0) or 0.0
+    title_tag = fees.get("title_tag_fee", 0.0) or 0.0
+    if doc_fee <= 0:
+        return None
+    purchase_price = internet_price + doc_fee
+    year  = str(match.get("Year",  "")).strip()
+    make  = str(match.get("Make",  "")).strip()
+    model = str(match.get("Model", "")).strip()
+    title = " ".join(s for s in [year, make, model] if s)
+    lines = [
+        f"Here's the price breakdown for the {title}:",
+        f"- Internet Price: {_fmt_money(internet_price)}",
+        f"- Doc Fee: +{_fmt_money(doc_fee)}",
+        f"- Full Price: {_fmt_money(purchase_price)}",
+    ]
+    if title_tag > 0:
+        lines.append("")
+        lines.append(f"(plus {_fmt_money(title_tag)} title and tag processing)")
+    return "\n".join(lines)
 
 
 # =========================
@@ -4513,6 +4783,8 @@ If a customer asks about a vehicle that is NOT in the inventory list: Clearly te
 If a customer asks something else not covered by the data below: "I don't have that information readily available. Please feel free to contact us at {dealer_phone if dealer_phone else '(dealer phone not listed)'} and one of our representatives will be glad to assist you."
 
 === STRICT FORBIDDEN BEHAVIORS ===
+- NEVER include URLs, hyperlinks, or markdown links in your reply. Do NOT type "https://", "www.", or "[text](link)". If a customer asks for a link to a vehicle's listing, simply say you'll send the listing — the system sends the real URL separately. Any URL you write is a hallucination because you do not have access to real URLs.
+- NEVER offer to "discuss the trade-in process," "walk through the trade-in process," "explain the trade-in process," or any variant. The trade-in flow is handled by the system, which collects vehicle details (year/make/model, mileage, title status, condition) and rolls them into the visit. When a customer mentions a trade, briefly acknowledge it and let the system continue — do not pitch a separate "process" conversation.
 - NEVER invent a phone number, address, or any fact not in the data.
 - NEVER ask about monthly payment amounts.
 - For service/detailing pricing, direct them to call: "For pricing on that, I'd recommend giving us a call at {dealer_phone} - they'll be able to give you an accurate quote."
@@ -4636,6 +4908,26 @@ Note: measurements in inches (e.g. 144\", 148\") refer to wheelbase. AWD/RWD/FWD
 # =========================
 # META PARSING
 # =========================
+
+# Markdown link: [text](url) — capture the visible text so we can keep it after stripping the URL.
+_MD_LINK_RE   = re.compile(r"\[([^\]]+)\]\((?:https?://|www\.|tel:)[^)]+\)", re.I)
+_BARE_URL_RE  = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
+
+
+def _scrub_llm_urls(text: str) -> str:
+    """Remove URLs from LLM output. Vehicle/page URLs are only safe to send from the
+    deterministic link handler that reads inventory.detail_url — anything the LLM
+    produces is a hallucination. Strips markdown link wrappers, keeping the link text."""
+    if not text:
+        return text
+    text = _MD_LINK_RE.sub(r"\1", text)
+    text = _BARE_URL_RE.sub("", text)
+    # Tidy up the empty parens / double spaces / trailing punctuation the strip leaves behind.
+    text = re.sub(r"\(\s*\)", "", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    return text.strip()
+
 
 def extract_meta(reply_text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
     meta = None
@@ -5633,13 +5925,55 @@ def _process_message(from_number: str, to_number: str, body: str):
         # answers as "ok great i'd also like to finance it" - YES_RE matches
         # "ok great" and the financing piece gets dropped.
         _financing_keywords_re = re.compile(
-            r"\b(financ|loan|monthly\s+payment|down\s+payment|apr|interest\s+rate|"
-            r"finance\s+it|need\s+financing|want\s+financing|interested\s+in\s+financ)\b",
+            r"\b(financ\w*|loan\w*|monthly\s+payment|down\s+payment|apr|interest\s+rate|"
+            r"interested\s+in\s+financ\w*)\b",
             re.I,
         )
         _early_financing_mention = bool(_financing_keywords_re.search(body))
 
-        if YES_RE.search(body) and not _early_financing_mention:
+        # Customers often type "yes" alongside a question or correction
+        # ("yes i have a question", "no i mean yes i have questions", "wait
+        # actually"). YES_RE alone would treat the whole message as
+        # confirmation and skip the question. Exempt the YES_RE branch when
+        # the message also signals a question or a self-correction.
+        _early_question_signal = bool(re.search(
+            r"\b(i\s+(?:have|got|gotta\s+ask|wanted\s+to\s+ask|need\s+to\s+ask)\s+"
+            r"(?:a\s+|some\s+|few\s+|another\s+|more\s+|other\s+)?(?:question|q)s?|"
+            r"have\s+(?:a\s+|some\s+|few\s+|another\s+|more\s+|other\s+)?questions?|"
+            r"got\s+(?:a\s+|some\s+|few\s+|another\s+|more\s+|other\s+)?questions?|"
+            r"can\s+i\s+ask|"
+            r"i\s+(?:meant|mean)|wait|hold\s+on|actually|one\s+more\s+thing|"
+            r"quick\s+question|another\s+question)\b",
+            body, re.I,
+        ))
+
+        # Bare "yes" right after STEP 1.5 (which asked about questions /
+        # financing / trade-in) is ambiguous — could mean any of the three.
+        # Disambiguate instead of silently advancing the booking.
+        _last_asst_for_step15 = ""
+        for _m in reversed(get_recent_messages(from_number, to_number, limit=4)):
+            if _m.get("role") == "assistant":
+                _last_asst_for_step15 = (_m.get("content") or "").lower()
+                break
+        _last_was_step15 = (
+            "any other questions about it" in _last_asst_for_step15
+            and "financing" in _last_asst_for_step15
+            and ("trade-in" in _last_asst_for_step15 or "trade in" in _last_asst_for_step15)
+        )
+        _body_stripped_compact = re.sub(r"[^\w\s]", "", body).strip().lower()
+        _is_bare_yes = bool(re.fullmatch(
+            r"(yes|yep|yeah|yup|sure|definitely|absolutely|ok|okay)\s*",
+            _body_stripped_compact,
+        ))
+        if _last_was_step15 and _is_bare_yes:
+            reply = (
+                "Sure — which one: more questions about the vehicle, "
+                "interested in financing, or do you have a trade-in?"
+            )
+            save_message(from_number, to_number, "assistant", reply)
+            return _reply_twiml(reply, from_number, to_number, send_primer=new_customer)
+
+        if YES_RE.search(body) and not _early_financing_mention and not _early_question_signal:
             pending_notify_phone = normalize_phone(pending.get("dealer_notify_phone", "")) or dealer_phone
             visit_time, visit_time_iso, car_desc = pending["visit_time"], pending.get("visit_time_iso", ""), pending["car_desc"]
 
@@ -5765,6 +6099,75 @@ def _process_message(from_number: str, to_number: str, body: str):
         mentions_trade = bool(_trade_keywords_re.search(body))
         has_vehicle_specifier = bool(_vehicle_year_re.search(body)) or bool(_vehicle_make_re.search(body))
         already_has_trade_on_file = bool((customer_profile.get("trade_in_vehicle") or "").strip())
+
+        # Customers ask questions about the BUY vehicle ("does the honda have 4wd")
+        # right after the bot asks about trade-ins. The make match alone shouldn't
+        # pull them into the trade flow. Detect question-shaped messages so we can
+        # short-circuit the trade-in branch and let the LLM answer the question.
+        _looks_like_buy_question = (
+            ("?" in body)
+            or bool(re.match(
+                r"^\s*(does|do|is|are|can|will|what|how|why|when|where|which|who|"
+                r"tell\s+me|got\s+a\s+question|i'?m\s+asking|im\s+asking)\b",
+                body, re.I,
+            ))
+            # Also catch mid-sentence question constructs that come after a
+            # softening preamble ("before i do that does the car...", "wait
+            # what about the mileage"). The earlier start-of-body regex misses
+            # these because the question word isn't at position 0.
+            or bool(re.search(
+                r"\b(does\s+(?:it|the\s+\w+|that|this)|"
+                r"is\s+(?:it|the\s+\w+|that|this|there)|"
+                r"are\s+(?:there|those|these|they)|"
+                r"any\s+(?:issues?|problems?|known\s+issues?|recalls?|"
+                r"accidents?|damage|fees?|costs?|extras?)|"
+                r"what\s+about|how\s+(?:much|many|old|long|far))\b",
+                body, re.I,
+            ))
+        ) and not mentions_trade
+        # Also detect when the customer references the PENDING buy vehicle by
+        # make/model - if the make matches what they're booking AND no different
+        # year/model is named, the message is about that vehicle.
+        _pending_car_desc_lower = (pending.get("car_desc", "") or "").lower()
+        _stop_tokens = {"the", "and", "have", "has", "does", "this", "that",
+                        "with", "for", "any", "still", "year", "make", "model"}
+        _body_refs_buy_car = bool(_pending_car_desc_lower) and any(
+            tok in _pending_car_desc_lower
+            for tok in re.findall(r"\b[a-z]{3,}\b", body.lower())
+            if tok not in _stop_tokens
+        )
+        # If body has a YEAR different from pending's year, the customer is
+        # naming a different vehicle (e.g. a trade-in) — NOT the buy car.
+        _pending_year_m = re.search(r"\b(19|20)\d{2}\b", _pending_car_desc_lower)
+        _body_year_m    = re.search(r"\b(19|20)\d{2}\b", body)
+        if _pending_year_m and _body_year_m and _pending_year_m.group(0) != _body_year_m.group(0):
+            _body_refs_buy_car = False
+        # If the bot's immediately prior message was asking for the TRADE vehicle
+        # itself ("what vehicle would you like to trade in?"), the next answer
+        # naming a year/make IS the trade-in answer — don't treat it as a buy
+        # question even if the make overlaps with the pending car.
+        _last_asst_lower = ""
+        for _m in reversed(get_recent_messages(from_number, to_number, limit=4)):
+            if _m.get("role") == "assistant":
+                _last_asst_lower = (_m.get("content") or "").lower()
+                break
+        _bot_just_asked_for_trade_vehicle = (
+            "what vehicle would you like to trade in" in _last_asst_lower
+            or "(year, make, and model" in _last_asst_lower
+        )
+        _is_buy_side_message = (
+            _looks_like_buy_question or (_body_refs_buy_car and not mentions_trade)
+        ) and not _bot_just_asked_for_trade_vehicle
+
+        # Recovery: if we previously saved a trade-in but the customer is clearly
+        # asking about the buy vehicle now, that earlier save was a false positive
+        # (e.g. "does the honda have 4wd" misread as a Honda trade). Wipe it so the
+        # next turns route correctly.
+        if already_has_trade_on_file and _is_buy_side_message:
+            save_customer_profile(from_number, to_number, trade_in_vehicle="")
+            customer_profile = get_customer_profile(from_number, to_number)
+            already_has_trade_on_file = False
+
         if mentions_trade and not has_vehicle_specifier and not already_has_trade_on_file:
             reply = "Got it - what vehicle would you like to trade in? (year, make, and model if you have it)"
             save_message(from_number, to_number, "assistant", reply)
@@ -5772,11 +6175,9 @@ def _process_message(from_number: str, to_number: str, body: str):
 
         # Customer message includes trade-in details (year+make, even without the
         # word "trade" if it follows a bot question about trade-in) - extract and
-        # save the trade-in vehicle so it shows up on the dealer alert. We do
-        # this before the catch-all reply so the profile is up-to-date when we
-        # tell the customer "thanks". Re-runs on subsequent turns too, so the
-        # mileage/title/condition added in follow-up messages get folded in.
-        if has_vehicle_specifier or mentions_trade or already_has_trade_on_file:
+        # save the trade-in vehicle so it shows up on the dealer alert. Skip when
+        # the message is clearly a buy-side question so we don't misread it.
+        if (has_vehicle_specifier or mentions_trade or already_has_trade_on_file) and not _is_buy_side_message:
             try:
                 history = get_recent_messages(from_number, to_number, limit=14)
                 candidate_trade_in = extract_trade_in_vehicle(history)
@@ -5796,8 +6197,8 @@ def _process_message(from_number: str, to_number: str, body: str):
         # reply, so without this we'd fall through to a flat "Thanks!" without
         # acknowledging the financing question at all.
         _financing_keywords_re = re.compile(
-            r"\b(financ|loan|monthly\s+payment|down\s+payment|apr|interest\s+rate|"
-            r"finance\s+it|need\s+financing|want\s+financing|interested\s+in\s+financ)\b",
+            r"\b(financ\w*|loan\w*|monthly\s+payment|down\s+payment|apr|interest\s+rate|"
+            r"interested\s+in\s+financ\w*)\b",
             re.I,
         )
         mentions_financing = bool(_financing_keywords_re.search(body))
@@ -5825,7 +6226,7 @@ def _process_message(from_number: str, to_number: str, body: str):
             bool(_trade_on_file)
             or mentions_trade
             or (has_vehicle_specifier and _bot_just_asked_trade_in)
-        )
+        ) and not _is_buy_side_message
         if _trade_active:
             history_for_trade = get_recent_messages(from_number, to_number, limit=14)
             trade_missing_parts = _trade_in_missing_parts(history_for_trade)
@@ -5885,11 +6286,13 @@ def _process_message(from_number: str, to_number: str, body: str):
                 body, re.I,
             ))
         )
-        if _looks_like_question and not mentions_financing and not _trade_active:
+        if (_looks_like_question or _is_buy_side_message or _early_question_signal) and not mentions_financing and not _trade_active:
             # Skip the catch-all and let _process_message continue to the LLM.
             # The pending appointment stays set so the LLM sees it via history
-            # and the next-turn flow still works.
-            pass  # fall through past the catch-all (handled below)
+            # and the next-turn flow still works. Fires for buy-side questions
+            # ("does the honda have 4wd"), question-signal phrases ("i have
+            # questions", "wait actually"), and self-corrections — so they
+            # don't get swallowed by the email-ask catch-all.
             _pending_skip_catchall = True
         else:
             _pending_skip_catchall = False
@@ -6236,6 +6639,46 @@ def _process_message(from_number: str, to_number: str, body: str):
         save_message(from_number, to_number, "assistant", reply_text)
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
+    if _is_price_breakdown_question(body):
+        fees = get_dealer_fees(to_number)
+        if fees["doc_fee"] > 0:
+            history      = get_recent_messages(from_number, to_number, limit=14)
+            exact_match  = _find_exact_year_make_match(body, inventory_rows)
+            anchor_match = _extract_car_from_last_bot_message(history, inventory_rows)
+            match = None
+            if exact_match:
+                match = exact_match
+            elif _body_mentions_car(body, inventory_rows):
+                history_text = " ".join((m.get("content") or "") for m in history[-6:])
+                appt_car     = confirmed_appt["car_desc"] if confirmed_appt else ""
+                search_ctx   = f"{history_text} {appt_car} {body}".strip()
+                matches      = find_inventory_matches(inventory_rows, search_ctx, top_k=1, current_msg=body)
+                if matches:
+                    match = matches[0]
+            elif anchor_match:
+                # Last bot message was about ONE specific vehicle - safe to anchor on it.
+                # _extract_car_from_last_bot_message returns None when the previous reply
+                # was a listing, so we don't accidentally pick the first car of a list.
+                match = anchor_match
+            if match:
+                breakdown = _format_price_breakdown(match, fees)
+                if breakdown:
+                    save_message(from_number, to_number, "assistant", breakdown)
+                    return _reply_twiml(breakdown, from_number, to_number, send_primer=new_customer)
+            # No vehicle in context (e.g. customer asked a generic fee/cost question
+            # right after a listing). Give a dealer-level fee answer instead of
+            # picking a random car from history.
+            doc_str = _fmt_money(fees["doc_fee"])
+            tt = fees["title_tag_fee"]
+            tt_part = f" There's also a {_fmt_money(tt)} title and tag processing fee." if tt > 0 else ""
+            reply_text = (
+                f"On top of the Internet Price, every vehicle has a {doc_str} doc fee."
+                f"{tt_part} Indiana sales tax also applies. "
+                "Want me to break down the total for a specific vehicle?"
+            )
+            save_message(from_number, to_number, "assistant", reply_text)
+            return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
     if _is_issue_question(body):
         history      = get_recent_messages(from_number, to_number, limit=14)
         history_text = " ".join((m.get("content") or "") for m in history[-6:])
@@ -6269,7 +6712,10 @@ def _process_message(from_number: str, to_number: str, body: str):
         history_text = " ".join((m.get("content") or "") for m in history[-6:])
         appt_car     = confirmed_appt["car_desc"] if confirmed_appt else ""
         search_ctx   = f"{history_text} {appt_car} {body}".strip()
-        if _body_mentions_car(body, inventory_rows):
+        exact_match  = _find_exact_year_make_match(body, inventory_rows)
+        if exact_match:
+            match = exact_match
+        elif _body_mentions_car(body, inventory_rows):
             matches = find_inventory_matches(inventory_rows, search_ctx, top_k=1, current_msg=body)
             match   = matches[0] if matches else _best_history_vehicle_match(inventory_rows, history_text)
         else:
@@ -6442,7 +6888,7 @@ def _process_message(from_number: str, to_number: str, body: str):
     # and occasionally including over-budget rows. Filter and format in code
     # so the listing is provably complete and accurate.
     if _min_p is not None or _max_p is not None:
-        reply_text = _format_price_listing(inventory_rows, _min_p, _max_p)
+        reply_text = _format_price_listing(inventory_rows, _min_p, _max_p, cars_only=_wants_cars_only(body))
         if reply_text:
             save_message(from_number, to_number, "assistant", reply_text)
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
@@ -6536,6 +6982,10 @@ def _process_message(from_number: str, to_number: str, body: str):
         body, re.I,
     ))
     _last_assistant_mentions_car = _body_mentions_car(last_assistant or "", inventory_rows)
+    # If the bot's last reply was about ONE specific vehicle (not a listing),
+    # the customer's info follow-up applies to that anchor even without pronouns
+    # or explicit make/model. Catches "what other information do you have".
+    _last_assistant_single_anchor = _extract_car_from_last_bot_message(history, inventory_rows) is not None
 
     _is_vehicle_info_q = (
         _is_general_info_question(body)
@@ -6547,6 +6997,7 @@ def _process_message(from_number: str, to_number: str, body: str):
     ) and (
         _body_mentions_car(body, inventory_rows)
         or (_uses_pronoun_for_vehicle and _last_assistant_mentions_car)
+        or _last_assistant_single_anchor
     )
 
     # Detect the "no more questions" follow-up: the bot just asked "Do you have
@@ -6559,11 +7010,46 @@ def _process_message(from_number: str, to_number: str, body: str):
         body.strip(), re.I,
     ))
 
+    # If this is a vehicle-info request and we can identify a single anchor vehicle,
+    # the code (not the LLM) will produce the essentials block (price/mileage/issues)
+    # using the smart-skip logic. The LLM is given a tighter prompt to write ONLY a
+    # short features blurb. This is reliable because the LLM was inconsistent about
+    # following the conditional skip rules when asked to handle essentials itself.
+    _info_anchor = None
+    if _is_vehicle_info_q:
+        _info_anchor = (
+            _find_exact_year_make_match(body, inventory_rows)
+            or _extract_car_from_last_bot_message(history, inventory_rows)
+        )
+        # Body names a car without enough specificity for exact match (e.g. "tell me
+        # about the corvette") AND no single-vehicle anchor in history — fall back
+        # to the fuzzy matcher on the body alone so we still get a deterministic
+        # essentials block instead of letting the LLM make everything up.
+        if not _info_anchor and _body_mentions_car(body, inventory_rows):
+            _fuzzy = find_inventory_matches(inventory_rows, body, top_k=1, current_msg=body)
+            if _fuzzy:
+                _info_anchor = _fuzzy[0]
+
     prompt   = build_prompt(dealer_row, inventory_rows, history, body, dealer_phone, confirmed_appt, customer_profile)
     if _is_list_q:
         prompt += "\n\n=== LISTING REQUEST ===\nThe customer is asking for a list of vehicles. You MAY list multiple vehicles on separate lines. Include year, make, model, and price for each. List ALL matching vehicles, not just a few."
-    if _is_vehicle_info_q:
-        prompt += "\n\n=== VEHICLE INFO REQUEST ===\nThe customer is asking for information about a specific vehicle. Give a brief, professional summary of the vehicle's key features (color, interior, engine, drivetrain, notable options) in 2-4 sentences. Do NOT push to schedule a visit. END the reply with exactly this sentence: \"Do you have any specific questions about it?\""
+    if _is_vehicle_info_q and _info_anchor:
+        prompt += (
+            "\n\n=== VEHICLE FEATURES BLURB ONLY ===\n"
+            f"The customer is asking about the {_vehicle_title(_info_anchor)}. "
+            "Write ONLY 1-2 short sentences describing notable features (color, interior, engine, drivetrain, notable options). "
+            "DO NOT mention price, mileage, known issues, or CARFAX — the system prepends those automatically and will duplicate any you write. "
+            "DO NOT push to schedule a visit. DO NOT add greetings or closings. "
+            "Start the FIRST sentence with 'It features...' or 'It comes with...' — do NOT repeat the year/make/model at the start, the system already named the vehicle. "
+            "Output the features sentences ONLY, nothing else."
+        )
+    elif _is_vehicle_info_q:
+        prompt += (
+            "\n\n=== VEHICLE INFO REQUEST ===\n"
+            "The customer is asking for information about a specific vehicle. Lead with price, mileage, and known-issues status, then add 1-2 sentences on key features. "
+            "Do NOT push to schedule a visit. "
+            "END the reply with exactly this sentence: \"Do you have any specific questions about it?\""
+        )
     if _bot_just_asked_for_questions and _is_no_more_questions:
         prompt += "\n\n=== READY TO SCHEDULE ===\nThe customer just confirmed they have no more questions about the vehicle. Acknowledge briefly in one short sentence, then ask if they would like to schedule a time to come see it. Keep the whole reply to 1-2 sentences."
 
@@ -6571,7 +7057,7 @@ def _process_message(from_number: str, to_number: str, body: str):
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=600 if _is_list_q else 300,
+            max_tokens=600 if _is_list_q else (450 if _is_vehicle_info_q else 300),
         )
         raw_reply = (resp.choices[0].message.content or "").strip()
     except Exception as e:
@@ -6582,6 +7068,25 @@ def _process_message(from_number: str, to_number: str, body: str):
         raw_reply = "Thank you for reaching out. How may I assist you with your vehicle search today?"
 
     reply_text, meta = extract_meta(raw_reply)
+
+    # Strip any URLs the LLM made up. Vehicle/page links only come from the
+    # deterministic link handler (_is_vehicle_link_question), which reads
+    # the real detail_url from inventory. The LLM has no way to know real URLs.
+    reply_text = _scrub_llm_urls(reply_text)
+
+    # For vehicle-info requests with a clear anchor, prepend the deterministic
+    # essentials block (the LLM was told to write features only) and append the
+    # closing question. This avoids relying on the LLM to follow the "skip
+    # already-stated essentials" rules — code does the skip logic instead.
+    if _is_vehicle_info_q and _info_anchor:
+        essentials = _format_vehicle_essentials(_info_anchor, last_assistant)
+        features_blurb = reply_text.strip()
+        closing = "Do you have any specific questions about it?"
+        pieces = [p for p in [essentials, features_blurb] if p]
+        # Don't double up the closing if the LLM already added it.
+        if closing.lower().rstrip("?") not in features_blurb.lower():
+            pieces.append(closing)
+        reply_text = " ".join(pieces).strip()
 
     if should_force_unknown_answer(reply_text):
         reply_text = build_unknown_answer(dealer_phone)
@@ -6761,6 +7266,7 @@ def widget_root():
             logo_url="",
             slug="",
             terms_url=PRIMER_TERMS_URL,
+            privacy_url=PRIMER_PRIVACY_URL,
             has_new_arrivals=False,
         )
     return (
@@ -6802,6 +7308,7 @@ def widget_for_dealer(slug):
         logo_url=branding["logo_url"],
         slug=branding["slug"],
         terms_url=PRIMER_TERMS_URL,
+        privacy_url=PRIMER_PRIVACY_URL,
         has_new_arrivals=has_new_arrivals,
     )
 
