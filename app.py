@@ -92,7 +92,8 @@ PRIMER_PRIVACY_URL = os.getenv(
 CAPABILITY_PRIMER = (
     "FYI - I can help with inventory, vehicles, financing, or scheduling a visit. "
     "By texting this number you agree to our Terms of Service. "
-    "Replies are AI-assisted. Reply MENU for options, STOP to opt out. "
+    "Replies are AI-assisted. Msg frequency varies, msg & data rates may apply. "
+    "Reply MENU for options, HELP for help, STOP to opt out. "
     f"Terms: {PRIMER_TERMS_URL}"
 )
 # Sent on a customer's FIRST message when that message triggers the menu/
@@ -100,7 +101,8 @@ CAPABILITY_PRIMER = (
 # capability primer would be redundant - just include the terms/consent piece.
 TERMS_ONLY_PRIMER = (
     "By texting this number you agree to our Terms of Service. "
-    "Replies are AI-assisted. Reply STOP to opt out anytime. "
+    "Replies are AI-assisted. Msg frequency varies, msg & data rates may apply. "
+    "Reply HELP for help, STOP to opt out anytime. "
     f"Terms: {PRIMER_TERMS_URL}"
 )
 
@@ -1830,12 +1832,22 @@ def _extract_price_range(body: str) -> tuple:
             return (min(lo, hi), max(lo, hi))
     max_p = None
     min_p = None
-    under_m = re.search(rf"\b(?:under|less than|below|cheaper than|max(?:imum)?|up to|no more than|<=?)\s+{_PRICE_TOKEN}", b)
-    if under_m:
-        max_p = _parse_price_token(under_m.group(1), under_m.group(2))
-    over_m = re.search(rf"\b(?:over|more than|above|at least|min(?:imum)?|>=?)\s+{_PRICE_TOKEN}", b)
-    if over_m:
-        min_p = _parse_price_token(over_m.group(1), over_m.group(2))
+    # Negated forms: "not under 20k" → min=20k, "not over 30k" → max=30k.
+    # Evaluated first so the plain regexes below don't capture them backwards.
+    neg_under_m = re.search(rf"\bnot\s+(?:under|less than|below|cheaper than)\s+{_PRICE_TOKEN}", b)
+    if neg_under_m:
+        min_p = _parse_price_token(neg_under_m.group(1), neg_under_m.group(2))
+    neg_over_m  = re.search(rf"\bnot\s+(?:over|more than|above)\s+{_PRICE_TOKEN}", b)
+    if neg_over_m:
+        max_p = _parse_price_token(neg_over_m.group(1), neg_over_m.group(2))
+    # Plain forms — skip matches that were already captured by a "not" prefix.
+    if min_p is None and max_p is None:
+        under_m = re.search(rf"(?<!not\s)\b(?:under|less than|below|cheaper than|max(?:imum)?|up to|no more than|<=?)\s+{_PRICE_TOKEN}", b)
+        if under_m:
+            max_p = _parse_price_token(under_m.group(1), under_m.group(2))
+        over_m = re.search(rf"(?<!not\s)\b(?:over|more than|above|at least|min(?:imum)?|>=?)\s+{_PRICE_TOKEN}", b)
+        if over_m:
+            min_p = _parse_price_token(over_m.group(1), over_m.group(2))
     return (min_p, max_p)
 
 
@@ -1913,16 +1925,187 @@ def _find_exact_year_make_match(body: str, rows: List[Dict[str, Any]]) -> Option
     return candidates[0]
 
 
+_RELATIVE_CHEAPER_RE = re.compile(
+    r"\b(?:cheaper(?:\s+than\s+(?:that|this|the\s+\w+|it))?|"
+    r"less\s+expensive(?:\s+than\s+(?:that|this|the\s+\w+|it))?|"
+    r"more\s+affordable|"
+    r"something\s+cheaper|anything\s+cheaper|anything\s+less\s+expensive|"
+    r"below\s+(?:that|that\s+price))\b",
+    re.I,
+)
+
+_RELATIVE_PRICIER_RE = re.compile(
+    r"\b(?:more\s+expensive(?:\s+than\s+(?:that|this|the\s+\w+|it))?|"
+    r"pricier(?:\s+than\s+(?:that|this|the\s+\w+|it))?|"
+    r"something\s+more\s+expensive|anything\s+more\s+expensive|"
+    r"higher[\s-]?(?:priced|end))\b",
+    re.I,
+)
+
+
+def _extract_relative_price_filter(body: str, history: List[Dict[str, Any]]) -> Tuple[Optional[int], Optional[int]]:
+    """Translate 'cheaper than that' or 'more expensive than that' into a (min_p,
+    max_p) filter, using the most recent price mentioned in history as the
+    anchor. Returns (None, None) when no relative qualifier or no anchor."""
+    if not body:
+        return (None, None)
+    is_cheaper = bool(_RELATIVE_CHEAPER_RE.search(body))
+    is_pricier = bool(_RELATIVE_PRICIER_RE.search(body))
+    if not (is_cheaper or is_pricier):
+        return (None, None)
+    if not history:
+        return (None, None)
+    ref_price = None
+    for msg in reversed(history):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content") or ""
+        prices = re.findall(r"\$\s*([\d,]+)", content)
+        if prices:
+            try:
+                ref_price = int(prices[0].replace(",", ""))
+                break
+            except ValueError:
+                continue
+    if ref_price is None:
+        return (None, None)
+    if is_cheaper:
+        return (None, ref_price - 1)
+    return (ref_price + 1, None)
+
+
+_RELATIVE_NEWER_RE = re.compile(
+    r"\b(?:not\s+(?:as|that|too)\s+old|newer(?:\s+than\s+(?:that|this|the\s+\w+|it))?|"
+    r"more\s+recent(?:\s+than\s+(?:that|this|the\s+\w+|it))?|"
+    r"less\s+old|fairly\s+new|something\s+newer|anything\s+newer|"
+    r"a\s+(?:bit\s+)?newer|(?:bit\s+)?more\s+modern)\b",
+    re.I,
+)
+
+
+def _extract_relative_year_floor(body: str, history: List[Dict[str, Any]]) -> Optional[int]:
+    """Translate relative qualifiers like 'not as old' or 'newer than that' into
+    a year floor by looking back at the most recent vehicle year mentioned in
+    history. Returns None when there's no qualifier or no reference year."""
+    if not body:
+        return None
+    if not _RELATIVE_NEWER_RE.search(body):
+        return None
+    # Explicit reference year in the body wins (e.g. "newer than 2015").
+    explicit = re.search(
+        r"\b(?:newer\s+than|after|past|since)\s+(?:the\s+)?(19\d{2}|20\d{2})\b",
+        body, re.I,
+    )
+    if explicit:
+        return int(explicit.group(1)) + 1
+    if not history:
+        return None
+    # Otherwise use the most recently mentioned (assistant) reference year — the
+    # vehicle the customer is comparing AGAINST. Pick the OLDEST year in that
+    # message so "not as old" raises the floor above the oldest one shown.
+    for msg in reversed(history):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content") or ""
+        years = re.findall(r"\b(19\d{2}|20\d{2})\b", content)
+        if years:
+            ref_year = min(int(y) for y in years)
+            return ref_year + 5
+    return None
+
+
+_EXCLUSION_NEGATION_RE = re.compile(
+    r"\b(?:not|except|besides|other\s+than|anything\s+but|excluding|"
+    r"don'?t\s+want|aside\s+from|no(?:\s+more)?)\s+"
+    r"(?:that\s+|the\s+|a\s+|an\s+|those\s+|these\s+|any\s+)?"
+    r"(?:cheap\s+|expensive\s+|old\s+|new\s+|small\s+|big\s+)?"
+    r"(?:[a-z]+\s+){0,2}([a-z][\w-]+)",
+    re.I,
+)
+
+
+def _extract_exclude_makes(body: str, rows: List[Dict[str, Any]]) -> List[str]:
+    """Identify makes the customer explicitly wants EXCLUDED ('not that jeep',
+    'anything but Honda', 'except Toyota'). Returns canonical inventory make
+    strings to filter out. Empty list when no negation pattern is found."""
+    if not body or not rows:
+        return []
+    b = body.lower()
+    inv_makes = {str(r.get("Make", "")).strip().lower() for r in rows if r.get("Make")}
+    first_to_full: Dict[str, str] = {}
+    for m in inv_makes:
+        if m:
+            first_to_full.setdefault(m.split()[0], m)
+    excludes: List[str] = []
+    for match in _EXCLUSION_NEGATION_RE.finditer(b):
+        token = match.group(1).lower()
+        full = first_to_full.get(token)
+        if full and full not in excludes:
+            excludes.append(full)
+    return excludes
+
+
+_SUPERLATIVE_PATTERNS = [
+    (r"\b(cheapest|least\s+expensive|lowest[\s-]?priced?)\b", ("price", True,  "cheapest")),
+    (r"\b(most\s+expensive|priciest|highest[\s-]?priced?)\b",  ("price", False, "most expensive")),
+    (r"\b(newest|most\s+recent|latest)\b",                     ("year",  False, "newest")),
+    (r"\b(oldest)\b",                                          ("year",  True,  "oldest")),
+    (r"\b(lowest\s+mileage|fewest\s+miles|least\s+miles|lowest\s+miles)\b",
+                                                               ("mileage", True,  "lowest-mileage")),
+    (r"\b(highest\s+mileage|most\s+miles|highest\s+miles)\b",
+                                                               ("mileage", False, "highest-mileage")),
+]
+
+
+def _extract_superlative_query(body: str):
+    """Return (sort_field, ascending, label) if the body uses a superlative
+    like 'cheapest', 'newest', 'lowest mileage'. None otherwise."""
+    if not body:
+        return None
+    b = body.lower()
+    for pat, info in _SUPERLATIVE_PATTERNS:
+        if re.search(pat, b):
+            return info
+    return None
+
+
+_BUDGET_INTENT_RE = re.compile(
+    r"\b(on\s+a\s+(?:tight\s+|low\s+|small\s+)?budget|tight\s+budget|low\s+budget|"
+    r"small\s+budget|budget[\s-]?friendly|anything\s+(?:cheap|affordable|inexpensive)|"
+    r"something\s+(?:cheap|affordable|inexpensive)|can'?t\s+afford\s+much|"
+    r"not\s+much\s+(?:money|to\s+spend)|don'?t\s+have\s+much\s+(?:money|to\s+spend)|"
+    r"(?:affordable|cheap|inexpensive)\s+(?:car|vehicle|option|"
+    r"suvs?|trucks?|pickups?|sedans?|vans?|minivans?|coupes?|"
+    r"hatchbacks?|wagons?|convertibles?|crossovers?))\b",
+    re.I,
+)
+
+
+def _is_budget_intent(body: str) -> bool:
+    """Vague budget intent ('on a budget', 'anything affordable') with no specific $ amount.
+    Returns False when a price filter is in the message — those go through the price handler."""
+    if not body:
+        return False
+    if re.search(r"\b(under|less\s+than|below|max(?:imum)?|up\s+to|"
+                 r"between|over|more\s+than|above|min(?:imum)?)\s*\$?\s*\d", body, re.I):
+        return False
+    return bool(_BUDGET_INTENT_RE.search(body))
+
+
 def _wants_cars_only(body: str) -> bool:
     """True when the customer explicitly asks for 'car' / 'cars' (intent: exclude motorcycles)."""
     return bool(body) and bool(re.search(r"\bcars?\b", body, re.I))
 
 
-def _format_price_listing(rows: List[Dict[str, Any]], min_p: Optional[int], max_p: Optional[int], cars_only: bool = False) -> str:
+def _format_price_listing(rows: List[Dict[str, Any]], min_p: Optional[int], max_p: Optional[int],
+                          cars_only: bool = False, exclude_makes: Optional[List[str]] = None) -> str:
     """Deterministic, complete listing of inventory rows that match a price filter."""
+    exclude_set = {m.lower() for m in (exclude_makes or [])}
     matching = []
     for r in rows:
         if cars_only and _is_motorcycle(r):
+            continue
+        if exclude_set and str(r.get("Make", "")).strip().lower() in exclude_set:
             continue
         p = _row_price_int(r)
         if p <= 0:
@@ -2456,6 +2639,12 @@ def _extract_make_filters(body: str, rows: List[Dict[str, Any]]) -> List[str]:
                 seen.add(make)
 
     hits.sort(key=lambda t: t[0])
+    # Drop any makes the customer explicitly negated ("not that jeep",
+    # "anything but Honda"). Otherwise "I want something under 8k but not that
+    # jeep" would still filter TO Jeeps.
+    excluded = set(_extract_exclude_makes(body, rows))
+    if excluded:
+        return [c for _, c in hits if c not in excluded]
     return [c for _, c in hits]
 
 
@@ -2590,6 +2779,177 @@ def _format_make_listing(rows: List[Dict[str, Any]], make_name,
     lines.append("")
     if len(matching) > LIST_LIMIT:
         lines.append(f"...and {len(matching) - LIST_LIMIT} more. Tell me a price range, year, or anything else and I'll narrow it down.")
+    else:
+        lines.append("Would you like more details on any of these, or to schedule a visit?")
+    return "\n".join(lines)
+
+
+def _format_superlative_listing(rows: List[Dict[str, Any]], body: str,
+                                 field: str, ascending: bool, label: str) -> Optional[str]:
+    """Return a deterministic answer for superlative queries like 'cheapest SUV',
+    'newest truck', 'lowest mileage Toyota'. Respects body_type / fuel /
+    drivetrain / make filters extracted from the body. Returns None when no
+    candidate has a valid value for the sort field."""
+    body_type = _extract_body_type(body)
+    fuel = _extract_fuel_type(body)
+    drive = _extract_drivetrain(body)
+    cars_only = _wants_cars_only(body)
+    # When the customer says "car" (singular or plural) but doesn't name a
+    # specific body type, treat it as "passenger car" — exclude trucks, SUVs,
+    # vans, and motorcycles. EXCEPT when the customer signals broad scope with
+    # phrases like "in general", "overall", "any kind", "regardless".
+    _broad_scope = bool(re.search(
+        r"\b(in\s+general|overall|of\s+any\s+(?:kind|type)|any\s+(?:kind|type)|regardless)\b",
+        body, re.I,
+    ))
+    _passenger_car_only = cars_only and body_type is None and not _broad_scope
+    b_lower = body.lower()
+    # Direct make detection — _extract_make_filters needs a "listing intent" word
+    # like "any" or "show me", which superlative queries usually don't have
+    # ("cheapest Honda", "newest Toyota"). Scan inventory makes against the body
+    # directly so we still filter by make when it's mentioned.
+    makes = set()
+    for r in rows:
+        m_norm = str(r.get("Make", "")).strip().lower()
+        if not m_norm:
+            continue
+        first = m_norm.split()[0]
+        if len(first) >= 3 and re.search(rf"\b{re.escape(first)}\b", b_lower):
+            makes.add(m_norm)
+
+    # Pick up any price filters too ("cheapest SUV not under 20k", "newest
+    # truck under 30k"). The superlative still controls which row wins; the
+    # price filter just narrows the pool first.
+    s_min_p, s_max_p = _extract_price_range(body)
+
+    candidates = []
+    for r in rows:
+        if cars_only and _is_motorcycle(r):
+            continue
+        if _passenger_car_only:
+            rtrim = str(r.get("Trim", "")).lower()
+            if re.search(r"\b(suv|truck|van|crossover|crew\s*cab|pickup)\b", rtrim):
+                continue
+        if not _row_matches_features(r, body_type, fuel, drive):
+            continue
+        if makes:
+            rmake = str(r.get("Make", "")).strip().lower()
+            if rmake not in makes:
+                continue
+        rp = _row_price_int(r)
+        if s_min_p is not None and rp < s_min_p:
+            continue
+        if s_max_p is not None and rp > s_max_p:
+            continue
+        if field == "price":
+            v = _row_price_int(r)
+            if v <= 0:
+                continue
+        elif field == "year":
+            try:
+                v = int(str(r.get("Year", "")).strip())
+            except (ValueError, TypeError):
+                continue
+        elif field == "mileage":
+            mi = re.sub(r"[^\d]", "", str(r.get("Mileage", "")))
+            if not mi:
+                continue
+            try:
+                v = int(mi)
+            except ValueError:
+                continue
+        else:
+            continue
+        candidates.append((v, r))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0], reverse=not ascending)
+    top = candidates[0][1]
+    year_s = str(top.get("Year", "")).strip()
+    make_s = str(top.get("Make", "")).strip()
+    model_s = str(top.get("Model", "")).strip()
+    title = " ".join(s for s in [year_s, make_s, model_s] if s)
+    p = _row_price_int(top)
+    price_str = f"${p:,}" if p > 0 else "Call for price"
+    mileage_str = ""
+    mi = re.sub(r"[^\d]", "", str(top.get("Mileage", "")))
+    if mi:
+        try:
+            mileage_str = f"{int(mi):,} miles"
+        except ValueError:
+            pass
+
+    scope = ""
+    if body_type:
+        scope = " " + _BODY_TYPE_LABEL.get(body_type, body_type + "s").rstrip("s")
+    header_phrases = {
+        "cheapest":         f"Our cheapest{scope}",
+        "most expensive":   f"Our most expensive{scope}",
+        "newest":           f"Our newest{scope}",
+        "oldest":           f"Our oldest{scope}",
+        "lowest-mileage":   f"Our lowest-mileage{scope}",
+        "highest-mileage":  f"Our highest-mileage{scope}",
+    }
+    header = header_phrases.get(label, f"Top match{scope}")
+    detail = f"the {title} at {price_str}"
+    if mileage_str and field != "price":
+        detail += f" with {mileage_str}"
+    elif mileage_str:
+        detail += f" ({mileage_str})"
+    return f"{header} is {detail}. Want more details or to schedule a visit?"
+
+
+def _format_budget_listing(rows: List[Dict[str, Any]], body: str,
+                            year_min: Optional[int] = None) -> Optional[str]:
+    """Return the cheapest 5 vehicles matching any body_type/make hint from
+    the body. Used for vague budget queries like 'on a budget', 'anything cheap'.
+    year_min lets relative qualifiers ('not as old') raise the year floor."""
+    body_type = _extract_body_type(body)
+    cars_only = _wants_cars_only(body) or body_type is None
+    makes = _extract_make_filters(body, rows) or []
+    excludes = {m.lower() for m in _extract_exclude_makes(body, rows)}
+    candidates = []
+    for r in rows:
+        if cars_only and _is_motorcycle(r):
+            continue
+        if body_type and not _row_matches_body_type(r, body_type):
+            continue
+        if makes:
+            rmake = str(r.get("Make", "")).strip().lower()
+            if not any(rmake == t or rmake.startswith(t + " ") or rmake.startswith(t + "-") for t in makes):
+                continue
+        if excludes and str(r.get("Make", "")).strip().lower() in excludes:
+            continue
+        if year_min is not None:
+            try:
+                if int(str(r.get("Year", "")).strip()) < year_min:
+                    continue
+            except (ValueError, TypeError):
+                continue
+        p = _row_price_int(r)
+        if p <= 0:
+            continue
+        candidates.append((p, r))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0])
+    LIST_LIMIT = 5
+    picks = candidates[:LIST_LIMIT]
+    scope = ""
+    if body_type:
+        scope = " " + _BODY_TYPE_LABEL.get(body_type, body_type + "s")
+    header = f"Here are our most affordable{scope}:"
+    lines = [header]
+    for p, r in picks:
+        year_s = str(r.get("Year", "")).strip()
+        make_s = str(r.get("Make", "")).strip()
+        model_s = str(r.get("Model", "")).strip()
+        title = " ".join(s for s in [year_s, make_s, model_s] if s)
+        lines.append(f"- {title}: ${p:,}")
+    lines.append("")
+    if len(candidates) > len(picks):
+        lines.append(f"...and {len(candidates) - len(picks)} more. Tell me a budget or feature and I'll narrow it down.")
     else:
         lines.append("Would you like more details on any of these, or to schedule a visit?")
     return "\n".join(lines)
@@ -4785,6 +5145,7 @@ If a customer asks something else not covered by the data below: "I don't have t
 === STRICT FORBIDDEN BEHAVIORS ===
 - NEVER include URLs, hyperlinks, or markdown links in your reply. Do NOT type "https://", "www.", or "[text](link)". If a customer asks for a link to a vehicle's listing, simply say you'll send the listing — the system sends the real URL separately. Any URL you write is a hallucination because you do not have access to real URLs.
 - NEVER offer to "discuss the trade-in process," "walk through the trade-in process," "explain the trade-in process," or any variant. The trade-in flow is handled by the system, which collects vehicle details (year/make/model, mileage, title status, condition) and rolls them into the visit. When a customer mentions a trade, briefly acknowledge it and let the system continue — do not pitch a separate "process" conversation.
+- When the customer uses words like "that price", "that price range", "that feature", "that one", "similar", "another like that" — they're referring to the SPECIFIC vehicle you mentioned in your IMMEDIATELY PREVIOUS reply, NOT some other vehicle from earlier history. If your last reply named the Prius at $4,769, "that price range" means around $4,769, not any other price seen earlier. Anchor every relative pronoun to your most recent reply.
 - NEVER invent a phone number, address, or any fact not in the data.
 - NEVER ask about monthly payment amounts.
 - For service/detailing pricing, direct them to call: "For pricing on that, I'd recommend giving us a call at {dealer_phone} - they'll be able to give you an accurate quote."
@@ -6770,7 +7131,12 @@ def _process_message(from_number: str, to_number: str, body: str):
     ))
     _has_category_filter = _has_category_filter and not _property_question_start and _list_phrasing
 
-    if (_is_avail_q or _is_vehicle_detail_question(body)) and not _has_category_filter:
+    # Superlative queries ("cheapest truck", "newest SUV") look like vehicle-detail
+    # questions because they mention a body type, but they're not asking about a
+    # specific vehicle — they're asking the dealer to pick one. Skip this handler
+    # so the message routes to the superlative listing at PRIORITY 4.62.
+    _is_superlative_query = bool(_extract_superlative_query(body))
+    if (_is_avail_q or _is_vehicle_detail_question(body)) and not _has_category_filter and not _is_superlative_query:
         history  = get_recent_messages(from_number, to_number, limit=14)
         appt_car = confirmed_appt["car_desc"] if confirmed_appt else ""
 
@@ -6811,6 +7177,32 @@ def _process_message(from_number: str, to_number: str, body: str):
             save_message(from_number, to_number, "assistant", reply_text)
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
         # No vehicle identified or wrong make matched - fall through to AI
+
+    # ── PRIORITY 4.62: Superlative inventory queries ─────────────────────
+    # "cheapest SUV", "newest truck", "lowest mileage Toyota", etc. Pick the
+    # single best match from inventory by the appropriate sort field. Fires
+    # before the body-type / make / price listings so "cheapest SUV" returns
+    # ONE specific cheapest SUV, not the whole SUV list.
+    _superlative = _extract_superlative_query(body)
+    if _superlative:
+        _sf_field, _sf_asc, _sf_label = _superlative
+        reply_text = _format_superlative_listing(inventory_rows, body, _sf_field, _sf_asc, _sf_label)
+        if reply_text:
+            save_message(from_number, to_number, "assistant", reply_text)
+            return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
+    # ── PRIORITY 4.63: Vague budget intent ───────────────────────────────
+    # "I'm on a budget", "anything affordable", "something cheap". No specific
+    # dollar amount, so show the cheapest 5 (filtered by body type / make if
+    # the customer mentioned one). Pricing queries with a specific number go
+    # through PRIORITY 4.75 instead.
+    if _is_budget_intent(body):
+        _budget_history = get_recent_messages(from_number, to_number, limit=10)
+        _budget_year_floor = _extract_relative_year_floor(body, _budget_history)
+        reply_text = _format_budget_listing(inventory_rows, body, year_min=_budget_year_floor)
+        if reply_text:
+            save_message(from_number, to_number, "assistant", reply_text)
+            return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
     # ── PRIORITY 4.65: Deterministic make-filtered listing ──────────────
     # The LLM was dropping vehicles when asked "any Toyotas?" - it would name
@@ -6874,6 +7266,15 @@ def _process_message(from_number: str, to_number: str, body: str):
     if _body_f or _fuel_f or _drive_f:
         _year_f_match = re.search(r"\b(19|20)\d{2}\b", body)
         _year_f = _year_f_match.group(0) if _year_f_match else None
+        # Apply relative price ('a little more expensive than that') when the
+        # body has both a body-type filter AND a relative qualifier. Anchors to
+        # the most recent price in history.
+        if _min_p is None and _max_p is None:
+            _rel_min_f, _rel_max_f = _extract_relative_price_filter(
+                body, get_recent_messages(from_number, to_number, limit=10)
+            )
+            if _rel_min_f is not None or _rel_max_f is not None:
+                _min_p, _max_p = _rel_min_f, _rel_max_f
         reply_text = _format_feature_listing(
             inventory_rows,
             body_type=_body_f, fuel_type=_fuel_f, drivetrain=_drive_f,
@@ -6888,7 +7289,28 @@ def _process_message(from_number: str, to_number: str, body: str):
     # and occasionally including over-budget rows. Filter and format in code
     # so the listing is provably complete and accurate.
     if _min_p is not None or _max_p is not None:
-        reply_text = _format_price_listing(inventory_rows, _min_p, _max_p, cars_only=_wants_cars_only(body))
+        reply_text = _format_price_listing(
+            inventory_rows, _min_p, _max_p,
+            cars_only=_wants_cars_only(body),
+            exclude_makes=_extract_exclude_makes(body, inventory_rows),
+        )
+        if reply_text:
+            save_message(from_number, to_number, "assistant", reply_text)
+            return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
+    # ── PRIORITY 4.74: Relative price filter ─────────────────────────────
+    # "anything cheaper than that", "something more expensive", "less
+    # expensive than the Prius". Anchors to the most recently mentioned
+    # price in history and routes through the price listing.
+    _rel_min_p, _rel_max_p = _extract_relative_price_filter(
+        body, get_recent_messages(from_number, to_number, limit=10)
+    )
+    if _rel_min_p is not None or _rel_max_p is not None:
+        reply_text = _format_price_listing(
+            inventory_rows, _rel_min_p, _rel_max_p,
+            cars_only=_wants_cars_only(body),
+            exclude_makes=_extract_exclude_makes(body, inventory_rows),
+        )
         if reply_text:
             save_message(from_number, to_number, "assistant", reply_text)
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
@@ -7017,18 +7439,18 @@ def _process_message(from_number: str, to_number: str, body: str):
     # following the conditional skip rules when asked to handle essentials itself.
     _info_anchor = None
     if _is_vehicle_info_q:
-        _info_anchor = (
-            _find_exact_year_make_match(body, inventory_rows)
-            or _extract_car_from_last_bot_message(history, inventory_rows)
-        )
-        # Body names a car without enough specificity for exact match (e.g. "tell me
-        # about the corvette") AND no single-vehicle anchor in history — fall back
-        # to the fuzzy matcher on the body alone so we still get a deterministic
-        # essentials block instead of letting the LLM make everything up.
+        # Resolution order matters: an EXPLICIT vehicle reference in the body
+        # always wins over a sticky anchor from the prior reply. Customers say
+        # "what about the nissan rogue" mid-conversation about a different car,
+        # and we don't want the prior anchor (the Mini Cooper) to override that.
+        _info_anchor = _find_exact_year_make_match(body, inventory_rows)
         if not _info_anchor and _body_mentions_car(body, inventory_rows):
             _fuzzy = find_inventory_matches(inventory_rows, body, top_k=1, current_msg=body)
             if _fuzzy:
                 _info_anchor = _fuzzy[0]
+        if not _info_anchor:
+            # No explicit reference — fall back to the prior single-vehicle anchor.
+            _info_anchor = _extract_car_from_last_bot_message(history, inventory_rows)
 
     prompt   = build_prompt(dealer_row, inventory_rows, history, body, dealer_phone, confirmed_appt, customer_profile)
     if _is_list_q:
@@ -7442,7 +7864,8 @@ def widget_welcome():
         f"Hi, my name is Dave with {dealer_name}. I can help with inventory, "
         "vehicles, financing, and scheduling a visit — or type MENU for more options.\n\n"
         f"By communicating with our assistant, you agree to our [terms]({PRIMER_TERMS_URL}). "
-        "Reply STOP to opt out anytime."
+        "If you receive and respond to SMS follow-ups from the dealership, msg frequency varies and msg & data rates may apply. "
+        "Reply HELP for help, STOP to opt out anytime."
     )
     welcome_followup = "How can I help you?"
 
