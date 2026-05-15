@@ -111,6 +111,11 @@ TERMS_ONLY_PRIMER = (
 # =========================
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
+_log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.log")
+_file_handler = logging.FileHandler(_log_file_path, mode="a", encoding="utf-8")
+_file_handler.setLevel(logging.INFO)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logging.getLogger().addHandler(_file_handler)
 openai_client = OpenAI()
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -1756,7 +1761,18 @@ def _body_mentions_car(body: str, rows: List[Dict[str, Any]]) -> bool:
         # full string never matches when the customer types just the nameplate.
         # 2-char tokens are accepted only when they mix letters and digits ("X7", "Q5",
         # "M3") so common English words ("to", "is", "of") never trigger a false match.
+        # Body-type / vehicle-class words appear inside the model field
+        # (e.g. "Camry Se 4-Door Sedan") but are NOT unique model identifiers.
+        # Without this exclusion, customer phrases like "out the door" or
+        # "any sedans" falsely match every row whose model contains those words.
+        _BODY_TYPE_TOKENS = {
+            "door", "sedan", "coupe", "wagon", "hatchback", "convertible",
+            "crossover", "minivan", "suv", "truck", "van", "pickup",
+            "cabriolet", "roadster", "fastback",
+        }
         for tok in re.sub(r"[^a-z0-9]", " ", model).split():
+            if tok in _BODY_TYPE_TOKENS:
+                continue
             if tok in b_words and (
                 len(tok) >= 3
                 or (len(tok) == 2 and any(c.isdigit() for c in tok) and any(c.isalpha() for c in tok))
@@ -1900,6 +1916,12 @@ def _find_exact_year_make_match(body: str, rows: List[Dict[str, Any]]) -> Option
     if not year_m:
         return None
     year = year_m.group(0)
+    # Strip hyphens from body and model tokens so the customer's "f250"
+    # matches inventory's "f-250" (and "cr-v" matches "crv", "rx-350" matches
+    # "rx350", etc.). Without this, hyphenated model nameplates silently fall
+    # through to the fuzzy matcher, which sometimes picks a different year of
+    # the same model (e.g. customer asks about 2008 F-250, fuzzy picks 2010).
+    b_nohyphen = b.replace("-", "")
     candidates: List[Dict[str, Any]] = []
     for r in rows:
         if str(r.get("Year", "")).strip() != year:
@@ -1908,20 +1930,33 @@ def _find_exact_year_make_match(body: str, rows: List[Dict[str, Any]]) -> Option
         model_lower = str(r.get("Model", "")).strip().lower()
         make_first = make_lower.split()[0] if make_lower else ""
         model_first = model_lower.split()[0] if model_lower else ""
-        make_hit  = bool(make_first)  and re.search(rf"\b{re.escape(make_first)}\b", b)
-        model_hit = bool(model_first) and re.search(rf"\b{re.escape(model_first)}\b", b)
+        make_first_squash = make_first.replace("-", "")
+        model_first_squash = model_first.replace("-", "")
+        make_hit = bool(make_first) and (
+            re.search(rf"\b{re.escape(make_first)}\b", b)
+            or (make_first_squash and re.search(rf"\b{re.escape(make_first_squash)}\b", b_nohyphen))
+        )
+        model_hit = bool(model_first) and (
+            re.search(rf"\b{re.escape(model_first)}\b", b)
+            or (model_first_squash and re.search(rf"\b{re.escape(model_first_squash)}\b", b_nohyphen))
+        )
         if make_hit or model_hit:
             candidates.append(r)
     if not candidates:
         return None
     if len(candidates) == 1:
         return candidates[0]
-    # Multiple rows match year+make (e.g. two 2019 RAMs). Prefer one whose model
-    # word ALSO appears in the body, otherwise return the first.
+    # Multiple rows match year+make (e.g. two 2019 RAMs, or two 2008 F-250
+    # trims). Prefer one whose secondary model/trim token ALSO appears in
+    # the body. Same hyphen-strip handling so "xlt" / "x-l" / "ex-l" match.
     for r in candidates:
-        model_tokens = [t for t in str(r.get("Model", "")).strip().lower().split() if len(t) >= 2]
-        if any(re.search(rf"\b{re.escape(t)}\b", b) for t in model_tokens):
-            return r
+        model_full = str(r.get("Model", "")).strip().lower()
+        trim_full = str(r.get("Trim", "")).strip().lower()
+        secondary_tokens = [t for t in (model_full.split()[1:] + trim_full.split()) if len(t) >= 2]
+        for t in secondary_tokens:
+            t_squash = t.replace("-", "")
+            if re.search(rf"\b{re.escape(t)}\b", b) or (t_squash and re.search(rf"\b{re.escape(t_squash)}\b", b_nohyphen)):
+                return r
     return candidates[0]
 
 
@@ -2159,6 +2194,21 @@ def _format_price_listing(rows: List[Dict[str, Any]], min_p: Optional[int], max_
 # filters the LLM was either hallucinating or dropping cars from the list.
 
 _BODY_TYPE_QUERY = {
+    # IMPORTANT: "commercial" must come BEFORE "truck" and "van" because dict
+    # iteration is insertion-ordered, and we want a "box truck" / "cargo van"
+    # query to match "commercial" instead of falling into the broader truck/van
+    # buckets. Otherwise commercial vehicles get mixed with consumer pickups.
+    "commercial": (
+        r"\b("
+        r"commercial(?:\s+(?:vehicles?|trucks?|vans?))?|"
+        r"box[\s-]?trucks?|box[\s-]?vans?|cube[\s-]?trucks?|cube[\s-]?vans?|"
+        r"cargo[\s-]?vans?|cargo[\s-]?trucks?|step[\s-]?vans?|"
+        r"work[\s-]?trucks?|work[\s-]?vans?|"
+        r"delivery[\s-]?trucks?|delivery[\s-]?vans?|"
+        r"fleet[\s-]?vehicles?|cutaways?|stake[\s-]?beds?|flatbeds?|"
+        r"dump[\s-]?trucks?|tow[\s-]?trucks?"
+        r")\b"
+    ),
     "truck": r"\b(trucks?|pickups?(?:\s+trucks?)?)\b",
     "suv":   r"\b(suvs?|crossovers?)\b",
     "sedan": r"\b(sedans?)\b",
@@ -2168,6 +2218,91 @@ _BODY_TYPE_QUERY = {
     "wagon":       r"\b(wagons?)\b",
     "convertible": r"\b(convertibles?|drop[- ]?tops?)\b",
 }
+
+
+# Always-commercial makes: any row with these makes is a commercial vehicle
+# regardless of model. Hino, Freightliner, etc. don't make consumer vehicles.
+_COMMERCIAL_MAKES = {
+    "hino", "freightliner", "international", "mack", "peterbilt", "kenworth",
+}
+# Commercial-specific model name fragments. Used in conjunction with any make.
+# Catches commercial Isuzu (NPR/NQR/FRR/FTR), Mitsubishi Fuso, and bodies-only
+# rows (e.g. a Ford F-450 cutaway or Chevy Express cargo van).
+# Body-type fragments (apply to any make)
+_COMMERCIAL_BODY_HINTS = [
+    "box truck", "box van", "cube truck", "cube van", "cargo van",
+    "step van", "cutaway", "stake bed", "flatbed", "dump truck",
+    "tow truck", "delivery van", "delivery truck",
+    "work van", "work truck", "chassis cab",
+]
+# Specific commercial-only model names. Listed lowercase, matched with word
+# boundaries so e.g. "Express" alone (Chevy commercial van) and "ProMaster"
+# (Ram commercial van) get tagged. Ford F-450 and above are heavy-duty
+# commercial chassis; Silverado 4500/5500/6500 likewise.
+_COMMERCIAL_MODEL_NAMES = [
+    # Isuzu commercial line
+    "npr", "nqr", "nrr", "frr", "ftr", "fxr",
+    # Mitsubishi Fuso (the "Fuso" name is the signal)
+    "fuso",
+    # Ford commercial vans / heavy-duty chassis
+    "e-150", "e150", "e-250", "e250", "e-350", "e350", "e-450", "e450", "e-series",
+    "f-450", "f450", "f-550", "f550", "f-650", "f650", "f-750", "f750",
+    "transit connect", "transit cargo", "transit chassis",
+    "transit 150", "transit 250", "transit 350",
+    # Nissan commercial van line (NV)
+    "nv200", "nv1500", "nv2500", "nv3500",
+    # Chevy / GMC commercial
+    "express cargo", "express van", "express 2500", "express 3500",
+    "low cab forward", "lcf",
+    "silverado 4500", "silverado 5500", "silverado 6500",
+    "savana cargo", "savana 2500", "savana 3500",
+    # Ram commercial
+    "promaster",
+    # Mercedes / Freightliner Sprinter (commercial van)
+    "sprinter",
+]
+# Combined list used by _is_commercial_row. Body hints are general phrases;
+# model names are exact-ish substrings that mark a specific commercial unit.
+_COMMERCIAL_MODEL_HINTS = _COMMERCIAL_BODY_HINTS + _COMMERCIAL_MODEL_NAMES
+
+
+def _commercial_subtype_prefix(body: str) -> str:
+    """When the customer asked for a specific commercial sub-type (box truck,
+    cargo van, work truck, cutaway, etc.) rather than generic "commercial",
+    return a one-line disclaimer letting them know we group those together.
+    Empty string when the customer used the generic "commercial" label or
+    didn't use a sub-type at all."""
+    if not body:
+        return ""
+    if re.search(
+        r"\b(box[\s-]?trucks?|box[\s-]?vans?|cube[\s-]?trucks?|cube[\s-]?vans?|"
+        r"cargo[\s-]?vans?|cargo[\s-]?trucks?|step[\s-]?vans?|"
+        r"work[\s-]?trucks?|work[\s-]?vans?|"
+        r"delivery[\s-]?trucks?|delivery[\s-]?vans?|"
+        r"cutaways?|stake[\s-]?beds?|flatbeds?|"
+        r"dump[\s-]?trucks?|tow[\s-]?trucks?)\b",
+        body, re.I,
+    ):
+        return ("Just a heads up — we group box trucks, cargo vans, work trucks, "
+                "and similar units together. ")
+    return ""
+
+
+def _is_commercial_row(r: Dict[str, Any]) -> bool:
+    """Return True if the inventory row is a commercial vehicle (box truck,
+    cargo van, cutaway, etc.) — NOT a consumer pickup or minivan.
+
+    Only inspects Model + Trim, NOT Description. Description prose ("perfect
+    work truck for contractors", "spacious cargo area") was triggering false
+    positives on consumer vehicles like the Hyundai Santa Cruz and Santa Fe."""
+    make = str(r.get("Make", "")).strip().lower()
+    if make in _COMMERCIAL_MAKES:
+        return True
+    haystack = (
+        str(r.get("Model", "")) + " " +
+        str(r.get("Trim", ""))
+    ).lower()
+    return any(hint in haystack for hint in _COMMERCIAL_MODEL_HINTS)
 
 _FUEL_TYPE_QUERY = {
     "diesel":   r"\b(diesel)\b",
@@ -2266,6 +2401,9 @@ _MODEL_BODY_TYPE_HINTS: Dict[str, List[str]] = {
         "mazda3 sedan", "mazda6", "legacy", "impreza sedan",
         # Mitsubishi / Saab / Tesla
         "lancer", "galant", "mirage", "9-3", "9-5", "model s", "model 3",
+        # Recent EVs and additions (post-2020)
+        "lucid air", "polestar 2", "ioniq 6", "i4", "i5", "i7", "e-tron gt",
+        "crown", "mirai", "ct4",
     ],
     "suv": [
         # Honda / Acura
@@ -2316,6 +2454,11 @@ _MODEL_BODY_TYPE_HINTS: Dict[str, List[str]] = {
         # Tesla / Jaguar / Maserati / Bentley / Lambo / Porsche
         "model x", "model y", "f-pace", "e-pace", "i-pace", "levante",
         "bentayga", "urus",
+        # Recent EVs and additions (post-2020)
+        "r1s", "envista", "grand highlander", "ioniq 5", "ev9", "ev6", "gv60",
+        "ix", "ix1", "ix3", "ix5", "bz4x", "ariya", "solterra",
+        "grand wagoneer", "wagoneer", "mach-e", "mache", "bronco sport",
+        "lyriq",
     ],
     "truck": [
         # Ford
@@ -2337,6 +2480,8 @@ _MODEL_BODY_TYPE_HINTS: Dict[str, List[str]] = {
         "mark lt",
         # Commercial / box trucks
         "hino ", "npr", "nqr", "international 4",
+        # Recent EV trucks
+        "r1t", "cybertruck",
     ],
     "van": [
         # Minivans
@@ -2347,6 +2492,8 @@ _MODEL_BODY_TYPE_HINTS: Dict[str, List[str]] = {
         "transit", "e-150", "e-250", "e-350", "e150", "e250", "e350",
         "sprinter", "metris", "nv200", "nv1500", "nv2500", "nv3500",
         "express", "astro", "savana", "promaster", "promaster city",
+        # Recent additions
+        "id buzz", "id.buzz", "voyager",
     ],
     "coupe": [
         "camaro", "corvette", "challenger", "mustang", "350z", "370z",
@@ -2364,10 +2511,14 @@ _MODEL_BODY_TYPE_HINTS: Dict[str, List[str]] = {
         "rio hatch", "soul", "forte hatch",
         "cooper", "hardtop", "clubman", "versa note", "leaf", "i3",
         "sonic hatch", "aveo hatch",
+        # Older / less common hatchbacks
+        "yaris hatch", "matrix", "vibe",
     ],
     "wagon": [
         "v60", "v70", "v90", "sportwagen", "allroad", "a4 avant",
         "a6 avant", "outback", "pt cruiser",
+        # Performance wagons
+        "rs4 avant", "rs6 avant", "magnum",
     ],
     "convertible": [
         "miata", "mx-5", "z3", "z4", "z8", "boxster", "eos", "beetle convertible",
@@ -2406,6 +2557,17 @@ def _model_hint_matches(model_field: str, body_type: str) -> bool:
 def _row_matches_body_type(r: Dict[str, Any], body_type: str) -> bool:
     if not body_type:
         return True
+    # Commercial bucket: ONLY commercial vehicles (Hino, box trucks, cargo
+    # vans, cutaways, etc.) match. Consumer pickups don't.
+    if body_type == "commercial":
+        return _is_commercial_row(r)
+    # Trucks: exclude commercial vehicles so a customer asking for "trucks"
+    # doesn't get a Hino mixed in with their F-150s. Vans are NOT excluded —
+    # a Ram Promaster, Ford Transit, Sprinter etc. are still vans regardless
+    # of work/cargo configuration, and customers asking "what vans do you
+    # have?" want to see them.
+    if body_type == "truck" and _is_commercial_row(r):
+        return False
     h = _row_haystack(r)
     aliases = {
         "truck": ["truck", "pickup"],
@@ -2422,6 +2584,34 @@ def _row_matches_body_type(r: Dict[str, Any], body_type: str) -> bool:
     # that mentions "sedan-like ride").
     if any(re.search(r"\b" + re.escape(a) + r"\b", h) for a in aliases):
         return True
+    # If the haystack already labels the row with a STRONGLY CONFLICTING
+    # body-type word (e.g. "4-Door Sedan" for an SUV query), don't speculate
+    # via short model-name hints. Without this guard, "Sonata GLS" (sedan
+    # trim) matches the SUV hint "gls" (Mercedes GLS-class) and ends up in
+    # SUV listings.
+    #
+    # NOTE: "wagon" is intentionally NOT a strong excluder for SUV queries —
+    # some compact crossovers (Nissan Rogue Sport, Subaru Crosstrek) get
+    # tagged "Wagon" by dealer feeds even though they're marketed as SUVs.
+    # Keeping wagon out of the SUV excluder set lets the model-hint fallback
+    # still catch those.
+    # "wagon" is intentionally NOT a strong excluder for SUV — many compact
+    # crossovers (Rogue Sport, Crosstrek, Outlander Sport, Venue) get tagged
+    # "Wagon" by dealer feeds even though they're SUVs, and customers asking
+    # for SUVs DO want to see them.
+    _STRONG_EXCLUDERS = {
+        "suv":         {"sedan", "truck", "pickup", "van", "minivan", "coupe", "convertible"},
+        "truck":       {"sedan", "van", "minivan", "coupe", "convertible", "hatchback", "suv", "crossover", "wagon"},
+        "sedan":       {"truck", "pickup", "van", "minivan", "suv", "crossover", "convertible", "coupe", "wagon"},
+        "van":         {"sedan", "truck", "pickup", "coupe", "convertible", "wagon"},
+        "coupe":       {"sedan", "truck", "pickup", "van", "minivan", "convertible", "hatchback", "wagon", "suv", "crossover"},
+        "hatchback":   {"truck", "pickup", "van", "minivan", "coupe", "convertible", "suv", "crossover", "wagon"},
+        "wagon":       {"truck", "pickup", "van", "minivan", "coupe", "convertible"},
+        "convertible": {"sedan", "truck", "pickup", "van", "minivan", "coupe", "hatchback", "wagon", "suv", "crossover"},
+    }
+    excluders = _STRONG_EXCLUDERS.get(body_type, set())
+    if any(re.search(r"\b" + re.escape(w) + r"\b", h) for w in excluders):
+        return False
     # Fallback: check the model name against known-model hints. Catches cars
     # whose scraped data doesn't include the body type word (e.g., Civic,
     # Malibu, Chrysler 200 listed without "sedan" in the title).
@@ -2517,7 +2707,7 @@ def _row_matches_features(r: Dict[str, Any],
 _BODY_TYPE_LABEL = {
     "truck": "trucks", "suv": "SUVs", "sedan": "sedans", "van": "vans",
     "coupe": "coupes", "hatchback": "hatchbacks", "wagon": "wagons",
-    "convertible": "convertibles",
+    "convertible": "convertibles", "commercial": "commercial vehicles",
 }
 _FUEL_TYPE_LABEL = {
     "diesel": "diesel", "hybrid": "hybrid", "electric": "electric",
@@ -2575,6 +2765,24 @@ def _extract_make_filters(body: str, rows: List[Dict[str, Any]]) -> List[str]:
 
     Supports compound queries like 'any toyotas or hondas' -> ['toyota', 'honda']."""
     b = body.lower()
+    # Detail-about-a-specific-car phrasing ("more about the bmw",
+    # "tell me more about that toyota", "info about this jeep") is NOT a
+    # listing query even though it contains listing trigger words. The
+    # singular determiner ("the"/"that"/"this") right after "about" is
+    # the giveaway. Bail out so the message routes to the single-vehicle
+    # / AI path instead of listing every car of that make.
+    detail_about_singular = bool(re.search(
+        r"\b(?:"
+        r"more\s+(?:(?:info(?:rmation)?|details?)\s+)?about|"
+        r"(?:info(?:rmation)?|details?)\s+about|"
+        r"tell\s+me\s+(?:more\s+)?about|"
+        r"know\s+more\s+about|"
+        r"learn\s+more\s+about"
+        r")\s+(?:the|that|this)\b",
+        b,
+    ))
+    if detail_about_singular:
+        return []
     listing_intent = bool(re.search(
         r"\b(any|other|more|what|which|list|show|all|got|"
         r"do you have|are there|is there|carry|stock|"
@@ -3129,7 +3337,13 @@ def _is_more_question(body: str) -> bool:
         rf"^anything\s+else{suffix}$",
         rf"^what\s+else{suffix}$",
         rf"^what\s+other(s)?{suffix}$",
+        rf"^what(?:'?s|\s+is|\s+are)\s+(?:the|some|any)\s+(?:other|others?|rest|remaining)(?:\s+\d+|\s+ones?|\s+(?:cars?|vehicles?|trucks?|suvs?|sedans?|vans?|coupes?|wagons?|hatchbacks?|convertibles?|minivans?))?{suffix}$",
+        rf"^what(?:'?s|\s+is)\s+the\s+other\s+one{suffix}$",
+        rf"^(?:show|list|tell)\s+(?:me\s+)?(?:the\s+)?(?:other|others|rest|remaining)(?:\s+\d+|\s+ones?)?{suffix}$",
         rf"^show\s+(me\s+)?more{suffix}$",
+        rf"^can\s+(?:you|i)\s+(?:see|get|have|view)\s+(?:some\s+|any\s+)?more{suffix}$",
+        rf"^can\s+you\s+(?:show|list|tell|give|send)\s+(?:me\s+)?(?:some\s+|any\s+|a\s+few\s+)?more{suffix}$",
+        rf"^(?:list|show|give|send)\s+(?:me\s+)?(?:some\s+|a\s+few\s+|any\s+)?more{suffix}$",
         rf"^got\s+(any\s+)?more{suffix}$",
         rf"^do\s+you\s+have\s+(any\s+)?more{suffix}$",
         rf"^you\s+(got|have)\s+(any\s+)?more{suffix}$",
@@ -3159,24 +3373,47 @@ def _row_id(r: Dict[str, Any]) -> str:
 
 def _extract_listed_vehicles(text: str, candidate_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Return rows from candidate_rows that appear to be referenced in `text`
-    (year + at least one >=3-char model token both present)."""
+    (year + at least one >=3-char model token both present on the SAME line).
+
+    Per-line matching matters: listings put one vehicle per line, and the
+    LLM sometimes co-locates a year from one row with a model token from
+    another inside the same paragraph. Requiring same-line co-occurrence
+    prevents falsely flagging a 2021 Ford Ranger as "already listed" just
+    because some other line had "2021" and another line had "xlt"."""
     if not text or not candidate_rows:
         return []
-    t = text.lower()
+    # Split on newlines AND on bullet markers so single-line lists like
+    # "- A - B - C" still treat each entry separately.
+    lines = re.split(r"[\n\r]+|(?:(?<=\S)\s+-\s+(?=\S))", text.lower())
+    # Generic body/structure words that appear in nearly every model field
+    # (e.g. "4-Door Sedan" → tokens include "door"). Without filtering them
+    # out, ANY row whose Model contains "Door" gets falsely flagged as
+    # "already listed" just because a sibling line also has "4-Door" — that
+    # silently drops legit unmentioned vehicles like BMW 330I / 550I from
+    # "rest of" listings.
+    _GENERIC_MODEL_TOKENS = {
+        "door", "sedan", "truck", "pickup", "van", "minivan", "coupe",
+        "hatchback", "wagon", "convertible", "suv", "crossover",
+    }
     listed = []
     for r in candidate_rows:
         year  = str(r.get("Year",  "")).strip()
         model = str(r.get("Model", "")).strip().lower()
         if not year:
             continue
-        if year not in t:
-            continue
-        model_tokens = [tok for tok in re.sub(r"[^a-z0-9]", " ", model).split() if len(tok) >= 3]
-        if not model_tokens:
-            listed.append(r)
-            continue
-        if any(re.search(rf"\b{re.escape(tok)}\b", t) for tok in model_tokens):
-            listed.append(r)
+        model_tokens = [
+            tok for tok in re.sub(r"[^a-z0-9]", " ", model).split()
+            if len(tok) >= 3 and tok not in _GENERIC_MODEL_TOKENS
+        ]
+        for line in lines:
+            if year not in line:
+                continue
+            if not model_tokens:
+                listed.append(r)
+                break
+            if any(re.search(rf"\b{re.escape(tok)}\b", line) for tok in model_tokens):
+                listed.append(r)
+                break
     return listed
 
 
@@ -3617,9 +3854,10 @@ def _issue_response_for_match(r):
     service = " | ".join(get_row_field_values(r, MAINT_WORK_HEADER_ALIASES)).strip()
     if issues:
         return f"Regarding the {title} - disclosed concerns: {issues}." + (f" Features/highlights: {service}." if service else "")
+    inspected_note = "but every car on our lot is thoroughly inspected before being listed"
     if service:
-        return f"The {title} has no known issues on file. Features/highlights: {service}."
-    return f"The {title} has no known issues on file."
+        return f"There aren't any issues listed for the {title}, {inspected_note}. Features/highlights: {service}."
+    return f"There aren't any issues listed for the {title}, {inspected_note}. We'd be happy to go over the details in person — would you like to set up a time?"
 
 
 def _title_status_response_for_match(r):
@@ -3929,9 +4167,29 @@ def _is_general_info_question(msg):
     ))
 
 def _is_vehicle_link_question(msg):
-    """Customer asking for the listing URL of a specific vehicle."""
+    """Customer asking for the listing URL — or for photos — of a specific
+    vehicle. Photo requests are routed here because the listing URL is where
+    photos live; we can't send images directly over SMS reliably. Uses loose
+    word matching (pic\\w*, photo\\w*) so common typos like 'picures' or
+    'photoes' still route to the photo handler instead of falling to the LLM.
+
+    NOTE: Avoid catching "come see it" / "come see them" — those mean visit
+    in person, not view the listing. Photo intent uses explicit photo words
+    or "show me [photos/pics/it]" phrasing only."""
     return bool(re.search(
-        r"\b(link|url|web\s*page|webpage|web\s*link)\b",
+        r"\b(link|url|web\s*page|webpage|web\s*link|"
+        r"pic\w*|photo\w*|image\w*|gallery|"
+        r"show\s+(?:me\s+)?(?:it|them|some|pictures?|photos?|pics?|images?))\b",
+        (msg or "").lower(),
+    ))
+
+
+def _is_vehicle_photo_question(msg):
+    """Subset of link-question: customer specifically asked for photos/pictures.
+    Used so the response can say 'photos' instead of 'listing'. Loose word
+    matching catches typos."""
+    return bool(re.search(
+        r"\b(pic\w*|photo\w*|image\w*|gallery)\b",
         (msg or "").lower(),
     ))
 
@@ -3970,6 +4228,18 @@ def _is_financing_question(msg):
     ))
 
 
+def _is_cash_payment_question(msg):
+    """Detect 'can I pay cash', 'paying with cash', 'cash only' etc. The LLM
+    was hallucinating alternative payment methods (certified check / wire
+    transfer) when asked about cash — a deterministic answer prevents that."""
+    return bool(re.search(
+        r"\b(pay\s+(?:in\s+|with\s+)?cash|paying\s+(?:in\s+|with\s+)?cash|"
+        r"with\s+cash|in\s+cash|cash\s+payment|cash\s+only|"
+        r"accept\s+cash|take\s+cash|cash\s+(?:ok|okay|fine|good))\b",
+        (msg or "").lower(),
+    ))
+
+
 def _is_price_breakdown_question(msg):
     """Direct price questions that should get a full breakdown (Internet → Doc → Purchase).
     Skips budget-filter queries like 'under 20k' or 'between 10k and 15k' — those are listings."""
@@ -3992,10 +4262,10 @@ def _is_price_breakdown_question(msg):
         r"\bprice\s+of\s+(?:the|that|this|it)\b|"
         r"\bwhat(?:'?s|\s+is|\s+does)\s+\S+(?:\s+\S+){0,3}\s+cost\b|"
         r"\bhow\s+much\s+(?:is|are|does|for|costs?|would|will|total|do\s+you\s+want)\b|"
-        r"\bis\s+(?:that|this|it|\$?\s*[\d,]+(?:\.\d{1,2})?(?:k|K)?)\s+(?:the\s+)?(?:final|total)(?:\s+price|\s+cost)?\b|"
-        r"\bare\s+(?:those|these|they)\s+(?:the\s+)?(?:final|total)(?:\s+prices?|\s+costs?)?\b|"
-        r"\bis\s+that\s+(?:all|everything|the\s+total)\b|"
-        r"\bfinal\s+prices?\b|"
+        r"\bis\s+(?:that|this|it|\$?\s*[\d,]+(?:\.\d{1,2})?(?:k|K)?)\s+(?:the\s+)?(?:final|total|full)(?:\s+price|\s+cost)?\b|"
+        r"\bare\s+(?:those|these|they)\s+(?:the\s+)?(?:final|total|full)(?:\s+prices?|\s+costs?)?\b|"
+        r"\bis\s+that\s+(?:the\s+total|the\s+full\s+price)\b|"
+        r"\b(?:final|full)\s+prices?\b|"
         r"\banything\s+(?:else\s+)?(?:on\s+top|added|additional)\b)",
         m,
     ))
@@ -4401,7 +4671,15 @@ Phone number rule:
 
 CarFax rules:
 - If the vehicle data above contains a "CarFax report:" line with a URL, you MAY mention CarFax and you MUST include the URL in your reply (do not make the customer ask for it separately).
-- If no CarFax URL is present in the vehicle data, do NOT mention or recommend CarFax at all. Either answer with the info you do have, or briefly say you don't have that detail and suggest contacting the dealership.""".strip()
+- If no CarFax URL is present in the vehicle data, do NOT mention or recommend CarFax at all. Either answer with the info you do have, or briefly say you don't have that detail and suggest contacting the dealership.
+
+History / issues rule (REQUIRED — follow exactly):
+- If the customer asks about history or known issues (accidents, prior owners, service records, repair history, problems, issues, anything wrong, condition, defects, clean history, clean carfax, or anything similar) AND the vehicle data has none listed: your reply MUST contain BOTH of these in this order:
+  1. Acknowledge nothing is listed for the vehicle.
+  2. Add the EXACT phrase "but every car on our lot is thoroughly inspected before being listed" (use "but" — not "and").
+- Then offer to go over the details in person. Use "car" not "vehicle" in the inspection clause.
+- Example (the inspection sentence is NOT optional — include it verbatim): "There aren't any accidents or issues listed for the 2023 Toyota Camry Se, but every car on our lot is thoroughly inspected before being listed. We'd be happy to go over the details in person — would you like to set up a time?"
+- IMPORTANT: Only say the "every car on our lot is thoroughly inspected" line ONCE per conversation. If the Recent conversation above already shows you've used that exact line in a previous reply, DO NOT repeat it — just briefly acknowledge nothing is listed for the new question (e.g. "No accidents listed either.") and move on. On the FIRST history/issue question in a conversation, the inspection line IS required — do not skip it.""".strip()
     try:
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -4846,6 +5124,53 @@ Rules:
     return result.splitlines()[0].strip()
 
 
+_CONDITION_TERMS_RE = re.compile(
+    r"\b(excellent|great|good|decent|fair|rough|poor|nice|solid|"
+    r"like\s+new|mint|pristine|beat[\s-]?up|"
+    r"rust|dent|damage|scratch|"
+    r"runs\s+well|drives\s+well|condition|shape)\b",
+    re.I,
+)
+
+_CONDITION_PHRASE_RE = re.compile(
+    r"(?:its?\s+|it'?s\s+|in\s+|runs\s+|drives\s+)?"
+    r"(?:excellent|great|good|decent|fair|rough|poor|nice|solid|"
+    r"like\s+new|mint|pristine|beat[\s-]?up)"
+    r"(?:\s+(?:condition|shape))?"
+    r"(?:\s+(?:but|with|and)\s+[^.!?\n]{0,80})?",
+    re.I,
+)
+
+
+def _augment_trade_in_with_condition(summary: str, history: List[Dict[str, Any]]) -> str:
+    """If the trade-in `summary` lacks condition info but the customer
+    mentioned condition in their messages, append the condition clause.
+    extract_trade_in_vehicle (LLM-based) has been observed to drop the
+    condition when the customer phrases it conversationally — e.g. "its in
+    good condition but has a little bit of rust" → summary stays as
+    "2012 Nissan Altima, 200k mi, clean title" with no condition, so the
+    dealer alert misses what the customer said."""
+    if not summary:
+        return summary
+    if _CONDITION_TERMS_RE.search(summary):
+        return summary  # already has condition info
+    user_text = " ".join(
+        (m.get("content") or "").strip()
+        for m in (history or []) if m.get("role") == "user"
+    )
+    if not user_text:
+        return summary
+    m = _CONDITION_PHRASE_RE.search(user_text)
+    if not m:
+        return summary
+    phrase = m.group(0).strip().rstrip(".,!?")
+    # Strip leading filler so it reads cleanly after a comma
+    phrase = re.sub(r"^(?:its?\s+|it'?s\s+|in\s+)", "", phrase, flags=re.I).strip()
+    if not phrase or len(phrase) > 120:
+        return summary
+    return f"{summary}, {phrase}"
+
+
 _KNOWN_TRADE_IN_MAKES = {
     "toyota", "honda", "ford", "chevy", "chevrolet", "nissan", "hyundai",
     "kia", "subaru", "mazda", "bmw", "mercedes", "mercedes-benz", "audi",
@@ -5144,6 +5469,7 @@ If a customer asks something else not covered by the data below: "I don't have t
 
 === STRICT FORBIDDEN BEHAVIORS ===
 - NEVER include URLs, hyperlinks, or markdown links in your reply. Do NOT type "https://", "www.", or "[text](link)". If a customer asks for a link to a vehicle's listing, simply say you'll send the listing — the system sends the real URL separately. Any URL you write is a hallucination because you do not have access to real URLs.
+- If a customer asks for pictures, photos, pics, or images of a vehicle, treat it the same as a link request: say you'll send over the listing where they can see the photos — the system sends the real URL separately. Do NOT promise to send images, photos, or attachments directly, and do NOT say "the system will send pictures shortly" — only the listing URL is sent. Example: "Sure — I'll send over the listing for the 2016 Honda Odyssey where you can see all the photos."
 - NEVER offer to "discuss the trade-in process," "walk through the trade-in process," "explain the trade-in process," or any variant. The trade-in flow is handled by the system, which collects vehicle details (year/make/model, mileage, title status, condition) and rolls them into the visit. When a customer mentions a trade, briefly acknowledge it and let the system continue — do not pitch a separate "process" conversation.
 - When the customer uses words like "that price", "that price range", "that feature", "that one", "similar", "another like that" — they're referring to the SPECIFIC vehicle you mentioned in your IMMEDIATELY PREVIOUS reply, NOT some other vehicle from earlier history. If your last reply named the Prius at $4,769, "that price range" means around $4,769, not any other price seen earlier. Anchor every relative pronoun to your most recent reply.
 - NEVER invent a phone number, address, or any fact not in the data.
@@ -5152,6 +5478,7 @@ If a customer asks something else not covered by the data below: "I don't have t
 - Share VIN only if it appears in TOP MATCHING VEHICLE DETAILS below.
 - NEVER offer to email details or promise anything outside this conversation.
 - NEVER guess vehicle condition, history, or issues.
+- If a customer asks about a vehicle's history OR known issues (accidents, prior accidents, prior owners, service records, repair history, clean history, clean carfax, problems, issues, anything wrong, condition, defects, or anything similar) AND the data has none listed: do NOT say "I don't have that information." Instead, your reply MUST do BOTH (in this order): (1) acknowledge nothing is listed for the vehicle; (2) include the EXACT phrase "but every car on our lot is thoroughly inspected before being listed". Use "but" (not "and") between the two clauses. Then offer to go over the details in person. Use "car" not "vehicle" in the inspection clause. Example phrasing: "There aren't any accidents or issues listed for the 2023 Toyota Camry Se, but every car on our lot is thoroughly inspected before being listed. We'd be happy to go over the details in person — would you like to set up a time?" IMPORTANT: only say the "every car on our lot is thoroughly inspected" line ONCE per conversation. If your prior replies in this conversation ALREADY used that exact line, DO NOT repeat it — just briefly acknowledge nothing is listed for the new question (e.g. "No accidents listed either.") and move on. On the FIRST history/issue question, the inspection line IS required — do not skip it.
 - NEVER use bullet points.
 - NEVER ask the customer for their credit score, credit history, social security number, date of birth, monthly income, banking details, or any other sensitive financial information. If the customer brings up financing or credit, point them to the dealer's secure credit application (online if a URL is in the policy text, otherwise in person at the dealership) and ask for a time to come in - do NOT collect any of that info in chat.
 - NEVER ask "what time works", "what time would work", "what day works", or any time/day question if the customer's latest message ALREADY contains a specific clock time for the visit (e.g. "tomorrow at 3pm", "Friday at 10am", "2pm today", "I can be there tomorrow at 2pm"). Treat the time they provided as the time and proceed to the next booking step (email if missing, otherwise the confirmation). This rule overrides any phrasing example below.
@@ -5190,6 +5517,19 @@ STEP 1 - Get a specific clock time (NEVER ask for email here)
 - This applies even if hours are not listed; only reject a time if it clearly falls outside listed hours for that specific day.
 - Once a SPECIFIC CLOCK TIME is established (either in the customer's latest message or earlier in the conversation), proceed to STEP 1.5 (if a specific vehicle was chosen) or STEP 2 (if general visit).
 
+==== TIME REFERENCE RULE (READ FIRST — applies to every booking-flow reply) ====
+Whenever you reference the visit time, you MUST write it as [DAY at TIME], NOT just [TIME]. The day and the clock time must always appear together. Examples of acceptable forms: "Saturday at 2 PM", "Monday at 4 PM", "tomorrow at 5 PM", "today at 3 PM", "Friday at 10 AM".
+
+Bare clock times ("2 PM", "4 PM", "5 PM") with no day are FORBIDDEN. If you write a bare clock time you are creating a confirmation defect because the customer cannot tell which day you booked.
+
+The day comes from the conversation, not just the latest user message. Scan the WHOLE recent conversation when forming your reply:
+- If the customer said "Monday" earlier and "4pm" now → you say "Monday at 4 PM".
+- If the customer said "Saturday at 4pm" → you say "Saturday at 4 PM".
+- If you (the consultant) wrote "What time on Monday..." earlier and the customer answered "4pm" → you say "Monday at 4 PM".
+- Only use a bare time if NO day has been mentioned anywhere in the conversation, in which case you must first ask the customer which day.
+
+This rule overrides any example phrasing below that omits a day. When in doubt, include the day.
+
 STEP 1.5 - Questions / trade-in / financing check (ONLY when a specific vehicle is the car of interest; SKIP for general visits)
 - Trigger: a specific clock time has been established AND the car of interest is a specific vehicle (NOT "general visit") AND STEP 1.5 has not been asked yet in this booking attempt.
 - Ask in ONE message whether the customer has any other questions about the vehicle, a trade-in they'd like the dealer to look at, or if they're interested in financing. Phrasing example (≤220 chars): "Got it - 2pm tomorrow for the [year make model]. Any other questions about it, are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
@@ -5212,8 +5552,9 @@ STEP 2 - Ask for email (only if missing)
 STEP 3 - Confirm (in this same reply, with META_JSON)
 - Trigger: a specific clock time has been established AND the customer has first name + email on file. Last name is NOT required and MUST NOT be asked for.
 - Use the appropriate template phrasing for the customer-facing text - do NOT paraphrase further, do NOT use "You're booked" or "I'll confirm next" or any variant:
-  - With a specific vehicle: "You're all set, [First Name]! Your appointment is confirmed for [TIME] to view the [YEAR MAKE MODEL]. We look forward to seeing you!"
-  - General visit (no specific vehicle): "You're all set, [First Name]! Your appointment is confirmed for [TIME]. We look forward to seeing you!"
+  - With a specific vehicle: "You're all set, [First Name]! Your appointment is confirmed for [DAY at TIME] to view the [YEAR MAKE MODEL]. We look forward to seeing you!"
+  - General visit (no specific vehicle): "You're all set, [First Name]! Your appointment is confirmed for [DAY at TIME]. We look forward to seeing you!"
+- [DAY at TIME] is REQUIRED to be unambiguous to a reader who hasn't seen the rest of the conversation. Examples: "Saturday at 3 PM", "tomorrow at 10 AM", "Friday May 16 at 2 PM", "today at 5 PM". NEVER write just a clock time without a day reference — "3 PM" alone is a confirmation defect because the customer cannot tell which day. If the customer's most recent message established a day (e.g. "I can be there Saturday at 3 PM" or "are you open tomorrow" → "I can be there at 3 PM"), the day MUST appear in the confirmation.
 - Then, on a NEW LINE at the very END of the SAME reply (hidden from customer by the system), add EXACTLY:
    META_JSON: {{"confirmed": true, "visit_time": "<human readable time>", "visit_time_iso": "<YYYY-MM-DDTHH:MM:SS>", "car_desc": "<year make model or 'general visit'>", "customer_name": "<first name>", "customer_email": "<email>"}}
 - The user-visible template AND the META_JSON line are NOT optional - both must appear in the same reply. Without META_JSON, the booking is never recorded and the dealer is never notified. This is the most important rule in the entire flow.
@@ -5612,6 +5953,167 @@ def _reply_twiml(reply_body: str, customer_phone: str, twilio_number: str, *, se
     return str(twiml)
 
 
+_DAY_WORD_PATTERN = (
+    r"(?:today|tonight|tomorrow|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+)
+
+
+def _augment_bare_time_with_day(text: str, from_number: str, to_number: str) -> str:
+    """If `text` contains a bare clock time (no day word within ~30 chars),
+    insert "DAY at " before it using the most recent day mentioned in the
+    customer's conversation history. Returns the augmented (or unchanged)
+    text. Pure string transform — no DB writes, no flask.g touches.
+
+    Used for both the chat reply rewrite and for visit_time strings stored
+    in pending/appointments + embedded in dealer/customer SMS/email alerts.
+    Without applying it to stored visit_time, the dealer notification reads
+    "Time: 3 PM" with no day."""
+    if not text:
+        return text
+    time_re = re.compile(r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b", re.I)
+    matches = list(time_re.finditer(text))
+    if not matches:
+        return text
+    bare_idx = []
+    for i, m in enumerate(matches):
+        win_start = max(0, m.start() - 30)
+        win_end = min(len(text), m.end() + 30)
+        window = text[win_start:win_end].lower()
+        if not re.search(rf"\b{_DAY_WORD_PATTERN}\b", window):
+            bare_idx.append(i)
+    if not bare_idx:
+        return text
+    history = get_recent_messages(from_number, to_number, limit=10)
+    day_found = None
+    for msg in reversed(history):
+        if msg.get("role") != "user":
+            continue
+        content = (msg.get("content") or "").lower()
+        m = re.search(rf"\b{_DAY_WORD_PATTERN}\b", content)
+        if m:
+            day_found = m.group(0)
+            break
+    if not day_found:
+        for msg in reversed(history):
+            if msg.get("role") != "assistant":
+                continue
+            content = (msg.get("content") or "").lower()
+            m = re.search(rf"\b{_DAY_WORD_PATTERN}\b", content)
+            if m:
+                day_found = m.group(0)
+                break
+    if not day_found:
+        return text
+    if day_found.lower() in ("today", "tonight", "tomorrow"):
+        day_pretty = day_found.lower()
+    else:
+        day_pretty = day_found.title()
+    pieces, last_end = [], 0
+    for i, m in enumerate(matches):
+        pieces.append(text[last_end:m.start()])
+        pieces.append(f"{day_pretty} at {m.group(1)}" if i in bare_idx else m.group(0))
+        last_end = m.end()
+    pieces.append(text[last_end:])
+    return "".join(pieces)
+
+
+def _maybe_inject_day_in_time(from_number: str, to_number: str) -> bool:
+    """If the captured reply contains a clock time ("3 PM") with no day
+    reference within ~30 chars before it, look in conversation history for
+    the most recent day mention (from customer messages first, then assistant)
+    and rewrite the reply to insert "DAY at " before the bare clock time.
+
+    The LLM frequently strips the day when echoing a time back to the customer
+    ("Got it - 3 PM for the Camry") even though the customer said "Saturday at
+    3 PM". That's a confirmation defect — the customer cannot tell which day
+    was booked. Returns True if the reply was modified."""
+    captured = (g.get("captured_reply") or "").strip()
+    if not captured:
+        return False
+    new_reply = _augment_bare_time_with_day(captured, from_number, to_number)
+    if new_reply == captured:
+        return False
+    try:
+        conn = _db()
+        with conn:
+            row = conn.execute(
+                "SELECT id FROM messages WHERE customer_phone=? AND twilio_number=? "
+                "AND role='assistant' ORDER BY id DESC LIMIT 1",
+                (from_number, to_number),
+            ).fetchone()
+            if row:
+                conn.execute("UPDATE messages SET content=? WHERE id=?",
+                             (new_reply, row["id"]))
+        conn.close()
+    except Exception as e:
+        app.logger.warning("Day-in-time rewrite (DB) failed: %s", e)
+    g.captured_reply = new_reply
+    app.logger.info("Injected day into bare clock time for %s", from_number)
+    return True
+
+
+_NAME_GREETER_RE = re.compile(
+    r"\b(Thanks|Thank\s+you|Hi|Hello|Sure|Certainly|Got\s+it|Of\s+course|"
+    r"Perfect|Alright|Awesome|Great|Okay|Ok)"
+    r"(,\s+)"
+    r"([A-Z][a-z]+)"
+    r"(?=[\s\.\!\,\?])"
+)
+
+
+def _maybe_fix_customer_name_in_reply(from_number: str, to_number: str) -> bool:
+    """If the LLM addressed the customer by a different first name than the
+    one stored in the profile, rewrite the reply to use the real name. The
+    LLM sometimes pulls a word from the customer's most recent message as a
+    name (e.g. "can i pay cash" → "Thanks, Can!") even when the customer's
+    real first name is in the prompt context. Returns True if rewritten."""
+    captured = (g.get("captured_reply") or "").strip()
+    if not captured:
+        return False
+    profile = get_customer_profile(from_number, to_number)
+    real_name = (profile.get("name") or "").strip()
+    if not real_name or not _looks_like_real_name(real_name):
+        return False
+    matches = list(_NAME_GREETER_RE.finditer(captured))
+    if not matches:
+        return False
+    real_name_lower = real_name.lower()
+    rewrote = False
+    new_reply = captured
+    # Walk matches in reverse so earlier offsets stay valid as we splice.
+    for m in reversed(matches):
+        name_in_reply = m.group(3)
+        if name_in_reply.lower() == real_name_lower:
+            continue
+        # Replace just the name token, preserve greeter + punctuation
+        new_reply = (
+            new_reply[:m.start(3)]
+            + real_name.title()
+            + new_reply[m.end(3):]
+        )
+        rewrote = True
+    if not rewrote:
+        return False
+    try:
+        conn = _db()
+        with conn:
+            row = conn.execute(
+                "SELECT id FROM messages WHERE customer_phone=? AND twilio_number=? "
+                "AND role='assistant' ORDER BY id DESC LIMIT 1",
+                (from_number, to_number),
+            ).fetchone()
+            if row:
+                conn.execute("UPDATE messages SET content=? WHERE id=?",
+                             (new_reply, row["id"]))
+        conn.close()
+    except Exception as e:
+        app.logger.warning("Name-fix rewrite (DB) failed: %s", e)
+    g.captured_reply = new_reply
+    app.logger.info("Corrected wrong customer name in reply for %s (restored %r)", from_number, real_name)
+    return True
+
+
 def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: str = "") -> bool:
     """Server-side guard for STEP 1.5 of the booking flow. The LLM frequently
     jumps from STEP 1 (time) straight to STEP 2 (email) without first asking
@@ -5629,6 +6131,221 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
         and "financing" in captured_lower
         and "?" in captured
     )
+
+    # Premature STEP 3 guard: the LLM sometimes jumps straight to confirmation
+    # language ("Your appointment is set / confirmed for X") without going
+    # through STEP 1.5 (questions/financing/trade-in) and STEP 2 (email). If
+    # the captured reply contains confirmation language but NO META_JSON
+    # marker and the profile is missing email, the appointment was never
+    # actually logged. Override the reply to back the flow up to whichever
+    # step is missing.
+    _confirmation_phrases = (
+        "appointment is confirmed", "appointment is set",
+        "you're all set", "youre all set",
+        "you're booked", "youre booked", "you are booked",
+        "all set,",
+    )
+    _has_confirmation_lang = any(p in captured_lower for p in _confirmation_phrases)
+    _has_meta_json = "META_JSON" in captured or "meta_json" in captured_lower
+    if _has_confirmation_lang and not _has_meta_json:
+        _profile = get_customer_profile(from_number, to_number)
+        _email = (_profile.get("email") or "").strip()
+        _name_for_reply = (_profile.get("name") or "").strip() or "and welcome"
+        _ri_history = get_recent_messages(from_number, to_number, limit=30)
+        _step_1_5_already_asked = any(
+            "trade-in" in (m.get("content") or "").lower()
+            and "financing" in (m.get("content") or "").lower()
+            and "?" in (m.get("content") or "")
+            for m in _ri_history if m.get("role") == "assistant"
+        )
+        # Recover visit_time + car_desc from pending or recent assistant turns.
+        _pending = get_pending(from_number, to_number)
+        _vt = (_pending.get("visit_time") if _pending else "") or ""
+        _cd = (_pending.get("car_desc") if _pending else "") or ""
+        if not _vt or not _cd:
+            for _m in _ri_history[::-1]:
+                if _m.get("role") != "assistant":
+                    continue
+                _c = _m.get("content") or ""
+                if not _cd:
+                    _cm = re.search(
+                        r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,5})",
+                        _c,
+                    )
+                    if _cm:
+                        _cd = _cm.group(1).strip().rstrip(".,!?")
+                if not _vt:
+                    _tm = re.search(
+                        r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))(?:\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday))?\b",
+                        _c, re.I,
+                    )
+                    if _tm:
+                        _vt = _tm.group(0).strip()
+                if _vt and _cd:
+                    break
+        # Decide what step we need to back up to.
+        _car_phrase = f"the {_cd}" if _cd else "the vehicle"
+        _time_phrase = f"{_vt} " if _vt else ""
+        if not _step_1_5_already_asked:
+            new_reply = (
+                f"Got it - {_time_phrase}for {_car_phrase}. Any other questions about it, "
+                f"are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
+            )
+        elif not _email:
+            new_reply = (
+                f"Almost set! Before I lock in {_time_phrase}for {_car_phrase}, "
+                f"could I please get your email address?"
+            )
+        else:
+            # Profile is complete and STEP 1.5 was asked, but the LLM still
+            # produced confirmation language without META_JSON. Leave the
+            # reply alone — this should never happen, but bailing out is
+            # safer than rewriting.
+            new_reply = None
+        if new_reply:
+            # Augment bare clock time with day before storing/displaying.
+            if _vt:
+                _vt = _augment_bare_time_with_day(_vt, from_number, to_number)
+                # Rebuild reply with the augmented time so customer sees the
+                # right thing too (the day-injector below also catches this,
+                # but doing it here keeps pending + reply consistent).
+                _time_phrase = f"{_vt} "
+                if not _step_1_5_already_asked:
+                    new_reply = (
+                        f"Got it - {_time_phrase}for {_car_phrase}. Any other questions about it, "
+                        f"are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
+                    )
+                elif not _email:
+                    new_reply = (
+                        f"Almost set! Before I lock in {_time_phrase}for {_car_phrase}, "
+                        f"could I please get your email address?"
+                    )
+            # Persist as pending so downstream handlers (email auto-book,
+            # trade-in collection, etc.) can find the booking the customer
+            # just established. Without this, the email handler later finds
+            # no pending row and the booking flow stalls.
+            if _vt and _cd:
+                _, _vt_iso = parse_visit_time_from_text(_vt)
+                if not _pending:
+                    try:
+                        set_pending(from_number, to_number, dealer_phone or "",
+                                    _vt, _vt_iso or "", _cd)
+                    except Exception as _e:
+                        app.logger.warning("Premature-STEP-3 set_pending failed: %s", _e)
+            try:
+                conn = _db()
+                with conn:
+                    row = conn.execute(
+                        "SELECT id FROM messages WHERE customer_phone=? AND twilio_number=? "
+                        "AND role='assistant' ORDER BY id DESC LIMIT 1",
+                        (from_number, to_number),
+                    ).fetchone()
+                    if row:
+                        conn.execute("UPDATE messages SET content=? WHERE id=?",
+                                     (new_reply, row["id"]))
+                conn.close()
+            except Exception as e:
+                app.logger.warning("Premature-STEP-3 rewrite (DB) failed: %s", e)
+            g.captured_reply = new_reply
+            app.logger.info(
+                "Caught premature STEP 3 (no META_JSON, email_missing=%s, step15_asked=%s) for %s",
+                not _email, _step_1_5_already_asked, from_number,
+            )
+            return True
+
+    # Re-ask guard: STEP 1.5 must only be asked ONCE per booking. If the
+    # LLM is generating a second STEP 1.5 question (most commonly after the
+    # customer has already given trade-in details), override the reply with
+    # an email-ask so the booking flow progresses instead of looping. Without
+    # this the bot drops the trade-in context the customer just provided and
+    # asks the same multi-part question again.
+    if is_step_1_5_reply:
+        # Use a wide history window — the trade-in detail flow can run for
+        # 6+ turns (asking for vehicle, then mileage/title/condition), pushing
+        # the original STEP 1.5 question outside a 14-message window. Without
+        # enough lookback, the re-ask count comes back as 1 and we miss the
+        # override that should fire when the LLM loops.
+        _ri_history = get_recent_messages(from_number, to_number, limit=30)
+        # Count STEP 1.5 questions in history. The just-generated reply is
+        # already saved to the DB at this point, so it appears in history as
+        # well. We need at least 2 occurrences (the current + an earlier one)
+        # to call this a re-ask; otherwise we'd override the legitimate first
+        # ask.
+        _step_1_5_count = sum(
+            1 for m in _ri_history if m.get("role") == "assistant"
+            and "trade-in" in (m.get("content") or "").lower()
+            and "financing" in (m.get("content") or "").lower()
+            and "?" in (m.get("content") or "")
+        )
+        app.logger.info(
+            "STEP1.5-debug: is_reply=%s count=%d history_size=%d for %s",
+            is_step_1_5_reply, _step_1_5_count, len(_ri_history), from_number,
+        )
+        if _step_1_5_count >= 2:
+            # Build an email-ask override using whatever visit_time + car_desc
+            # we can recover from pending or recent assistant turns.
+            _profile = get_customer_profile(from_number, to_number)
+            _email_on_file = (_profile.get("email") or "").strip()
+            _pending = get_pending(from_number, to_number)
+            _vt = (_pending.get("visit_time") if _pending else "") or ""
+            _cd = (_pending.get("car_desc") if _pending else "") or ""
+            if not _vt or not _cd:
+                for _m in _ri_history[::-1]:
+                    if _m.get("role") != "assistant":
+                        continue
+                    _c = _m.get("content") or ""
+                    if not _cd:
+                        _cm = re.search(
+                            r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,5})",
+                            _c,
+                        )
+                        if _cm:
+                            _cd = _cm.group(1).strip().rstrip(".,!?")
+                    if not _vt:
+                        _tm = re.search(
+                            r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))(?:\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday))?\b",
+                            _c, re.I,
+                        )
+                        if _tm:
+                            _vt = _tm.group(0).strip()
+                    if _vt and _cd:
+                        break
+            if _email_on_file:
+                # Email already on file — close out the booking instead of
+                # re-asking. The LLM will pick it up on the next turn since
+                # all required pieces are captured.
+                if _vt and _cd:
+                    new_reply = f"Got it - locking in {_vt} for the {_cd}. I'll have it confirmed in a moment."
+                elif _vt:
+                    new_reply = f"Got it - locking in {_vt}. I'll have it confirmed in a moment."
+                else:
+                    new_reply = "Got it - I'll have your visit confirmed in a moment."
+            else:
+                if _vt and _cd:
+                    new_reply = f"Got it - to lock in {_vt} for the {_cd}, could I get your email address?"
+                elif _vt:
+                    new_reply = f"Got it - to lock in {_vt}, could I get your email address?"
+                elif _cd:
+                    new_reply = f"Got it - to lock in your visit for the {_cd}, could I get your email address?"
+                else:
+                    new_reply = "Got it - to lock in your visit, could I get your email address?"
+            try:
+                conn = _db()
+                with conn:
+                    row = conn.execute(
+                        "SELECT id FROM messages WHERE customer_phone=? AND twilio_number=? "
+                        "AND role='assistant' ORDER BY id DESC LIMIT 1",
+                        (from_number, to_number),
+                    ).fetchone()
+                    if row:
+                        conn.execute("UPDATE messages SET content=? WHERE id=?",
+                                     (new_reply, row["id"]))
+                conn.close()
+            except Exception as e:
+                app.logger.warning("STEP 1.5 re-ask rewrite (DB) failed: %s", e)
+            g.captured_reply = new_reply
+            app.logger.info("Overrode LLM STEP 1.5 re-ask with email/confirm prompt for %s", from_number)
+            return True
 
     # Is this an email-request reply?
     asks_email = bool(re.search(r"\bemail\b", captured, re.I)) and "?" in captured
@@ -5657,7 +6374,11 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
                             if car_m:
                                 car_desc = car_m.group(1).strip().rstrip(".,!?")
                                 car_desc = re.sub(
-                                    r"\s+(currently|is|was|will|now|now,|available|here|today|tomorrow).*$",
+                                    r"\s+(currently|is|are|was|were|will|would|could|should|can|may|might|must|"
+                r"now|now,|available|here|today|tomorrow|only|also|just|still|"
+                r"has|have|had|comes|came|features|includes|runs|drives|looks|sounds|seems|gets|"
+                r"doesn|isn|wasn|weren|won|didn|couldn|shouldn|wouldn|"
+                r"hasn|haven|hadn|shan|mustn|mightn|ain|don).*$",
                                     "", car_desc, flags=re.I,
                                 ).strip()
                         if not visit_time:
@@ -5671,6 +6392,7 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
                             break
                     if car_desc and visit_time:
                         _, visit_time_iso = parse_visit_time_from_text(visit_time)
+                        visit_time = _augment_bare_time_with_day(visit_time, from_number, to_number)
                         set_pending(from_number, to_number, dealer_phone or "",
                                     visit_time, visit_time_iso or "", car_desc)
                         app.logger.info(
@@ -5682,7 +6404,12 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
         return False
 
     # Skip widget-only customers? No - this guard applies to widget too.
-    history = get_recent_messages(from_number, to_number, limit=14)
+    # Use a wide window — the prior-STEP-1.5 check below needs to see the
+    # original STEP 1.5 question even after a long trade-in detail flow has
+    # pushed it past the default 14-message limit. Without this the existing
+    # injector re-fires STEP 1.5 when the customer asks an unrelated question
+    # mid-flow ("can you hold it") because it can't find the prior ask.
+    history = get_recent_messages(from_number, to_number, limit=30)
 
     # If the customer mentioned a trade-in but appraisal details (mileage,
     # title status, condition) are still missing, ask for those first instead
@@ -5758,9 +6485,15 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
             if "trade-in" in c and "financing" in c:
                 return False
 
-    # Pull car_desc + visit_time from pending if set, else from recent assistant
-    # context (regex over the recent bot messages for "for the YEAR MAKE MODEL"
-    # and a "Npm/am" pattern).
+    # Pull car_desc + visit_time. Source priority:
+    #   1. pending row (if already set)
+    #   2. the LLM's just-produced reply ("captured"), which is the email-ask
+    #      we are about to override — it was built with the booking context
+    #      and is the authoritative source for THIS booking's time
+    #   3. recent bot history (fallback only — risky because unrelated bot
+    #      messages like the dealer's hours response can contain stray times,
+    #      e.g. "we're open from 9am to 6pm" was grabbing 9am over the
+    #      customer's actual 3pm)
     pending = get_pending(from_number, to_number)
     car_desc = ""
     visit_time = ""
@@ -5770,11 +6503,46 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
         visit_time = (pending.get("visit_time") or "").strip()
         visit_time_iso = (pending.get("visit_time_iso") or "").strip()
 
+    # Source 2: the LLM's reply we're about to override. The LLM saw the
+    # customer's booking message and produced something like
+    # "Got it - to lock in 3pm tomorrow for the F-250, could I get your email?"
+    # Pulling time + car from THIS captures the right context.
+    if not visit_time and captured:
+        t_m = re.search(
+            r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))(?:\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday))?\b",
+            captured, re.I,
+        )
+        if t_m:
+            visit_time = t_m.group(0).strip()
+    if not car_desc and captured:
+        car_m = re.search(
+            r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,5})",
+            captured,
+        )
+        if car_m:
+            car_desc = car_m.group(1).strip().rstrip(".,!?")
+            car_desc = re.sub(
+                r"\s+(currently|is|are|was|were|will|would|could|should|can|may|might|must|"
+                r"now|now,|available|here|today|tomorrow|only|also|just|still|"
+                r"has|have|had|comes|came|features|includes|runs|drives|looks|sounds|seems|gets|"
+                r"doesn|isn|wasn|weren|won|didn|couldn|shouldn|wouldn|"
+                r"hasn|haven|hadn|shan|mustn|mightn|ain|don).*$",
+                "", car_desc, flags=re.I,
+            ).strip()
+
     if not car_desc or not visit_time:
         for m in history[::-1]:
             if m.get("role") != "assistant":
                 continue
             c = m.get("content") or ""
+            # Skip bot replies that are hours-of-operation statements — they
+            # contain stray times (e.g. "open from 9am to 6pm") that aren't
+            # the booking time. Without this skip, "i can be there at 3
+            # tomorrow" right after a "we're open 9am-6pm" reply gets stored
+            # as 9am.
+            cl = c.lower()
+            if re.search(r"\b(?:we'?re\s+open|hours?\s+of\s+operation|business\s+hours|open\s+(?:from|tomorrow|today|on)|closed)\b", cl):
+                continue
             if not car_desc:
                 # Look for ANY year+make+model pattern in the bot's recent
                 # messages, not just "for the YEAR ...". The LLM phrasing
@@ -5788,7 +6556,11 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
                     # Trim trailing words that are clearly not part of the car
                     # name (e.g. "currently available", "is available").
                     car_desc = re.sub(
-                        r"\s+(currently|is|was|will|now|now,|available|here|today|tomorrow).*$",
+                        r"\s+(currently|is|are|was|were|will|would|could|should|can|may|might|must|"
+                r"now|now,|available|here|today|tomorrow|only|also|just|still|"
+                r"has|have|had|comes|came|features|includes|runs|drives|looks|sounds|seems|gets|"
+                r"doesn|isn|wasn|weren|won|didn|couldn|shouldn|wouldn|"
+                r"hasn|haven|hadn|shan|mustn|mightn|ain|don).*$",
                         "", car_desc, flags=re.I,
                     ).strip()
             if not visit_time:
@@ -5806,6 +6578,13 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
     _car_lower = car_desc.lower()
     if not car_desc or _car_lower in {"general visit", "general", "a vehicle", "visit"}:
         return False
+
+    # Augment a bare clock time with the day from history before it lands in
+    # both the chat reply AND the pending row. Without this, the dealer/customer
+    # alert SMS read just "3 PM" — the day injector only patches g.captured_reply,
+    # not stored visit_time fields.
+    if visit_time:
+        visit_time = _augment_bare_time_with_day(visit_time, from_number, to_number)
 
     # Build the deterministic STEP 1.5 message.
     new_reply = (
@@ -5953,6 +6732,9 @@ _NAME_FILLER_WORDS = {
     # conjunctions / prepositions / articles
     "and", "but", "plus", "or", "also", "with", "the", "a", "an",
     "from", "to", "of", "for", "by", "in", "on", "at", "as",
+    # demonstratives / contractions / common sentence-starters
+    "this", "that", "these", "those", "thats", "this's",
+    "its", "it's", "im", "i'm", "ive", "i've",
     # possessives / pronouns
     "my", "his", "her", "our", "their", "your", "i", "you", "he",
     "she", "it", "we", "they", "me", "him", "us", "them",
@@ -6390,20 +7172,39 @@ def _process_message(from_number: str, to_number: str, body: str):
             and not DISINTEREST_RE.search(body)
             and not CANCEL_APPT_RE.search(body)
         )
+        # Treat a short message as a name reply ONLY if either (a) we extracted
+        # a real name from it, or (b) the customer doesn't have a name on file
+        # yet (so the bot would actually be asking). Without this check, any
+        # short question like "can i pay cash?" or "any rust?" trips
+        # is_likely_name and gets answered with a flat email-ask, ignoring
+        # the actual question. The previous logic always entered the block on
+        # shape alone and returned the email prompt regardless.
+        treat_as_name_reply = False
+        save_kwargs: Dict[str, Any] = {}
         if is_likely_name:
             tokens = [t for t in body.strip().split() if t]
             new_first = tokens[0].title() if tokens else ""
             new_last = tokens[1].title() if len(tokens) >= 2 else None
-            valid_first = is_valid_name(new_first) if new_first else False
-            valid_last  = is_valid_name(new_last) if new_last else None
-            if valid_first or valid_last:
-                save_customer_profile(
-                    from_number, to_number,
-                    name=new_first if valid_first else None,
-                    last_name=new_last if valid_last else None,
-                )
+            # Use the stricter _looks_like_real_name (filler-word check) so
+            # phrases like "its in immaculate condition" don't get saved as
+            # name="Its" / last_name="Condition" during a pending-confirm flow.
+            valid_first = _looks_like_real_name(new_first) if new_first else False
+            valid_last  = _looks_like_real_name(new_last) if new_last else False
+            # Never overwrite an already-populated profile field. The customer
+            # provided their real name earlier (via the widget profile form or
+            # an explicit intro); a casual message in the middle of a booking
+            # confirmation must not clobber it.
+            if valid_first and not (customer_profile.get("name") or "").strip():
+                save_kwargs["name"] = new_first
+            if valid_last and not (customer_profile.get("last_name") or "").strip():
+                save_kwargs["last_name"] = new_last
+            has_name_on_file = bool((customer_profile.get("name") or "").strip())
+            treat_as_name_reply = bool(save_kwargs) or not has_name_on_file
+            if save_kwargs:
+                save_customer_profile(from_number, to_number, **save_kwargs)
                 customer_profile = get_customer_profile(from_number, to_number)
                 customer_name = customer_profile["name"]
+        if treat_as_name_reply:
 
             visit_time, visit_time_iso, car_desc = pending["visit_time"], pending.get("visit_time_iso", ""), pending["car_desc"]
             missing = missing_profile_field(customer_profile)
@@ -6542,6 +7343,10 @@ def _process_message(from_number: str, to_number: str, body: str):
             try:
                 history = get_recent_messages(from_number, to_number, limit=14)
                 candidate_trade_in = extract_trade_in_vehicle(history)
+                # If the LLM extract missed the condition phrase (common when
+                # customer phrases it conversationally), splice it in.
+                if candidate_trade_in:
+                    candidate_trade_in = _augment_trade_in_with_condition(candidate_trade_in, history)
                 existing = (customer_profile.get("trade_in_vehicle") or "").strip()
                 if candidate_trade_in and candidate_trade_in != existing:
                     save_customer_profile(from_number, to_number, trade_in_vehicle=candidate_trade_in)
@@ -6868,6 +7673,27 @@ def _process_message(from_number: str, to_number: str, body: str):
         save_message(from_number, to_number, "assistant", reply_text)
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
+    if _is_cash_payment_question(body):
+        # Deterministic cash confirmation. LLM was making up payment policies
+        # ("certified check or wire transfer") instead of just saying yes.
+        # Tie it into the booking flow when there's a pending appointment.
+        _pending_cash = get_pending(from_number, to_number)
+        if _pending_cash:
+            _missing_cash = missing_profile_field(customer_profile)
+            if _missing_cash:
+                reply_text = (f"Yes, we accept cash. To lock in {_pending_cash['visit_time']} "
+                              f"for the {_pending_cash['car_desc']}, could I get your {_missing_cash}?")
+            else:
+                reply_text = (f"Yes, we accept cash. To confirm — shall I keep your appointment "
+                              f"at {_pending_cash['visit_time']} for the {_pending_cash['car_desc']}? Reply Yes or No.")
+        elif confirmed_appt:
+            reply_text = (f"Yes, we accept cash. See you at {confirmed_appt['visit_time']} "
+                          f"for the {confirmed_appt['car_desc']}.")
+        else:
+            reply_text = "Yes, we accept cash. Would you like to schedule a time to come in?"
+        save_message(from_number, to_number, "assistant", reply_text)
+        return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
     if _is_financing_question(body):
         # If the customer's message ALSO contains a clear booking time (e.g.
         # "i can be there today at 5:30, financing with 600 credit score"),
@@ -6919,17 +7745,33 @@ def _process_message(from_number: str, to_number: str, body: str):
     # ("trade my X in", "trade in my X", "trading", "trading my car"). Without
     # the verb-form patterns, "I want to trade my vehicle in" misses entirely
     # and the bot skips collecting trade-in details.
-    _trade_in_trigger = (
+    # Explicit trade-in mentions in the body always fire the trade-in handler,
+    # even mid-booking. The booking-info gate only blocks the state-based
+    # trigger (`_bot_just_asked_trade_in`) — without it, a customer saying
+    # "i also have a trade in too" right after the bot asks for email falls
+    # through to _is_dealer_info_question (which also matches the word
+    # "trade-in") and dumps the flat policy text instead of asking what
+    # vehicle they're trading in.
+    _explicit_trade_word = bool(
         re.search(r"\btrade[- ]?ins?\b", body, re.I)
         or re.search(r"\btrade\s+(?:my|in|that|this|the|a|it)\b", body, re.I)
         or re.search(r"\btrading\b", body, re.I)
-        or _bot_just_asked_trade_in
-    ) and not _bot_asked_for_booking_info
+    )
+    _trade_in_trigger = (
+        _explicit_trade_word
+        or (_bot_just_asked_trade_in and not _bot_asked_for_booking_info)
+    )
     if _trade_in_trigger:
         tradeins = get_row_field(dealer_row, DEALER_TRADEINS_ALIASES)
         history = get_recent_messages(from_number, to_number, limit=12)
         # Try to capture the trade-in vehicle if the customer has shared details.
         candidate_trade_in = extract_trade_in_vehicle(history + [{"role": "user", "content": body}])
+        # Splice in condition info from history when the LLM extract drops it
+        # (common when customer phrases condition conversationally).
+        if candidate_trade_in:
+            candidate_trade_in = _augment_trade_in_with_condition(
+                candidate_trade_in, history + [{"role": "user", "content": body}]
+            )
         has_trade_in_on_file = bool((customer_profile.get("trade_in_vehicle") or "").strip())
 
         if (tradeins and not has_trade_in_on_file and not candidate_trade_in
@@ -7083,7 +7925,13 @@ def _process_message(from_number: str, to_number: str, body: str):
             match   = _extract_car_from_last_bot_message(history, inventory_rows) or _best_history_vehicle_match(inventory_rows, history_text)
         if match:
             url = str(match.get("DetailURL", "")).strip()
-            reply_text = f"Here's the listing for the {_vehicle_title(match)}: {url}" if url else build_unknown_answer(dealer_phone)
+            if url:
+                if _is_vehicle_photo_question(body):
+                    reply_text = f"You can see photos of the {_vehicle_title(match)} on the listing: {url}"
+                else:
+                    reply_text = f"Here's the listing for the {_vehicle_title(match)}: {url}"
+            else:
+                reply_text = build_unknown_answer(dealer_phone)
         else:
             reply_text = build_unknown_answer(dealer_phone)
         save_message(from_number, to_number, "assistant", reply_text)
@@ -7141,7 +7989,20 @@ def _process_message(from_number: str, to_number: str, body: str):
         appt_car = confirmed_appt["car_desc"] if confirmed_appt else ""
 
         if _body_mentions_car(body, inventory_rows):
-            matches = find_inventory_matches(inventory_rows, f"{appt_car} {body}".strip(), top_k=1, current_msg=body)
+            # Prefer the vehicle the bot most recently discussed when the
+            # customer's reference is non-specific ("the camry", "this one")
+            # and isn't asking for an alternative. Without this, two vehicles
+            # of the same model in inventory cause find_inventory_matches to
+            # pick the wrong unit even when the conversation has clearly
+            # anchored to one (e.g. mid-booking on the 2023 Camry, customer
+            # says "more info about the camry" -> bot answers about the 2017).
+            last_mentioned = _extract_car_from_last_bot_message(history, inventory_rows)
+            has_explicit_year = bool(re.search(r"\b(19|20)\d{2}\b", body))
+            wants_alternative = bool(re.search(r"\b(other|another|different|else)\b", body.lower()))
+            if last_mentioned and not has_explicit_year and not wants_alternative:
+                matches = [last_mentioned]
+            else:
+                matches = find_inventory_matches(inventory_rows, f"{appt_car} {body}".strip(), top_k=1, current_msg=body)
         else:
             last_mentioned = _extract_car_from_last_bot_message(history, inventory_rows)
             matches = [last_mentioned] if last_mentioned else []
@@ -7178,6 +8039,40 @@ def _process_message(from_number: str, to_number: str, body: str):
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
         # No vehicle identified or wrong make matched - fall through to AI
 
+    # ── PRIORITY 4.615: List-completeness confirmation ──────────────────
+    # The customer just got a list back and is now asking if that list is
+    # complete (e.g. "is that all", "are those all the hybrids you have").
+    # Without this, the next handler (make-listing, feature-listing) would
+    # re-fire on keywords in the question and dump the whole list again.
+    _is_completeness_q = bool(re.search(
+        r"\b("
+        r"is\s+that\s+(?:all|everything|it)|"
+        r"are\s+(?:those|these|they)\s+all|"
+        r"is\s+(?:it|that)\s+the\s+only|"
+        r"that('?s|\s+is)\s+(?:all|everything|it)"
+        r")\b",
+        body, re.I,
+    ))
+    if _is_completeness_q:
+        # Walk back through the last few assistant messages looking for a list
+        # (2+ year+make pairs in a single message). A list shown 2 turns back
+        # still counts — common after the customer asks "what's the other one"
+        # which produces a single-vehicle reply, then asks "is that all" which
+        # is still about the original list's completeness.
+        _hist = get_recent_messages(from_number, to_number, limit=8)
+        _recent_assistant_msgs = [m.get("content", "") for m in reversed(_hist) if m.get("role") == "assistant"][:4]
+        _had_recent_list = any(
+            len(re.findall(r"\b(19[5-9]\d|20[0-2]\d)\s+([A-Za-z][A-Za-z\-]+)", _msg)) >= 2
+            for _msg in _recent_assistant_msgs
+        )
+        if _had_recent_list:
+            reply_text = (
+                "Yes, that's everything we have matching that right now. "
+                "Want to widen the search, or would you like more details on one of those?"
+            )
+            save_message(from_number, to_number, "assistant", reply_text)
+            return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
     # ── PRIORITY 4.62: Superlative inventory queries ─────────────────────
     # "cheapest SUV", "newest truck", "lowest mileage Toyota", etc. Pick the
     # single best match from inventory by the appropriate sort field. Fires
@@ -7188,6 +8083,7 @@ def _process_message(from_number: str, to_number: str, body: str):
         _sf_field, _sf_asc, _sf_label = _superlative
         reply_text = _format_superlative_listing(inventory_rows, body, _sf_field, _sf_asc, _sf_label)
         if reply_text:
+            reply_text = _commercial_subtype_prefix(body) + reply_text
             save_message(from_number, to_number, "assistant", reply_text)
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
@@ -7238,6 +8134,7 @@ def _process_message(from_number: str, to_number: str, body: str):
             body_type=_body_m, fuel_type=_fuel_m, drivetrain=_drive_m,
         )
         if reply_text:
+            reply_text = _commercial_subtype_prefix(body) + reply_text
             save_message(from_number, to_number, "assistant", reply_text)
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
@@ -7281,6 +8178,7 @@ def _process_message(from_number: str, to_number: str, body: str):
             min_p=_min_p, max_p=_max_p, year=_year_f,
         )
         if reply_text:
+            reply_text = _commercial_subtype_prefix(body) + reply_text
             save_message(from_number, to_number, "assistant", reply_text)
             return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
@@ -7445,9 +8343,20 @@ def _process_message(from_number: str, to_number: str, body: str):
         # and we don't want the prior anchor (the Mini Cooper) to override that.
         _info_anchor = _find_exact_year_make_match(body, inventory_rows)
         if not _info_anchor and _body_mentions_car(body, inventory_rows):
-            _fuzzy = find_inventory_matches(inventory_rows, body, top_k=1, current_msg=body)
-            if _fuzzy:
-                _info_anchor = _fuzzy[0]
+            # When the body's car reference is non-specific ("the camry",
+            # no year) and the customer isn't asking for a different unit,
+            # prefer the last-mentioned anchor over a fuzzy inventory match.
+            # Two units of the same model otherwise cause the fuzzy search
+            # to pick whichever scores higher in isolation, ignoring the
+            # active conversation context.
+            _has_explicit_year = bool(re.search(r"\b(19|20)\d{2}\b", body))
+            _wants_alternative = bool(re.search(r"\b(other|another|different|else)\b", body.lower()))
+            if not _has_explicit_year and not _wants_alternative:
+                _info_anchor = _extract_car_from_last_bot_message(history, inventory_rows)
+            if not _info_anchor:
+                _fuzzy = find_inventory_matches(inventory_rows, body, top_k=1, current_msg=body)
+                if _fuzzy:
+                    _info_anchor = _fuzzy[0]
         if not _info_anchor:
             # No explicit reference — fall back to the prior single-vehicle anchor.
             _info_anchor = _extract_car_from_last_bot_message(history, inventory_rows)
@@ -7550,6 +8459,7 @@ def _process_message(from_number: str, to_number: str, body: str):
 
     if meta and (meta.get("confirmed") or meta.get("need_confirmation")):
         visit_time     = str(meta.get("visit_time",     "")).strip()
+        visit_time     = _augment_bare_time_with_day(visit_time, from_number, to_number)
         visit_time_iso = _validate_iso(str(meta.get("visit_time_iso", "")).strip())
         car_desc       = str(meta.get("car_desc",       "")).strip()
 
@@ -7819,6 +8729,23 @@ def chat_webhook():
         ))
     except Exception as e:
         app.logger.warning("step 1.5 injection check failed: %s", e)
+
+    # Day-reference enforcement. LLMs strip the day when echoing a clock time
+    # back ("Got it - 3 PM" instead of "Got it - Saturday at 3 PM"), which is
+    # ambiguous for the customer. Rewrite to include the day from history.
+    try:
+        _maybe_inject_day_in_time(from_number, to_number)
+    except Exception as e:
+        app.logger.warning("day-in-time injection check failed: %s", e)
+
+    # Customer-name correction. LLMs sometimes pull a word from the customer's
+    # most recent message as a name ("can i pay cash" -> "Thanks, Can!") even
+    # when the customer's real first name is in the prompt context. Rewrite
+    # any greeter-name pair so it uses the profile's first name.
+    try:
+        _maybe_fix_customer_name_in_reply(from_number, to_number)
+    except Exception as e:
+        app.logger.warning("customer-name correction failed: %s", e)
 
     silent = bool(g.get("captured_silent"))
     if silent:
