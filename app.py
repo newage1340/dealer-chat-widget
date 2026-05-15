@@ -2568,7 +2568,25 @@ def _row_matches_body_type(r: Dict[str, Any], body_type: str) -> bool:
     # have?" want to see them.
     if body_type == "truck" and _is_commercial_row(r):
         return False
-    h = _row_haystack(r)
+    # Two-door cars are coupes — even when the dealer scrapes them as
+    # "2-Door Sedan", "2-Door Hatchback", or "2-Door Convertible" (a 2-door
+    # convertible like a BMW 335i shows up under Coupes AND Convertibles).
+    # Exceptions:
+    # - utility vehicles (trucks/SUVs/vans) where 2-door is still that type
+    #   (a 2-door Wrangler is an SUV, a regular-cab pickup is a truck)
+    # - motorcycles (Harley Softail Deluxe is tagged "2-Door Cruiser" but
+    #   is a motorcycle, not a coupe)
+    _model_trim = (str(r.get("Model", "")) + " " + str(r.get("Trim", ""))).lower()
+    _is_two_door = bool(re.search(r"\b2[-\s]?door\b", _model_trim))
+    _is_utility = bool(re.search(
+        r"\b(truck|pickup|suv|van|minivan|crossover|wagon|cruiser|motorcycle)\b",
+        _model_trim,
+    ))
+    if _is_two_door and not _is_utility and not _is_motorcycle(r):
+        if body_type == "coupe":
+            return True
+        if body_type in ("sedan", "hatchback"):
+            return False
     aliases = {
         "truck": ["truck", "pickup"],
         "suv":   ["suv", "crossover"],
@@ -2579,26 +2597,13 @@ def _row_matches_body_type(r: Dict[str, Any], body_type: str) -> bool:
         "wagon":       ["wagon"],
         "convertible": ["convertible", "drop-top", "drop top"],
     }.get(body_type, [body_type])
-    # Word-boundary match against the alias words to avoid false positives
-    # from random substrings (e.g. "sedansomething" or a Patriot description
-    # that mentions "sedan-like ride").
-    if any(re.search(r"\b" + re.escape(a) + r"\b", h) for a in aliases):
-        return True
-    # If the haystack already labels the row with a STRONGLY CONFLICTING
-    # body-type word (e.g. "4-Door Sedan" for an SUV query), don't speculate
-    # via short model-name hints. Without this guard, "Sonata GLS" (sedan
-    # trim) matches the SUV hint "gls" (Mercedes GLS-class) and ends up in
-    # SUV listings.
+    # Strongly conflicting body words. Each query's excluders are body words
+    # that DEFINITELY mean "this row isn't that body type."
     #
     # NOTE: "wagon" is intentionally NOT a strong excluder for SUV queries —
-    # some compact crossovers (Nissan Rogue Sport, Subaru Crosstrek) get
-    # tagged "Wagon" by dealer feeds even though they're marketed as SUVs.
-    # Keeping wagon out of the SUV excluder set lets the model-hint fallback
-    # still catch those.
-    # "wagon" is intentionally NOT a strong excluder for SUV — many compact
-    # crossovers (Rogue Sport, Crosstrek, Outlander Sport, Venue) get tagged
-    # "Wagon" by dealer feeds even though they're SUVs, and customers asking
-    # for SUVs DO want to see them.
+    # some compact crossovers (Rogue Sport, Crosstrek, Outlander Sport, Venue)
+    # get tagged "Wagon" by dealer feeds even though they're SUVs, and
+    # customers asking for SUVs DO want to see them.
     _STRONG_EXCLUDERS = {
         "suv":         {"sedan", "truck", "pickup", "van", "minivan", "coupe", "convertible"},
         "truck":       {"sedan", "van", "minivan", "coupe", "convertible", "hatchback", "suv", "crossover", "wagon"},
@@ -2610,8 +2615,21 @@ def _row_matches_body_type(r: Dict[str, Any], body_type: str) -> bool:
         "convertible": {"sedan", "truck", "pickup", "van", "minivan", "coupe", "hatchback", "wagon", "suv", "crossover"},
     }
     excluders = _STRONG_EXCLUDERS.get(body_type, set())
-    if any(re.search(r"\b" + re.escape(w) + r"\b", h) for w in excluders):
+    # Apply excluders FIRST, and ONLY against model + trim — never against
+    # description prose. Marketing descriptions often mention multiple body
+    # types ("coupe-like styling on this sedan", "4-door coupe-inspired SUV"),
+    # which would otherwise either false-positive (a GLC SUV showing up under
+    # Coupes because the description says "coupe-style") or false-negative
+    # (a real coupe getting rejected because the description mentions
+    # "sedan comfort"). Trim + model are the authoritative classifier.
+    model_trim = (str(r.get("Model", "")) + " " + str(r.get("Trim", ""))).lower()
+    if excluders and any(re.search(r"\b" + re.escape(w) + r"\b", model_trim) for w in excluders):
         return False
+    # Now check the full haystack (model + trim + description) for the
+    # query's own alias words.
+    h = _row_haystack(r)
+    if any(re.search(r"\b" + re.escape(a) + r"\b", h) for a in aliases):
+        return True
     # Fallback: check the model name against known-model hints. Catches cars
     # whose scraped data doesn't include the body type word (e.g., Civic,
     # Malibu, Chrysler 200 listed without "sedan" in the title).
@@ -8047,7 +8065,7 @@ def _process_message(from_number: str, to_number: str, body: str):
     _is_completeness_q = bool(re.search(
         r"\b("
         r"is\s+that\s+(?:all|everything|it)|"
-        r"are\s+(?:those|these|they)\s+all|"
+        r"are\s+(?:those|these|they)\s+(?:all|the\s+only)|"
         r"is\s+(?:it|that)\s+the\s+only|"
         r"that('?s|\s+is)\s+(?:all|everything|it)"
         r")\b",
@@ -8583,6 +8601,67 @@ def _resolve_widget_dealer(slug: str) -> Dict[str, str]:
     return get_widget_branding(dealer)
 
 
+def _compute_widget_category_flags(twilio_number: str) -> Dict[str, bool]:
+    """Return per-category presence flags for the sidebar so empty buckets
+    can hide their button. One inventory fetch + one in-memory pass per
+    page load. All flags default to False; the caller can use Jinja's
+    falsy-undefined behavior on top of these."""
+    flags = {
+        "has_any_inventory": False,
+        "has_suvs": False,
+        "has_trucks": False,
+        "has_sedans": False,
+        "has_vans": False,
+        "has_coupes": False,
+        "has_4wd": False,
+        "has_commercial": False,
+        "has_motorcycles": False,
+        "has_hybrids": False,
+        "has_new_arrivals": False,
+    }
+    if not twilio_number:
+        return flags
+    try:
+        inv_rows = get_inventory_for_twilio(twilio_number)
+    except Exception as e:
+        app.logger.warning("category flag inventory lookup failed for %s: %s",
+                           twilio_number, e)
+        return flags
+    flags["has_any_inventory"] = bool(inv_rows)
+    _CATEGORY_KEYS = (
+        "has_suvs", "has_trucks", "has_sedans", "has_vans", "has_coupes",
+        "has_4wd", "has_commercial", "has_motorcycles",
+        "has_hybrids", "has_new_arrivals",
+    )
+    for r in inv_rows:
+        if not flags["has_suvs"] and _row_matches_body_type(r, "suv"):
+            flags["has_suvs"] = True
+        if not flags["has_trucks"] and _row_matches_body_type(r, "truck"):
+            flags["has_trucks"] = True
+        if not flags["has_sedans"] and _row_matches_body_type(r, "sedan"):
+            flags["has_sedans"] = True
+        if not flags["has_vans"] and _row_matches_body_type(r, "van"):
+            flags["has_vans"] = True
+        if not flags["has_coupes"] and _row_matches_body_type(r, "coupe"):
+            flags["has_coupes"] = True
+        if not flags["has_4wd"] and (
+            _row_matches_drivetrain(r, "4wd") or _row_matches_drivetrain(r, "awd")
+        ):
+            flags["has_4wd"] = True
+        if not flags["has_commercial"] and _is_commercial_row(r):
+            flags["has_commercial"] = True
+        if not flags["has_motorcycles"] and _is_motorcycle(r):
+            flags["has_motorcycles"] = True
+        if not flags["has_hybrids"] and _row_matches_fuel_type(r, "hybrid"):
+            flags["has_hybrids"] = True
+        # "New arrivals" = unpriced rows (just-scraped, dealer hasn't priced yet)
+        if not flags["has_new_arrivals"] and not str(r.get("Price", "")).strip().lstrip("0"):
+            flags["has_new_arrivals"] = True
+        if all(flags[k] for k in _CATEGORY_KEYS):
+            break
+    return flags
+
+
 @app.route("/")
 def widget_root():
     # If a default slug is configured, send users there. Otherwise fall back
@@ -8591,6 +8670,7 @@ def widget_root():
     if WIDGET_DEFAULT_SLUG:
         return redirect(f"/widget/{WIDGET_DEFAULT_SLUG}", code=302)
     if WIDGET_DEALER_TWILIO_NUM:
+        flags = _compute_widget_category_flags(WIDGET_DEALER_TWILIO_NUM)
         return render_template(
             "index.html",
             dealer_name=WIDGET_DEALER_NAME,
@@ -8599,7 +8679,7 @@ def widget_root():
             slug="",
             terms_url=PRIMER_TERMS_URL,
             privacy_url=PRIMER_PRIVACY_URL,
-            has_new_arrivals=False,
+            **flags,
         )
     return (
         "<h1>No dealer specified</h1>"
@@ -8618,21 +8698,9 @@ def widget_for_dealer(slug):
             f"Check the slug column for that dealer.</p>",
             404,
         )
-    # Show the "New Arrivals" sidebar button only for dealers that actually
-    # have unpriced (newly-arrived) vehicles in stock. Dealers whose entire
-    # inventory has prices (e.g. Auto District Indy) don't need the button.
-    has_new_arrivals = False
-    try:
-        conn = _db()
-        row = conn.execute(
-            "SELECT COUNT(*) FROM inventory WHERE twilio_number=? "
-            "AND (price IS NULL OR price = '' OR price = '0')",
-            (branding["twilio_number"],),
-        ).fetchone()
-        conn.close()
-        has_new_arrivals = bool(row and row[0] > 0)
-    except Exception as e:
-        app.logger.warning("has_new_arrivals lookup failed for %s: %s", slug, e)
+    # Per-category sidebar flags. Computed in one pass so empty buckets hide
+    # their button (e.g. a dealer with zero SUVs sees no SUVs button).
+    flags = _compute_widget_category_flags(branding["twilio_number"])
     return render_template(
         "index.html",
         dealer_name=branding["name"],
@@ -8641,7 +8709,7 @@ def widget_for_dealer(slug):
         slug=branding["slug"],
         terms_url=PRIMER_TERMS_URL,
         privacy_url=PRIMER_PRIVACY_URL,
-        has_new_arrivals=has_new_arrivals,
+        **flags,
     )
 
 
