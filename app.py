@@ -18,6 +18,7 @@ except ImportError:
 import gspread
 from flask import Flask, request, g, jsonify, render_template, session
 from twilio.twiml.messaging_response import MessagingResponse
+from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client as TwilioClient
 from openai import OpenAI
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -105,6 +106,168 @@ TERMS_ONLY_PRIMER = (
     "Reply HELP for help, STOP to opt out anytime. "
     f"Terms: {PRIMER_TERMS_URL}"
 )
+
+# =========================
+# DEMO DEALER (hardcoded — for the dealer-prospect demo widget)
+# =========================
+# A self-contained "dealer" with fixed inventory + a fixed sheet-style row.
+# Bypasses the Google Sheet, the scraper, the DB inventory query, and all
+# outbound staff/customer notifications — so a dealer-prospect can chat with
+# the widget on the demo page without any real SMS/email getting sent.
+# Survives Render restarts because everything is in code.
+DEMO_DEALER_SLUG    = "inventiq-demo"
+DEMO_DEALER_TWILIO  = "+15555550000"
+
+# Only Auto District Indy uses the "every car on our lot is thoroughly
+# inspected before being listed" reassurance clause. Other dealers haven't
+# committed to that intake promise, so we don't put those words in their
+# mouth.
+AUTO_DISTRICT_INDY_TWILIO = "+18882810403"
+
+# Sheet-style row — keys match the Google Form column headers so the
+# existing alias-based helpers (get_row_field etc.) pick the right values.
+_DEMO_DEALER_ROW: Dict[str, Any] = {
+    "dealership name": "InventIQ Demo",
+    "twilio number given to dealer (leave this blank)": DEMO_DEALER_TWILIO,
+    "slug": DEMO_DEALER_SLUG,
+    "brand color": "#c8221c",
+    "logo url": "",
+    "dealer phone number": "",
+    "dealer address": "123 Demo Lane, Indianapolis, IN 46201",
+    "dealer hours": "Monday-Friday: 9am to 6pm, Saturday: 9am to 5pm, Sunday: closed",
+    "do you offer financing?": "Yes, we offer financing through multiple lenders and work with all credit types. You can apply online at https://inventiq.net/apply",
+    "do you accept trade-ins? (feel free to be as detailed as you like)": "Yes, we accept trade-ins. A firm offer requires an in-person inspection.",
+    'any dealership policies the ai should know? (ex: "no deposits" or "prices are firm")': "Prices firm, no deposits required to hold a vehicle.",
+    "salesman phone numbers": "",
+    "dealer email": "",
+    "salesman emails": "",
+    "website url": "",
+}
+
+
+def _demo_vehicle(year, make, model, trim, color, price, mileage, stock, description=""):
+    """Construct a vehicle dict in the shape get_inventory_for_twilio returns."""
+    return {
+        "Year": str(year), "Make": make, "Model": model, "Trim": trim,
+        "Color": color, "Price": str(price), "Mileage": str(mileage),
+        "VIN": f"DEMO{stock}{year}", "Stock": f"D{stock}",
+        "Description": description, "CarfaxURL": "", "DetailURL": "",
+    }
+
+
+_DEMO_INVENTORY: List[Dict[str, Any]] = [
+    _demo_vehicle(2022, "BMW", "X7 Xdrive40I", "4-Door Suv", "Carbon Black Metallic",
+                  45000, 38500, "001",
+                  "Engine: 3.0L Turbo I6 | Transmission: 8-speed automatic | "
+                  "Drive: xDrive AWD | Interior: Cognac Vernasca leather || "
+                  "Powertrain ;; Turbocharged inline-six ;; xDrive intelligent AWD | "
+                  "Comfort Features ;; Heated front seats ;; Panoramic moonroof ;; "
+                  "Harman/Kardon audio | Safety ;; Active driving assistant ;; "
+                  "Lane departure warning ;; Blind-spot monitoring"),
+    _demo_vehicle(2023, "Honda", "Accord Hybrid", "Ex-L 4-Door Sedan", "Crystal Black Pearl",
+                  19800, 24100, "002",
+                  "Engine: 2.0L Hybrid I4 | Transmission: e-CVT | Drive: FWD | "
+                  "Interior: Black leather || Powertrain ;; Two-motor hybrid ;; "
+                  "204 combined hp | Comfort Features ;; Heated front seats ;; "
+                  "Wireless phone charger | Safety ;; Honda Sensing suite ;; "
+                  "Adaptive cruise control"),
+    _demo_vehicle(2021, "Ford", "Ranger Xlt", "4-Door Truck", "Velocity Blue",
+                  17000, 41500, "003",
+                  "Engine: 2.3L EcoBoost I4 | Transmission: 10-speed automatic | "
+                  "Drive: 4WD | Interior: Ebony cloth || Powertrain ;; "
+                  "Turbocharged inline-four ;; Part-time 4WD with electronic locking | "
+                  "Convenience Features ;; Tow/haul mode ;; FX4 Off-Road Package | "
+                  "Safety ;; Pre-Collision Assist ;; Lane-Keeping System"),
+    _demo_vehicle(2020, "Audi", "Q5 45", "Premium Plus Quattro 4-Door Suv", "Glacier White Metallic",
+                  17900, 52000, "004",
+                  "Engine: 2.0L TFSI I4 | Transmission: 7-speed S tronic | "
+                  "Drive: Quattro AWD | Interior: Black leather || "
+                  "Powertrain ;; Turbocharged inline-four ;; quattro all-wheel drive | "
+                  "Comfort Features ;; Heated front seats ;; Panoramic sunroof ;; "
+                  "Bang & Olufsen audio | Safety ;; Audi Pre Sense ;; Lane departure warning"),
+    _demo_vehicle(2017, "Jeep", "Wrangler Unlimited", "Rubicon Recon 4-Door Suv", "Granite Crystal Metallic",
+                  25989, 78000, "005",
+                  "Engine: 3.6L V6 | Transmission: 5-speed automatic | Drive: 4WD | "
+                  "Interior: Black leather || Powertrain ;; Pentastar V6 ;; "
+                  "Rock-Trac 4WD ;; Electronic locking differentials | "
+                  "Exterior Features ;; Removable hard top ;; 17-inch beadlock-capable wheels | "
+                  "Convenience Features ;; Uconnect infotainment"),
+    _demo_vehicle(2022, "GMC", "Sierra 3500", "Pro 4-Door Truck", "Summit White",
+                  41000, 22500, "006",
+                  "Engine: 6.6L Duramax Turbo-Diesel V8 | Transmission: Allison 10-speed | "
+                  "Drive: 4WD | Interior: Jet Black cloth || Powertrain ;; "
+                  "Turbo-diesel V8 ;; Allison automatic | Towing ;; "
+                  "Up to 36,000 lb conventional tow rating ;; Integrated trailer brake controller | "
+                  "Safety ;; HD Surround Vision ;; Trailering camera"),
+    _demo_vehicle(2019, "Mercedes-Benz", "Glc Glc", "63 Amg 4Matic 4-Door Suv", "Selenite Grey Metallic",
+                  45000, 47000, "007",
+                  "Engine: 4.0L AMG biturbo V8 | Transmission: AMG SPEEDSHIFT MCT 9G | "
+                  "Drive: 4MATIC+ AWD | Interior: Black Nappa leather || "
+                  "Powertrain ;; Hand-built AMG V8 ;; 503 hp | "
+                  "Performance ;; AMG RIDE CONTROL+ ;; Burmester surround sound | "
+                  "Safety ;; Active Brake Assist ;; Blind Spot Assist"),
+    _demo_vehicle(2018, "Volvo", "Xc90 T6", "Momentum 4-Door Suv", "Onyx Black Metallic",
+                  16629, 89000, "008",
+                  "Engine: 2.0L Turbo+Supercharged I4 | Transmission: 8-speed automatic | "
+                  "Drive: AWD | Interior: Charcoal leather || Powertrain ;; "
+                  "Twin-charged inline-four ;; All-wheel drive | "
+                  "Seats ;; Three-row seating ;; Heated front seats | "
+                  "Safety ;; City Safety auto-brake ;; Run-off road mitigation"),
+    _demo_vehicle(2020, "Hyundai", "Palisade Sel", "4-Door Suv", "Steel Graphite",
+                  22880, 38500, "009",
+                  "Engine: 3.8L V6 | Transmission: 8-speed automatic | Drive: FWD | "
+                  "Interior: Black cloth || Powertrain ;; Atkinson-cycle V6 ;; "
+                  "Front-wheel drive | Seats ;; Three-row seating for 8 ;; "
+                  "Heated front seats | Safety ;; Forward Collision-Avoidance Assist ;; "
+                  "Blind-Spot Collision-Avoidance Assist"),
+    _demo_vehicle(2017, "Cadillac", "Xt5 Luxury", "4-Door Suv", "Crystal White Tricoat",
+                  17200, 65000, "010",
+                  "Engine: 3.6L V6 | Transmission: 8-speed automatic | Drive: AWD | "
+                  "Interior: Jet Black leather || Powertrain ;; Direct-injected V6 ;; "
+                  "Intelligent AWD | Comfort Features ;; Heated and ventilated front seats ;; "
+                  "Panoramic sunroof ;; Bose Centerpoint audio | Safety ;; "
+                  "Forward Collision Alert ;; Lane Keep Assist"),
+    _demo_vehicle(2015, "Land Rover", "Rover Range", "Rover Hse 4-Door Suv", "Santorini Black Metallic",
+                  17000, 95000, "011",
+                  "Engine: 3.0L Supercharged V6 | Transmission: 8-speed ZF automatic | "
+                  "Drive: 4WD | Interior: Ebony leather || Powertrain ;; "
+                  "Supercharged V6 ;; Terrain Response 2 | "
+                  "Comfort Features ;; Heated front and rear seats ;; Panoramic roof ;; "
+                  "Meridian audio | Safety ;; Lane Departure Warning"),
+    _demo_vehicle(2018, "Mitsubishi", "Outlander Sport", "Se 4-Door Wagon", "Mercury Gray Metallic",
+                  10299, 71000, "012",
+                  "Engine: 2.4L I4 | Transmission: CVT | Drive: AWD | "
+                  "Interior: Black cloth || Powertrain ;; MIVEC inline-four ;; "
+                  "All-Wheel Control | Convenience Features ;; Heated front seats ;; "
+                  "Touchscreen infotainment | Safety ;; Forward Collision Mitigation ;; "
+                  "Lane Departure Warning"),
+]
+
+
+def _is_demo_twilio(twilio_number: str) -> bool:
+    """True if the given twilio number is the hardcoded demo dealer's."""
+    return normalize_phone(twilio_number) == DEMO_DEALER_TWILIO
+
+
+def _dealer_uses_inspection_clause(twilio_number: str = "", dealer_row: Optional[Dict[str, Any]] = None) -> bool:
+    """Only Auto District Indy may have the bot use the 'every car on our lot
+    is thoroughly inspected before being listed' phrase, surface the price
+    breakdown with ADI-specific doc fees, or use any other ADI-only voice.
+    Other dealers get neutral replacements so we don't make intake claims on
+    their behalf.
+
+    Prefers dealer_row name/slug matching when provided — needed because
+    during local testing multiple dealers may share a twilio number (the
+    user only has one Twilio number provisioned), and the twilio-number
+    check alone would mis-attribute non-ADI dealers as ADI. Falls back to
+    twilio_number comparison for callers that don't have the dealer row
+    handy (build_prompt-derived flows, the SMS scheduler jobs)."""
+    if dealer_row is not None:
+        name = (get_row_field(dealer_row, DEALER_NAME_ALIASES) or "").strip().lower()
+        slug = (_normalize_slug(get_row_field(dealer_row, SLUG_ALIASES)) or _normalize_slug(name))
+        return slug == "auto-district-indy" or name == "auto district indy"
+    return normalize_phone(twilio_number) == AUTO_DISTRICT_INDY_TWILIO
+
 
 # =========================
 # APP + CLIENTS
@@ -309,11 +472,21 @@ def normalize_phone(n: str) -> str:
 
 
 def select_dealer_for_twilio_number(dealers: List[Dict[str, Any]], twilio_to: str) -> Dict[str, Any]:
+    """Return the dealer whose 'Twilio number' column matches the inbound
+    number. Returns {} if no row matches. Previously fell back to the last
+    dealer in the sheet, which silently routed every unmatched number to
+    whichever row happened to be last — causing all numbers to land on one
+    dealer when others were removed or weren't yet provisioned."""
     tn = normalize_phone(twilio_to)
+    if not tn:
+        return {}
+    # Demo dealer short-circuit (hardcoded, not in the sheet).
+    if tn == DEMO_DEALER_TWILIO:
+        return dict(_DEMO_DEALER_ROW)
     for d in reversed(dealers):
         if normalize_phone(get_row_field(d, TWILIO_NUMBER_ALIASES)) == tn:
             return d
-    return dealers[-1] if dealers else {}
+    return {}
 
 
 def _normalize_slug(s: str) -> str:
@@ -329,6 +502,9 @@ def select_dealer_for_slug(dealers: List[Dict[str, Any]], slug: str) -> Dict[str
     target = _normalize_slug(slug)
     if not target:
         return {}
+    # Demo dealer short-circuit (hardcoded, not in the sheet).
+    if target == DEMO_DEALER_SLUG:
+        return dict(_DEMO_DEALER_ROW)
     for d in reversed(dealers):
         explicit = _normalize_slug(get_row_field(d, SLUG_ALIASES))
         if explicit and explicit == target:
@@ -670,6 +846,16 @@ def init_db() -> None:
             )
         """)
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS voice_sessions (
+                call_sid TEXT PRIMARY KEY,
+                twilio_number TEXT NOT NULL,
+                customer_phone TEXT NOT NULL,
+                turns INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+
         if DEV_CLEAR_DB:
             app.logger.warning("DEV_CLEAR_DB=1 - wiping appointments, pending, messages, cold_followups, customer_names, terms_acceptance_log")
             conn.execute("DELETE FROM appointments")
@@ -746,6 +932,9 @@ def get_dealer_fees(twilio_number: str) -> Dict[str, float]:
 
 def get_inventory_for_twilio(twilio_number: str) -> List[Dict[str, Any]]:
     tn = normalize_phone(twilio_number)
+    # Demo dealer has hardcoded inventory baked into the codebase — no DB.
+    if tn == DEMO_DEALER_TWILIO:
+        return [dict(v) for v in _DEMO_INVENTORY]
     conn = _db()
     rows = conn.execute(
         "SELECT * FROM inventory WHERE twilio_number=? ORDER BY id", (tn,)
@@ -3819,11 +4008,16 @@ def should_force_unknown_answer(reply_text: str) -> bool:
     return bool(UNKNOWN_PATTERNS.search(text))
 
 
-def _format_vehicle_essentials(r: Dict[str, Any], prior_reply: str) -> str:
+def _format_vehicle_essentials(r: Dict[str, Any], prior_reply: str, dealer_row: Optional[Dict[str, Any]] = None) -> str:
     """Build a deterministic essentials sentence (price, mileage, issues) for vehicle-info
     replies. Skips any item already covered in the bot's immediately-prior reply so the
     customer doesn't see the same numbers twice. Returns '' when everything was already
-    covered. Caller is expected to follow this with an LLM-generated features blurb."""
+    covered. Caller is expected to follow this with an LLM-generated features blurb.
+
+    The "no known issues and a clean CARFAX" hardcoded claim is ADI-only voice
+    (we have no way to actually verify the CARFAX is clean for any vehicle).
+    For other dealers we use a neutral "doesn't have any issues listed" phrasing
+    that doesn't make a CARFAX-cleanliness claim we can't back up."""
     if not r:
         return ""
     prior = (prior_reply or "").lower()
@@ -3853,8 +4047,10 @@ def _format_vehicle_essentials(r: Dict[str, Any], prior_reply: str) -> str:
         issues = " | ".join(get_row_field_values(r, ISSUE_NOTE_HEADER_ALIASES)).strip()
         if issues:
             parts.append(f"has the following disclosed concerns: {issues}")
-        else:
+        elif _dealer_uses_inspection_clause(dealer_row=dealer_row):
             parts.append("comes with no known issues and a clean CARFAX")
+        else:
+            parts.append("doesn't have any issues listed")
 
     if not parts:
         return ""
@@ -3866,16 +4062,19 @@ def _format_vehicle_essentials(r: Dict[str, Any], prior_reply: str) -> str:
     return f"The {title} {parts[0]}, {parts[1]}, and {parts[2]}."
 
 
-def _issue_response_for_match(r):
+def _issue_response_for_match(r, twilio_number: str = "", dealer_row: Optional[Dict[str, Any]] = None):
     title   = _vehicle_title(r)
     issues  = " | ".join(get_row_field_values(r, ISSUE_NOTE_HEADER_ALIASES)).strip()
     service = " | ".join(get_row_field_values(r, MAINT_WORK_HEADER_ALIASES)).strip()
     if issues:
         return f"Regarding the {title} - disclosed concerns: {issues}." + (f" Features/highlights: {service}." if service else "")
-    inspected_note = "but every car on our lot is thoroughly inspected before being listed"
+    if _dealer_uses_inspection_clause(twilio_number, dealer_row=dealer_row):
+        no_issues_clause = f"There aren't any issues listed for the {title}, but every car on our lot is thoroughly inspected before being listed."
+    else:
+        no_issues_clause = f"There aren't any issues listed for the {title} — the dealer team can walk you through anything they know about it in person."
     if service:
-        return f"There aren't any issues listed for the {title}, {inspected_note}. Features/highlights: {service}."
-    return f"There aren't any issues listed for the {title}, {inspected_note}. We'd be happy to go over the details in person — would you like to set up a time?"
+        return f"{no_issues_clause} Features/highlights: {service}."
+    return f"{no_issues_clause} Would you like to set up a time to come see it?"
 
 
 def _title_status_response_for_match(r):
@@ -3904,7 +4103,18 @@ def _parse_hours_string(hours_str: str) -> Dict[str, str]:
     if not hours_str:
         return result
     # Split on common segment separators
-    segments = re.split(r"[,;|/\n]+", hours_str)
+    # Split on standard separators (comma, semicolon, pipe, slash, newline) AND
+    # on whitespace that sits right before a day name when the preceding token
+    # was a time or paren — handles dealer hours strings like
+    # "Mon - Sat : 9:00 AM - 6:00 PM Sun : Closed" (no comma between the open
+    # range and the Sunday-closed clause). Without this split, "Closed" leaks
+    # into the Mon-Sat segment and marks every weekday as closed too.
+    segments = re.split(
+        r"[,;|/\n]+"
+        r"|(?<=[)\sap]m)\s+(?=(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b)",
+        hours_str,
+        flags=re.I,
+    )
     for seg in segments:
         seg = seg.strip().rstrip(".")
         if not seg:
@@ -4211,6 +4421,26 @@ def _is_vehicle_photo_question(msg):
         (msg or "").lower(),
     ))
 
+def _is_carfax_question(msg):
+    """Customer asking for a CarFax / vehicle history report OR any history-
+    related question that a CarFax report would answer: accidents, prior
+    owners, ownership history, service records. Routed to a deterministic
+    handler so dealers whose scraped inventory carries CarFax URLs (Gov Auto
+    Sales, Auto Galaxy Sales, United Automotive — DealerCenter / DCS) can
+    hand them out directly. Dealers without CarFax URLs on file fall through
+    to the inspection-clause fallback (which is dealer-aware via
+    `_dealer_uses_inspection_clause`)."""
+    return bool(re.search(
+        r"\b(carfax|car\s*fax|autocheck|auto\s*check|"
+        r"vehicle\s*history(?:\s*report)?|history\s*report|accident\s*report|"
+        r"accidents?|wrecks?|wrecked|"
+        r"owners?|ownership|"
+        r"service\s+records?|service\s+history|maintenance\s+records?|"
+        r"clean\s+history|clean\s+title)\b",
+        (msg or "").lower(),
+    ))
+
+
 def _is_title_status_question(msg):
     return bool(re.search(
         r"\b(clean\s+title|title\s+status|salvage\s+title|rebuilt\s+title|"
@@ -4371,6 +4601,12 @@ def _send_email(to: str, subject: str, body: str) -> Tuple[bool, str]:
 
 
 def notify_all_staff(dealer_row: Dict[str, Any], from_number: str, body: str) -> None:
+    # Demo dealer: log the would-be alert but suppress real SMS/email. Lets
+    # dealer-prospects walk through the booking flow on the demo widget
+    # without real notifications going out.
+    if _is_demo_twilio(from_number):
+        app.logger.info("Demo dealer: suppressing staff notification. Body:\n%s", body)
+        return
     dealer_ph = normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
     salesman_phones = get_salesman_phones(dealer_row)
 
@@ -4502,6 +4738,9 @@ def notify_customer_appointment(dealer_row: Dict[str, Any], *, customer_phone: s
     (e.g., widget customer who somehow skipped phone collection), OR if the
     current request came in via /sms (the bot's TwiML reply already reaches
     the customer's phone, so a separate SMS would duplicate)."""
+    if _is_demo_twilio(twilio_number):
+        app.logger.info("Demo dealer: suppressing customer appointment %s SMS", action)
+        return
     if g.get("is_sms_request"):
         app.logger.info("notify_customer_appointment: skipping for SMS-origin request "
                         "(TwiML reply already covers it)")
@@ -4662,7 +4901,7 @@ Reply with bullet points only.""".strip()
         return ""
 
 
-def ai_vehicle_detail_reply(customer_msg, vehicle_data, dealer_phone, history):
+def ai_vehicle_detail_reply(customer_msg, vehicle_data, dealer_phone, history, twilio_number: str = "", dealer_row: Optional[Dict[str, Any]] = None):
     history_snippet = " ".join((m.get("content") or "") for m in history[-4:])
     dealer_phone_clean = normalize_phone(dealer_phone or "")
     phone_rule = (
@@ -4673,6 +4912,23 @@ def ai_vehicle_detail_reply(customer_msg, vehicle_data, dealer_phone, history):
         else "Do NOT include any phone number in your reply (we don't have one on file). "
              "Suggest the customer reach out via this chat or schedule a visit instead."
     )
+    if _dealer_uses_inspection_clause(twilio_number, dealer_row=dealer_row):
+        history_issues_rule = (
+            "History / issues rule (REQUIRED — follow exactly):\n"
+            "- If the customer asks about history or known issues (accidents, prior owners, service records, repair history, problems, issues, anything wrong, condition, defects, clean history, clean carfax, or anything similar) AND the vehicle data has none listed: your reply MUST contain BOTH of these in this order:\n"
+            "  1. Acknowledge nothing is listed for the vehicle.\n"
+            "  2. Add the EXACT phrase \"but every car on our lot is thoroughly inspected before being listed\" (use \"but\" — not \"and\").\n"
+            "- Then offer to go over the details in person. Use \"car\" not \"vehicle\" in the inspection clause.\n"
+            "- Example (the inspection sentence is NOT optional — include it verbatim): \"There aren't any accidents or issues listed for the 2023 Toyota Camry Se, but every car on our lot is thoroughly inspected before being listed. We'd be happy to go over the details in person — would you like to set up a time?\"\n"
+            "- IMPORTANT: Only say the \"every car on our lot is thoroughly inspected\" line ONCE per conversation. If the Recent conversation above already shows you've used that exact line in a previous reply, DO NOT repeat it — just briefly acknowledge nothing is listed for the new question (e.g. \"No accidents listed either.\") and move on. On the FIRST history/issue question in a conversation, the inspection line IS required — do not skip it."
+        )
+    else:
+        history_issues_rule = (
+            "History / issues rule (REQUIRED — follow exactly):\n"
+            "- If the customer asks about history or known issues (accidents, prior owners, service records, repair history, problems, issues, anything wrong, condition, defects, clean history, clean carfax, or anything similar) AND the vehicle data has none listed: acknowledge that nothing is listed for the vehicle, then offer to have the dealer team walk through what they know about it in person.\n"
+            "- DO NOT claim the car was inspected, certified, vetted, or reconditioned. DO NOT use the phrase \"every car on our lot is thoroughly inspected\" — we don't make that claim for this dealer. Just say nothing's listed and pivot to scheduling a visit.\n"
+            "- Example: \"There aren't any accidents or issues listed for the 2023 Toyota Camry Se — the dealer team can walk you through anything they know about it in person. Would you like to set up a time to come see it?\""
+        )
     prompt = f"""You are a professional automotive sales consultant responding via SMS.
 
 A customer asked: "{customer_msg}"
@@ -4691,20 +4947,17 @@ CarFax rules:
 - If the vehicle data above contains a "CarFax report:" line with a URL, you MAY mention CarFax and you MUST include the URL in your reply (do not make the customer ask for it separately).
 - If no CarFax URL is present in the vehicle data, do NOT mention or recommend CarFax at all. Either answer with the info you do have, or briefly say you don't have that detail and suggest contacting the dealership.
 
-History / issues rule (REQUIRED — follow exactly):
-- If the customer asks about history or known issues (accidents, prior owners, service records, repair history, problems, issues, anything wrong, condition, defects, clean history, clean carfax, or anything similar) AND the vehicle data has none listed: your reply MUST contain BOTH of these in this order:
-  1. Acknowledge nothing is listed for the vehicle.
-  2. Add the EXACT phrase "but every car on our lot is thoroughly inspected before being listed" (use "but" — not "and").
-- Then offer to go over the details in person. Use "car" not "vehicle" in the inspection clause.
-- Example (the inspection sentence is NOT optional — include it verbatim): "There aren't any accidents or issues listed for the 2023 Toyota Camry Se, but every car on our lot is thoroughly inspected before being listed. We'd be happy to go over the details in person — would you like to set up a time?"
-- IMPORTANT: Only say the "every car on our lot is thoroughly inspected" line ONCE per conversation. If the Recent conversation above already shows you've used that exact line in a previous reply, DO NOT repeat it — just briefly acknowledge nothing is listed for the new question (e.g. "No accidents listed either.") and move on. On the FIRST history/issue question in a conversation, the inspection line IS required — do not skip it.""".strip()
+{history_issues_rule}""".strip()
     try:
         resp = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
         )
-        return (resp.choices[0].message.content or "").strip()
+        raw = (resp.choices[0].message.content or "").strip()
+        # If the LLM included a CarFax URL we already sent in this convo,
+        # collapse it to a reference instead of repeating the 142-char URL.
+        return _dedupe_carfax_in_reply(raw, history)
     except Exception as e:
         app.logger.warning("ai_vehicle_detail_reply failed: %s", e)
         return ""
@@ -5354,8 +5607,43 @@ Write a single short follow-up SMS (1-2 sentences). Reference what they were ask
 # PROMPT BUILDER
 # =========================
 
+_SERVICE_INTENT_RE = re.compile(
+    r"\b("
+    r"oil\s+change|tire\s+(?:rotat|chang|replac)|brake\s+(?:work|pad|rotor|repair)|"
+    r"engine\s+(?:repair|work|rebuild|trouble)|transmission\s+(?:repair|work|fluid|rebuild)|"
+    r"electrical\s+(?:repair|work|issue|problem)|"
+    r"body\s+(?:work|repair|damage)|"
+    r"alignment|suspension\s+(?:work|repair)|"
+    r"spark\s+plug|battery\s+(?:replac|chang)|"
+    r"glass\s+(?:replac|repair)|windshield\s+(?:replac|repair|chip|crack)|"
+    r"tune[-\s]?up|inspection|check\s+engine|diagnostic|"
+    r"mechanical\s+work|repair\s+my\s+car|fix\s+my\s+car|"
+    r"service\s+(?:my|the|on\s+my)\s+(?:car|vehicle)|"
+    r"get\s+(?:my\s+)?(?:car|vehicle)\s+service"
+    r")\b",
+    re.I,
+)
+
+
+def _is_service_appointment_context(history: List[Dict[str, Any]], current_body: str = "") -> bool:
+    """Detect whether the current booking conversation is for SERVICE work on
+    the customer's own car (oil change, brake work, engine repair, etc.) vs.
+    SALES — viewing/buying a car from the dealer's inventory. Used to skip the
+    sales-specific STEP 1.5 (financing/trade-in) questions and the inspection
+    clause for service appointments.
+
+    Heuristic: look at the last ~8 messages (user + assistant) for explicit
+    service-intent keywords. If the conversation has been about service work,
+    we treat the booking as a service appointment."""
+    blob = (current_body or "")
+    for m in (history or [])[-8:]:
+        blob += " " + (m.get("content") or "")
+    return bool(_SERVICE_INTENT_RE.search(blob))
+
+
 def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, confirmed_appt=None, customer_name=""):
     dealer_name  = get_row_field(dealer, DEALER_NAME_ALIASES) or "the dealership"
+    dealer_twilio = normalize_phone(get_row_field(dealer, TWILIO_NUMBER_ALIASES))
     address      = get_row_field(dealer, DEALER_ADDRESS_ALIASES) or "(not listed)"
     hours        = get_row_field(dealer, DEALER_HOURS_ALIASES) or "(not listed)"
     financing    = get_row_field(dealer, DEALER_FINANCING_ALIASES) or "(not listed)"
@@ -5467,6 +5755,15 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
         f"{trade_in_warning}"
     )
 
+    if _dealer_uses_inspection_clause(dealer_twilio, dealer_row=dealer):
+        history_issues_rule = (
+            "- If a customer asks about a vehicle's history OR known issues (accidents, prior accidents, prior owners, service records, repair history, clean history, clean carfax, problems, issues, anything wrong, condition, defects, or anything similar) AND the data has none listed: do NOT say \"I don't have that information.\" Instead, your reply MUST do BOTH (in this order): (1) acknowledge nothing is listed for the vehicle; (2) include the EXACT phrase \"but every car on our lot is thoroughly inspected before being listed\". Use \"but\" (not \"and\") between the two clauses. Then offer to go over the details in person. Use \"car\" not \"vehicle\" in the inspection clause. Example phrasing: \"There aren't any accidents or issues listed for the 2023 Toyota Camry Se, but every car on our lot is thoroughly inspected before being listed. We'd be happy to go over the details in person — would you like to set up a time?\" IMPORTANT: only say the \"every car on our lot is thoroughly inspected\" line ONCE per conversation. If your prior replies in this conversation ALREADY used that exact line, DO NOT repeat it — just briefly acknowledge nothing is listed for the new question (e.g. \"No accidents listed either.\") and move on. On the FIRST history/issue question, the inspection line IS required — do not skip it."
+        )
+    else:
+        history_issues_rule = (
+            "- If a customer asks about a vehicle's history OR known issues (accidents, prior accidents, prior owners, service records, repair history, clean history, clean carfax, problems, issues, anything wrong, condition, defects, or anything similar) AND the data has none listed: acknowledge nothing is listed for the vehicle, then offer to have the dealer team walk through what they know about it in person. DO NOT claim the car was inspected, certified, vetted, or reconditioned. DO NOT use the phrase \"every car on our lot is thoroughly inspected\" — we do not make that claim for this dealer. Example: \"There aren't any accidents or issues listed for the 2023 Toyota Camry Se — the dealer team can walk you through anything they know about it in person. Would you like to set up a time to come see it?\""
+        )
+
     return f"""You are Dave, a professional sales consultant representing {dealer_name}, communicating via SMS on behalf of the dealership. If a customer asks your name, you are Dave. Never say you are an AI, bot, assistant, or anything other than Dave - you are a person on the dealership's team.
 
 === CURRENT DATE & TIME ===
@@ -5492,11 +5789,11 @@ If a customer asks something else not covered by the data below: "I don't have t
 - When the customer uses words like "that price", "that price range", "that feature", "that one", "similar", "another like that" — they're referring to the SPECIFIC vehicle you mentioned in your IMMEDIATELY PREVIOUS reply, NOT some other vehicle from earlier history. If your last reply named the Prius at $4,769, "that price range" means around $4,769, not any other price seen earlier. Anchor every relative pronoun to your most recent reply.
 - NEVER invent a phone number, address, or any fact not in the data.
 - NEVER ask about monthly payment amounts.
-- For service/detailing pricing, direct them to call: "For pricing on that, I'd recommend giving us a call at {dealer_phone} - they'll be able to give you an accurate quote."
+- When the customer asks about service / repair / maintenance / detailing / tinting / add-ons, answer DIRECTLY using the Dealer Info "Notes/Policies" field above — that field lists what services the dealership actually offers. If the customer is asking generally ("I want service done"), ASK them what kind of service they need. If they ask about a specific service, confirm whether it's listed and what it covers — and if it's NOT explicitly listed but related services are, mention what IS available and pivot to scheduling. Do NOT share a phone number unless either: (a) the customer explicitly asks for pricing, a quote, or a phone number, OR (b) the policies field has literally zero relevant service info to share. When neither applies, end with a follow-up like "Would you like to schedule a visit for any of those?" instead of pushing a phone number. When you DO share a phone number, use the service phone if one is listed in the policies field; otherwise use {dealer_phone}. Phrasing for the pricing escalation: "For an accurate quote on that, I'd recommend giving them a call at <number>."
 - Share VIN only if it appears in TOP MATCHING VEHICLE DETAILS below.
 - NEVER offer to email details or promise anything outside this conversation.
 - NEVER guess vehicle condition, history, or issues.
-- If a customer asks about a vehicle's history OR known issues (accidents, prior accidents, prior owners, service records, repair history, clean history, clean carfax, problems, issues, anything wrong, condition, defects, or anything similar) AND the data has none listed: do NOT say "I don't have that information." Instead, your reply MUST do BOTH (in this order): (1) acknowledge nothing is listed for the vehicle; (2) include the EXACT phrase "but every car on our lot is thoroughly inspected before being listed". Use "but" (not "and") between the two clauses. Then offer to go over the details in person. Use "car" not "vehicle" in the inspection clause. Example phrasing: "There aren't any accidents or issues listed for the 2023 Toyota Camry Se, but every car on our lot is thoroughly inspected before being listed. We'd be happy to go over the details in person — would you like to set up a time?" IMPORTANT: only say the "every car on our lot is thoroughly inspected" line ONCE per conversation. If your prior replies in this conversation ALREADY used that exact line, DO NOT repeat it — just briefly acknowledge nothing is listed for the new question (e.g. "No accidents listed either.") and move on. On the FIRST history/issue question, the inspection line IS required — do not skip it.
+{history_issues_rule}
 - NEVER use bullet points.
 - NEVER ask the customer for their credit score, credit history, social security number, date of birth, monthly income, banking details, or any other sensitive financial information. If the customer brings up financing or credit, point them to the dealer's secure credit application (online if a URL is in the policy text, otherwise in person at the dealership) and ask for a time to come in - do NOT collect any of that info in chat.
 - NEVER ask "what time works", "what time would work", "what day works", or any time/day question if the customer's latest message ALREADY contains a specific clock time for the visit (e.g. "tomorrow at 3pm", "Friday at 10am", "2pm today", "I can be there tomorrow at 2pm"). Treat the time they provided as the time and proceed to the next booking step (email if missing, otherwise the confirmation). This rule overrides any phrasing example below.
@@ -5548,8 +5845,9 @@ The day comes from the conversation, not just the latest user message. Scan the 
 
 This rule overrides any example phrasing below that omits a day. When in doubt, include the day.
 
-STEP 1.5 - Questions / trade-in / financing check (ONLY when a specific vehicle is the car of interest; SKIP for general visits)
-- Trigger: a specific clock time has been established AND the car of interest is a specific vehicle (NOT "general visit") AND STEP 1.5 has not been asked yet in this booking attempt.
+STEP 1.5 - Questions / trade-in / financing check (ONLY for SALES bookings on a specific vehicle from our inventory; SKIP for general visits AND for SERVICE appointments)
+- SKIP this step entirely when the booking is for a SERVICE appointment on the customer's OWN car (oil change, brake work, engine repair, spark plugs, transmission work, body work, etc.). Service appointments do NOT involve financing or trade-ins. For service bookings, go DIRECTLY to STEP 2 (email if missing) or STEP 3 (confirm). The "car of interest" for service is the customer's own vehicle (e.g. "your 2008 Chevy Malibu"), NOT a unit from our inventory. Recognize service context from prior messages mentioning repairs, maintenance, "service my car", or specific service tasks.
+- Trigger (sales path only): a specific clock time has been established AND the car of interest is a specific inventory vehicle (NOT "general visit", NOT a service appointment) AND STEP 1.5 has not been asked yet in this booking attempt.
 - Ask in ONE message whether the customer has any other questions about the vehicle, a trade-in they'd like the dealer to look at, or if they're interested in financing. Phrasing example (≤220 chars): "Got it - 2pm tomorrow for the [year make model]. Any other questions about it, are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
 - If the customer responds with questions: answer them using the inventory data, then in the SAME reply ask the email question to advance to STEP 2 (e.g. "Yes - it has all-wheel drive and a panoramic roof. To lock in 2pm tomorrow, could I get your email?"). Don't loop back to STEP 1.5 again.
 - If the customer mentions a trade-in:
@@ -5647,6 +5945,64 @@ def _scrub_llm_urls(text: str) -> str:
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     return text.strip()
+
+
+_CARFAX_URL_RE = re.compile(r"https?://(?:www\.)?carfax\.com/\S+", re.I)
+# Markdown link whose URL is a CarFax URL: [text](https://carfax.com/...)
+_CARFAX_MD_LINK_RE = re.compile(
+    r"\[[^\]]*\]\((https?://(?:www\.)?carfax\.com/[^\s)]+)\)",
+    re.I,
+)
+
+
+def _dedupe_carfax_in_reply(reply: str, history: List[Dict[str, Any]]) -> str:
+    """If the LLM reply contains a CarFax URL we ALREADY sent in this
+    conversation, replace it with a brief 'see the CARFAX I sent earlier'
+    reference so the customer doesn't get the same 142-char URL spammed at
+    them across multiple turns. Different CarFax URL (different car) passes
+    through untouched. Handles both bare URLs and markdown-link wrapped URLs
+    (`[CarFax report](url)`) so the brackets don't end up dangling after the
+    URL is stripped."""
+    if not reply:
+        return reply
+    reply_urls = _CARFAX_URL_RE.findall(reply)
+    if not reply_urls:
+        return reply
+    prior_urls: set = set()
+    for m in history:
+        if m.get("role") != "assistant":
+            continue
+        for u in _CARFAX_URL_RE.findall(m.get("content") or ""):
+            prior_urls.add(u.rstrip(".,);:"))
+    if not prior_urls:
+        return reply
+
+    REPLACEMENT = "(see the CARFAX I sent earlier)"
+
+    # Pass 1 — replace markdown-wrapped CarFax links first so the brackets
+    # get cleaned up with the URL in a single shot.
+    def _md_sub(match: re.Match) -> str:
+        url = match.group(1).rstrip(".,);:")
+        return REPLACEMENT if url in prior_urls else match.group(0)
+    new_reply = _CARFAX_MD_LINK_RE.sub(_md_sub, reply)
+
+    # Pass 2 — handle any remaining BARE CarFax URLs. Also eat any leading
+    # connector phrase ("here:", "available at:") that becomes awkward
+    # without a URL trailing it.
+    for url in _CARFAX_URL_RE.findall(new_reply):
+        clean = url.rstrip(".,);:")
+        if clean in prior_urls:
+            new_reply = re.sub(
+                r"(?:\s*(?:here|available|view\s+it|review\s+it|check\s+it\s+out)?\s*[:\-]?\s*)?"
+                + re.escape(url),
+                " " + REPLACEMENT,
+                new_reply,
+                count=1,
+            )
+    # Tidy spacing + orphaned punctuation
+    new_reply = re.sub(r"[ \t]{2,}", " ", new_reply)
+    new_reply = re.sub(r"\s+([,.;:!?])", r"\1", new_reply)
+    return new_reply.strip()
 
 
 def extract_meta(reply_text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
@@ -6049,6 +6405,17 @@ def _maybe_inject_day_in_time(from_number: str, to_number: str) -> bool:
     captured = (g.get("captured_reply") or "").strip()
     if not captured:
         return False
+    # Skip when the reply is reporting dealer business hours or service-shop
+    # operating hours — those contain bare clock times that should NOT be
+    # rewritten as "today at 9 AM". Day-injection is for BOOKING replies only.
+    _captured_lower = captured.lower()
+    if re.search(
+        r"\b(hours? of operation|business hours|we'?re (?:open|closed)|"
+        r"(?:mon|tue|wed|thu|fri|sat|sun)\s*[-–]\s*(?:mon|tue|wed|thu|fri|sat|sun)|"
+        r"closed (?:today|on|sunday|saturday)|are open (?:from|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+        _captured_lower,
+    ):
+        return False
     new_reply = _augment_bare_time_with_day(captured, from_number, to_number)
     if new_reply == captured:
         return False
@@ -6138,9 +6505,18 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
     the customer about questions/financing/trade-in. When we detect the LLM's
     reply is asking for email AND we're booking a specific vehicle AND
     STEP 1.5 hasn't been asked yet, we rewrite the reply to the STEP 1.5
-    question instead. Returns True if the reply was overridden."""
+    question instead. Returns True if the reply was overridden.
+
+    Skipped entirely for SERVICE appointments — STEP 1.5 (financing/trade-in)
+    is sales-specific and doesn't apply when the customer is bringing their
+    own car in for repair/maintenance."""
     captured = (g.get("captured_reply") or "").strip()
     if not captured:
+        return False
+
+    # Skip the entire STEP 1.5 enforcement chain for service-context bookings.
+    _svc_history = get_recent_messages(from_number, to_number, limit=10)
+    if _is_service_appointment_context(_svc_history):
         return False
 
     captured_lower = captured.lower()
@@ -7775,9 +8151,44 @@ def _process_message(from_number: str, to_number: str, body: str):
         or re.search(r"\btrade\s+(?:my|in|that|this|the|a|it)\b", body, re.I)
         or re.search(r"\btrading\b", body, re.I)
     )
+    # Topic-pivot guard: if the bot just asked for trade-in details but the
+    # customer's new message is a fresh question that contains NO trade-in
+    # related content (no vehicle year, no make, no "trade" word), they're
+    # changing topics. Don't loop the trade-in details ask at them — let the
+    # message route to its actual handler (service question, financing,
+    # etc.). Without this guard, "do you do mechanical work" gets misread as
+    # a trade-in answer just because it landed after a trade-in prompt.
+    _looks_like_new_question = (
+        "?" in body
+        or bool(re.match(
+            r"^\s*(do|does|can|will|would|should|is|are|what|how|why|when|"
+            r"where|which|who|tell\s+me|got\s+a\s+question)\b",
+            body, re.I,
+        ))
+    )
+    _body_has_trade_signal = (
+        bool(re.search(r"\b(19|20)\d{2}\b", body))  # year
+        or _explicit_trade_word
+        or bool(re.search(
+            r"\b(toyota|honda|ford|chevy|chevrolet|nissan|hyundai|kia|mazda|"
+            r"subaru|bmw|mercedes|audi|vw|volkswagen|lexus|acura|infiniti|"
+            r"cadillac|buick|gmc|jeep|chrysler|dodge|ram|lincoln|volvo|"
+            r"porsche|tesla)\b",
+            body, re.I,
+        ))  # any common make
+        or bool(re.search(r"\b\d{1,3}[,k]?\s*(?:k\s+)?miles?\b|\b\d{2,3}k\b", body, re.I))  # mileage
+        or bool(re.search(r"\b(clean|salvage|rebuilt|branded|lien)\s+title\b", body, re.I))  # title status
+    )
+    _trade_in_state_pivot = (
+        _bot_just_asked_trade_in
+        and _looks_like_new_question
+        and not _body_has_trade_signal
+    )
     _trade_in_trigger = (
         _explicit_trade_word
-        or (_bot_just_asked_trade_in and not _bot_asked_for_booking_info)
+        or (_bot_just_asked_trade_in
+            and not _bot_asked_for_booking_info
+            and not _trade_in_state_pivot)
     )
     if _trade_in_trigger:
         tradeins = get_row_field(dealer_row, DEALER_TRADEINS_ALIASES)
@@ -7861,7 +8272,13 @@ def _process_message(from_number: str, to_number: str, body: str):
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
     if _is_price_breakdown_question(body):
-        fees = get_dealer_fees(to_number)
+        # ADI is the only dealer with confirmed, accurate per-vehicle fee data
+        # (doc fee + title/tag) wired through the scraper. Other dealers may
+        # share ADI's twilio number locally for testing OR have placeholder
+        # fees — either way, we don't want to surface inaccurate fee numbers
+        # to a customer. For non-ADI dealers, skip the breakdown and let the
+        # message fall through to the LLM for a simpler price answer.
+        fees = get_dealer_fees(to_number) if _dealer_uses_inspection_clause(dealer_row=dealer_row) else {"doc_fee": 0.0, "title_tag_fee": 0.0}
         if fees["doc_fee"] > 0:
             history      = get_recent_messages(from_number, to_number, limit=14)
             exact_match  = _find_exact_year_make_match(body, inventory_rows)
@@ -7910,7 +8327,7 @@ def _process_message(from_number: str, to_number: str, body: str):
             match      = matches[0] if matches else _best_history_vehicle_match(inventory_rows, history_text)
         else:
             match = _extract_car_from_last_bot_message(history, inventory_rows) or _best_history_vehicle_match(inventory_rows, history_text)
-        reply_text   = (ai_vehicle_detail_reply(body, inventory_row_details(match), dealer_phone, history) or _issue_response_for_match(match)) if match else build_unknown_answer(dealer_phone)
+        reply_text   = (ai_vehicle_detail_reply(body, inventory_row_details(match), dealer_phone, history, twilio_number=to_number, dealer_row=dealer_row) or _issue_response_for_match(match, to_number, dealer_row=dealer_row)) if match else build_unknown_answer(dealer_phone)
         save_message(from_number, to_number, "assistant", reply_text)
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
@@ -7924,7 +8341,67 @@ def _process_message(from_number: str, to_number: str, body: str):
             match      = matches[0] if matches else _best_history_vehicle_match(inventory_rows, history_text)
         else:
             match = _extract_car_from_last_bot_message(history, inventory_rows) or _best_history_vehicle_match(inventory_rows, history_text)
-        reply_text = (ai_vehicle_detail_reply(body, inventory_row_details(match), dealer_phone, history) or _title_status_response_for_match(match)) if match else build_unknown_answer(dealer_phone)
+        reply_text = (ai_vehicle_detail_reply(body, inventory_row_details(match), dealer_phone, history, twilio_number=to_number, dealer_row=dealer_row) or _title_status_response_for_match(match)) if match else build_unknown_answer(dealer_phone)
+        save_message(from_number, to_number, "assistant", reply_text)
+        return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
+    if _is_carfax_question(body):
+        history      = get_recent_messages(from_number, to_number, limit=14)
+        history_text = " ".join((m.get("content") or "") for m in history[-6:])
+        appt_car     = confirmed_appt["car_desc"] if confirmed_appt else ""
+        exact_match  = _find_exact_year_make_match(body, inventory_rows)
+        if exact_match:
+            match = exact_match
+        elif _body_mentions_car(body, inventory_rows):
+            search_ctx = f"{history_text} {appt_car} {body}".strip()
+            matches    = find_inventory_matches(inventory_rows, search_ctx, top_k=1, current_msg=body)
+            match      = matches[0] if matches else _best_history_vehicle_match(inventory_rows, history_text)
+        else:
+            match = _extract_car_from_last_bot_message(history, inventory_rows) or _best_history_vehicle_match(inventory_rows, history_text)
+        if match:
+            carfax_url = str(match.get("CarfaxURL", "")).strip()
+            title = _vehicle_title(match)
+            # Once-per-conversation rule: if we've already sent THIS specific
+            # CarFax URL in this conversation, don't spam the customer with
+            # the same link again. Refer them back to the report instead.
+            _carfax_already_sent = bool(carfax_url) and any(
+                carfax_url in (m.get("content") or "")
+                for m in history if m.get("role") == "assistant"
+            )
+            if carfax_url and _carfax_already_sent:
+                reply_text = (
+                    f"That's covered in the CARFAX report I sent earlier for "
+                    f"the {title} — it has the accident history, prior owners, "
+                    f"and service records. Want to set up a time to come see it?"
+                )
+            elif carfax_url:
+                reply_text = (
+                    f"Here's the CARFAX report for the {title} — it covers "
+                    f"accident history, prior owners, and service records: {carfax_url}"
+                )
+            elif _dealer_uses_inspection_clause(dealer_row=dealer_row):
+                reply_text = (
+                    f"I don't have the CARFAX for the {title}, but every car on our "
+                    f"lot is thoroughly inspected before being listed. Would you like "
+                    f"me to send the VIN instead, or set up a time to come see it in person?"
+                )
+            else:
+                reply_text = (
+                    f"I don't have the CARFAX for the {title}. Would you like me to "
+                    f"send the VIN so you can run it yourself, or set up a time to "
+                    f"come see it in person?"
+                )
+        elif _dealer_uses_inspection_clause(dealer_row=dealer_row):
+            reply_text = (
+                "I don't have a CARFAX on file for that one, but every car on our "
+                "lot is thoroughly inspected before being listed. Would you like to "
+                "set up a time to come take a look?"
+            )
+        else:
+            reply_text = (
+                "I don't have a CARFAX on file for that one. Would you like to set "
+                "up a time to come take a look in person?"
+            )
         save_message(from_number, to_number, "assistant", reply_text)
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
@@ -8050,7 +8527,7 @@ def _process_message(from_number: str, to_number: str, body: str):
                     title = _vehicle_title(match)
                     reply_text = f"Yes, the {title} is currently available. Would you like to schedule a time to come see it?"
             else:
-                reply_text = ai_vehicle_detail_reply(body, inventory_row_details(match), dealer_phone, history) or inventory_row_details(match)
+                reply_text = ai_vehicle_detail_reply(body, inventory_row_details(match), dealer_phone, history, twilio_number=to_number, dealer_row=dealer_row) or inventory_row_details(match)
 
         if reply_text:
             save_message(from_number, to_number, "assistant", reply_text)
@@ -8422,13 +8899,16 @@ def _process_message(from_number: str, to_number: str, body: str):
     # deterministic link handler (_is_vehicle_link_question), which reads
     # the real detail_url from inventory. The LLM has no way to know real URLs.
     reply_text = _scrub_llm_urls(reply_text)
+    # If the LLM somehow slipped a CarFax URL through (or one was injected
+    # later via essentials/post-processing), dedupe vs. what we already sent.
+    reply_text = _dedupe_carfax_in_reply(reply_text, history)
 
     # For vehicle-info requests with a clear anchor, prepend the deterministic
     # essentials block (the LLM was told to write features only) and append the
     # closing question. This avoids relying on the LLM to follow the "skip
     # already-stated essentials" rules — code does the skip logic instead.
     if _is_vehicle_info_q and _info_anchor:
-        essentials = _format_vehicle_essentials(_info_anchor, last_assistant)
+        essentials = _format_vehicle_essentials(_info_anchor, last_assistant, dealer_row=dealer_row)
         features_blurb = reply_text.strip()
         closing = "Do you have any specific questions about it?"
         pieces = [p for p in [essentials, features_blurb] if p]
@@ -8489,6 +8969,42 @@ def _process_message(from_number: str, to_number: str, body: str):
             reply_text = "Of course - what specific time of day works best for your visit?"
             app.logger.info("Held auto-book: visit_time has no clock time (%r)", visit_time)
             visit_time = ""  # short-circuit the rest of this block
+
+        # Hallucination guard: the LLM has been observed to fabricate a
+        # visit_time (e.g. "today at 11 AM") when no time was ever discussed.
+        # Before auto-booking, verify the time the LLM is claiming was either
+        # (a) mentioned by the customer in this conversation, or (b) echoed by
+        # the bot AFTER being established by a previous customer turn. We
+        # check by pulling the clock-time component out of visit_time (e.g.
+        # "11", "2:30") and confirming it appears in at least one CUSTOMER
+        # message. If not, the LLM made it up — reject and ask for a time.
+        if visit_time:
+            _time_m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", visit_time, re.I)
+            if _time_m:
+                _hour = _time_m.group(1)
+                _customer_text = " ".join(
+                    (m.get("content") or "").lower()
+                    for m in get_recent_messages(from_number, to_number, limit=30)
+                    if m.get("role") == "user"
+                )
+                # Also include the current body since it's about to be saved
+                _customer_text += " " + (body or "").lower()
+                # Look for the hour digit anywhere in customer messages.
+                # Word-boundary regex fails on "3pm" (no boundary between digit
+                # and letter), so use a lookahead/lookbehind pair that only
+                # excludes matches inside a longer number (e.g. hour=3 should
+                # match "3pm" but NOT "23" or "30").
+                _hour_in_customer = bool(re.search(
+                    rf"(?<!\d){re.escape(_hour)}(?!\d)",
+                    _customer_text,
+                ))
+                if not _hour_in_customer:
+                    reply_text = "Of course - what time works best for you?"
+                    app.logger.warning(
+                        "Held auto-book: LLM fabricated visit_time=%r (hour %s never appeared in customer messages)",
+                        visit_time, _hour,
+                    )
+                    visit_time = ""  # short-circuit auto-book
 
         if visit_time:
             missing = missing_profile_field(customer_profile)
@@ -9241,6 +9757,382 @@ def debug_inventory():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# =========================
+# AI PHONE CALL HANDLING
+# Voice version of the chat/SMS flow. Same dealer routing, same dealer profile,
+# same inventory awareness, but TwiML <Gather> instead of text. The LLM emits
+# [TAKE_MESSAGE] / [TRANSFER] / [HANGUP] tokens to control call flow; on
+# handoff we LLM-summarize the call and SMS+email the staff so they pick up
+# (or call back) with full context.
+# =========================
+VOICE_MAX_CALL_TURNS    = 16
+VOICE_WRAPUP_MESSAGE    = ("Thanks for the time — I'll have someone from our sales team follow up. "
+                           "If you need immediate help, please call back during business hours.")
+VOICE_PUBLIC_BASE_URL   = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
+
+def _voice_action_url(path: str) -> str:
+    """Absolute URL for TwiML action attrs. PUBLIC_BASE_URL when set
+    (production), request host as fallback (local ngrok)."""
+    if VOICE_PUBLIC_BASE_URL:
+        return f"{VOICE_PUBLIC_BASE_URL}{path}"
+    try:
+        return f"{request.url_root.rstrip('/')}{path}"
+    except Exception:
+        return path
+
+
+def _voice_session_record(call_sid: str, twilio_number: str, customer_phone: str) -> None:
+    conn = _db()
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO voice_sessions "
+            "(call_sid, twilio_number, customer_phone, turns, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (call_sid, twilio_number, customer_phone, 0, _utc_now_iso()),
+        )
+    conn.close()
+
+
+def _voice_session_bump(call_sid: str) -> int:
+    conn = _db()
+    with conn:
+        conn.execute("UPDATE voice_sessions SET turns=turns+1 WHERE call_sid=?", (call_sid,))
+    row = conn.execute("SELECT turns FROM voice_sessions WHERE call_sid=?", (call_sid,)).fetchone()
+    conn.close()
+    return row["turns"] if row else 0
+
+
+_VOICE_WRAPUP_RE = re.compile(
+    r"\b("
+    r"thank(s| you)?|thanks a lot|thanks so much|"
+    r"ok(ay)?|alright|all right|sounds good|sounds great|"
+    r"good bye|goodbye|bye|talk to you later|see ya|"
+    r"that('?s| is)? (all|it|everything|fine)|"
+    r"i'?m (good|all set|done)|appreciate it|perfect|got it"
+    r")\b",
+    re.I,
+)
+
+
+def _looks_like_voice_wrapup(speech: str) -> bool:
+    return bool(_VOICE_WRAPUP_RE.search(speech or ""))
+
+
+def _build_voice_gather(say_text: str, action_path: str) -> VoiceResponse:
+    """Speak say_text, then listen. If the caller stays silent through the
+    Gather's timeout, instead of hanging up we re-prompt and Gather again —
+    the second Gather still POSTs to the same handle URL with empty
+    SpeechResult, which the handler re-prompts on. Only after a long
+    repeated silence does Twilio's outer fall-through (final Say + Hangup)
+    fire, and only as a last resort."""
+    vr = VoiceResponse()
+    if say_text:
+        vr.say(say_text, voice="Polly.Joanna-Neural")
+    gather = Gather(
+        input="speech",
+        action=_voice_action_url(action_path),
+        method="POST",
+        speech_timeout="auto",
+        timeout=8,
+        language="en-US",
+    )
+    vr.append(gather)
+    # First fall-through: gentle nudge, then re-listen. This keeps the call
+    # alive when the caller is thinking or in a noisy environment.
+    vr.say("Sorry, I didn't catch that. Take your time — what can I help with?",
+           voice="Polly.Joanna-Neural")
+    retry = Gather(
+        input="speech",
+        action=_voice_action_url(action_path),
+        method="POST",
+        speech_timeout="auto",
+        timeout=10,
+        language="en-US",
+    )
+    vr.append(retry)
+    # Last resort after two timeouts: wrap up politely.
+    vr.say("It seems I can't hear you. I'll let you go — please call back when you're ready.",
+           voice="Polly.Joanna-Neural")
+    vr.hangup()
+    return vr
+
+
+_VOICE_RULES_APPEND = (
+    "\n\n=== VOICE-CALL OVERRIDES (replace the SMS/chat rules above when they conflict) ===\n"
+    "This conversation is happening over a phone call. The customer can't see anything you write.\n"
+    "- Reply in 1-2 short, spoken sentences. Sound like a real receptionist, not a phone tree.\n"
+    "- No markdown, no bullet points, no URLs read aloud (say 'on our website' instead).\n"
+    "- When you say prices, vehicles, or stock numbers, say each digit individually if accuracy matters (e.g. 'stock D-zero-zero-one'), not 'd one').\n"
+    "\n"
+    "DO NOT ASK FOR THE CALLER'S NAME OR PHONE NUMBER UNLESS THEY ARE TRYING TO BOOK A TEST DRIVE OR DEALERSHIP VISIT. Most calls are people shopping — answer their questions about inventory, financing, hours, trade-ins, etc. WITHOUT collecting personal info. They already called you, so you don't need their number to follow up. Only collect name + phone when:\n"
+    "  • They say they want to come in / book a test drive / schedule a visit\n"
+    "  • They explicitly ask you to have someone call them back\n"
+    "  • They ask for a personalized financing or trade-in quote that needs a salesperson to follow up\n"
+    "\n"
+    "ACT LIKE A REAL SALES RECEPTIONIST. Don't deflect — try to handle the call:\n"
+    "- Inventory questions: pull from the TOP MATCHING VEHICLE DETAILS in the prompt above. If the customer's interest matches a specific vehicle, describe it in 1-2 sentences and offer details (price, miles, features). Only ask if they want to schedule a visit after they show interest.\n"
+    "- Financing, trade-ins, hours, location, policies: answer directly from the dealership profile.\n"
+    "- Pricing on specific cars: quote the listed price. If they ask about out-the-door / financed payment, say 'a salesperson can run real numbers for you' and ask if they want a callback.\n"
+    "\n"
+    "IF YOU CAN'T ANSWER A QUESTION, DON'T END THE CALL. Say 'That's a great question for a salesperson — would you like me to have one call you back, or is there anything else I can help with right now?' Keep the conversation going. Never silently emit [HANGUP] just because you don't know an answer.\n"
+    "\n"
+    "READ BACK AND CONFIRM KEY DETAILS only when collecting them (name, phone, vehicle they want to test drive, appointment time). Speech-to-text mangles digits:\n"
+    "  Caller: 'My number is 317-999-7907.'\n"
+    "  You: 'Got it — 3-1-7, 9-9-9, 7-9-0-7. Did I get that right?'\n"
+    "Before you hand off a booking, do one final summary readback ('Just to confirm — Evan Lee, 3-1-7-9-9-9-7-9-0-7, the 2022 BMW X7, Saturday at 2 PM. Sound right?') and only after they confirm, emit the handoff token.\n"
+    "\n"
+    "HOW TO END THE CALL — MUST emit one of these tokens at the end of your reply once the call should wrap up. Token on its own line at the very end. Without one the call keeps looping.\n"
+    "\n"
+    "  [TAKE_MESSAGE] — use this for handoffs where the team needs to follow up:\n"
+    "    • You collected booking details for a test drive / visit (name + phone + vehicle/time)\n"
+    "    • Caller asked for a callback or a question only a salesperson can answer\n"
+    "    • Caller said goodbye AFTER you had any kind of substantive lead-style conversation\n"
+    "    Your spoken line must reassure: 'Got it, Evan — I've sent your details to our sales team and someone will call you back at 3-1-7-9-9-9-7-9-0-7 shortly.' DO NOT say 'call us' — they're on the phone with us already.\n"
+    "\n"
+    "  [TRANSFER] — ONLY when the caller explicitly demands a live person, is clearly upset, or asks for a manager by name.\n"
+    "\n"
+    "  [HANGUP] — only when the caller said goodbye after a casual info-only conversation (no booking, no callback request) AND there's nothing for the team to follow up on. NEVER emit [HANGUP] mid-call because you couldn't answer — keep talking instead.\n"
+    "\n"
+    "DEFAULT: don't go more than 5-6 turns for a routine inquiry. If they want to book, do the summary readback, get a yes, then emit [TAKE_MESSAGE]. If they're just window-shopping and say goodbye, emit [HANGUP].\n"
+)
+
+
+def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
+                              dealer_phone, customer_name="") -> List[Dict[str, str]]:
+    """Reuse the existing chat prompt builder (so we keep all the inventory
+    matching, dealer policies, and scheduling smarts) and append the voice
+    overrides on top. build_prompt returns the system prompt as a STRING, not
+    a message list — we wrap it into chat-completion messages ourselves."""
+    system_prompt = build_prompt(
+        dealer,
+        inventory_rows,
+        history,
+        customer_msg,
+        dealer_phone,
+        None,           # confirmed_appt
+        customer_name,
+    )
+    if not isinstance(system_prompt, str):
+        # Defensive: if build_prompt ever changes shape, coerce.
+        system_prompt = str(system_prompt or "")
+    system_prompt = system_prompt + _VOICE_RULES_APPEND
+
+    msgs: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    for m in (history or [])[-MAX_MESSAGES_PER_CHAT:]:
+        role = m.get("role") if isinstance(m, dict) else None
+        content = m.get("content") if isinstance(m, dict) else None
+        if role and content:
+            msgs.append({"role": role, "content": content})
+    msgs.append({"role": "user", "content": customer_msg})
+    return msgs
+
+
+def _summarize_voice_call_for_dealer(dealer, history, customer_name, caller_phone) -> str:
+    """Condense the call into 5-7 lines the sales staff can read at a glance.
+    Includes caller phone so they can call back without hunting."""
+    dealer_name = get_row_field(dealer, DEALER_NAME_ALIASES) or "the dealership"
+    convo = "\n".join(f"{m['role']}: {m['content']}" for m in history[-16:])
+    info_lines = []
+    if caller_phone:
+        info_lines.append(f"caller phone: {caller_phone}")
+    if isinstance(customer_name, dict):
+        for k in ("name", "last_name", "email", "real_phone"):
+            v = customer_name.get(k, "")
+            if v:
+                info_lines.append(f"{k}: {v}")
+    elif customer_name:
+        info_lines.append(f"name: {customer_name}")
+    info_block = "\n".join(info_lines) or "(none yet)"
+    sys = (
+        f"You're summarizing a phone call for {dealer_name}'s sales staff. The AI receptionist "
+        "is handing off — either taking a message or transferring. Output 5-7 short lines that "
+        "let the staff pick up cold: caller name, phone number, vehicle(s) they're interested "
+        "in (with stock number if known), what they want (test drive, financing, trade-in info, "
+        "etc.), urgency, anything already promised or quoted. No greetings, no preamble — just "
+        "the facts, one per line."
+    )
+    user = f"CALL TRANSCRIPT:\n{convo}\n\nKNOWN CALLER INFO:\n{info_block}"
+    try:
+        resp = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "system", "content": sys},
+                      {"role": "user",   "content": user}],
+            temperature=0.2,
+            max_tokens=250,
+        )
+        out = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        app.logger.warning("voice call summary failed: %s", e)
+        out = ""
+    return out or "New call (see voice history)."
+
+
+@app.route("/voice", methods=["POST"])
+def voice_webhook():
+    """Inbound call entrypoint. Twilio POSTs From / To / CallSid here when
+    a customer calls the dealership's Twilio number."""
+    call_sid    = request.form.get("CallSid") or ""
+    from_number = normalize_phone(request.form.get("From") or "")
+    to_number   = normalize_phone(request.form.get("To") or "")
+    if not call_sid or not to_number:
+        vr = VoiceResponse()
+        vr.say("Sorry, this number isn't configured. Goodbye.", voice="Polly.Joanna-Neural")
+        vr.hangup()
+        return str(vr)
+
+    try:
+        dealers = read_dealers()
+    except Exception as e:
+        app.logger.error("voice: read_dealers failed: %s", e)
+        dealers = []
+    dealer_row = select_dealer_for_twilio_number(dealers, to_number)
+    if not dealer_row:
+        vr = VoiceResponse()
+        vr.say("Sorry, this number isn't set up yet. Goodbye.", voice="Polly.Joanna-Neural")
+        vr.hangup()
+        return str(vr)
+
+    dealer_name = get_row_field(dealer_row, DEALER_NAME_ALIASES) or "the dealership"
+    greeting = f"Thanks for calling {dealer_name}. How can I help you today?"
+
+    _voice_session_record(call_sid, to_number, from_number)
+    save_message(from_number, to_number, "assistant", greeting)
+    app.logger.info("voice/webhook call=%s from=%s to=%s dealer=%s",
+                    call_sid, from_number, to_number, dealer_name)
+    return str(_build_voice_gather(greeting, f"/voice/handle?call_sid={call_sid}"))
+
+
+@app.route("/voice/handle", methods=["POST"])
+def voice_handle():
+    call_sid    = (request.args.get("call_sid") or request.form.get("CallSid") or "").strip()
+    speech      = (request.form.get("SpeechResult") or "").strip()
+    confidence  = request.form.get("Confidence") or "0"
+    from_number = normalize_phone(request.form.get("From") or "")
+    to_number   = normalize_phone(request.form.get("To") or "")
+    app.logger.info("voice/handle call=%s speech=%r conf=%s", call_sid, speech, confidence)
+
+    if not call_sid or not to_number:
+        vr = VoiceResponse()
+        vr.say("Sorry, I lost the connection. Goodbye.", voice="Polly.Joanna-Neural")
+        vr.hangup()
+        return str(vr)
+
+    try:
+        dealers = read_dealers()
+    except Exception:
+        dealers = []
+    dealer_row = select_dealer_for_twilio_number(dealers, to_number)
+    dealer_phone = normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
+    try:
+        inventory_rows = get_inventory_for_twilio(to_number)
+    except Exception as e:
+        app.logger.warning("voice: inventory fetch failed: %s", e)
+        inventory_rows = []
+
+    turns = _voice_session_bump(call_sid)
+    if turns >= VOICE_MAX_CALL_TURNS:
+        vr = VoiceResponse()
+        vr.say(VOICE_WRAPUP_MESSAGE, voice="Polly.Joanna-Neural")
+        vr.hangup()
+        return str(vr)
+
+    if not speech:
+        return str(_build_voice_gather("Sorry, I missed that. Could you say it again?",
+                                       f"/voice/handle?call_sid={call_sid}"))
+
+    save_message(from_number, to_number, "user", speech)
+    history = get_recent_messages(from_number, to_number, limit=MAX_MESSAGES_PER_CHAT)
+    customer_profile = get_customer_profile(from_number, to_number) or {}
+
+    msgs = build_dealer_voice_prompt(
+        dealer=dealer_row,
+        inventory_rows=inventory_rows,
+        history=history[:-1],
+        customer_msg=speech,
+        dealer_phone=dealer_phone,
+        customer_name=customer_profile,
+    )
+    # Use a faster model for voice — Twilio's webhook timeout is 15s, and
+    # gpt-4o sometimes runs right up to that on cold-cache turns. gpt-4o-mini
+    # is sub-second for these short voice replies and quality is fine for
+    # 1-2 sentence answers.
+    voice_model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
+    try:
+        resp = openai_client.chat.completions.create(
+            model=voice_model,
+            messages=msgs,
+            temperature=0.4,
+            max_tokens=180,
+            timeout=10,  # hard ceiling so Twilio doesn't time out before we reply
+        )
+        raw_reply = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        app.logger.error("voice LLM failed: %s", e)
+        raw_reply = ""
+    if not raw_reply:
+        raw_reply = "Sorry, I had trouble with that. Let me try again — what were you asking about?"
+    app.logger.info("voice/handle LLM raw=%r", raw_reply)
+
+    # Safety net: LLM sometimes forgets the token even after the caller clearly
+    # wraps up. If they say bye/thanks 3+ turns in and no token was emitted,
+    # force [TAKE_MESSAGE] so the lead doesn't evaporate.
+    if turns >= 3 and not any(tok in raw_reply for tok in ("[TAKE_MESSAGE]", "[TRANSFER]", "[HANGUP]")):
+        if _looks_like_voice_wrapup(speech):
+            app.logger.info("voice/handle: wrap-up cue detected, forcing [TAKE_MESSAGE]")
+            raw_reply = raw_reply.rstrip() + "\n[TAKE_MESSAGE]"
+
+    transfer     = "[TRANSFER]" in raw_reply
+    take_message = "[TAKE_MESSAGE]" in raw_reply
+    hangup       = "[HANGUP]" in raw_reply
+    say_text = (raw_reply
+                .replace("[TRANSFER]", "")
+                .replace("[TAKE_MESSAGE]", "")
+                .replace("[HANGUP]", "")
+                .strip())
+    save_message(from_number, to_number, "assistant", say_text)
+
+    if take_message or transfer:
+        try:
+            full_history = get_recent_messages(from_number, to_number, limit=MAX_MESSAGES_PER_CHAT)
+            summary = _summarize_voice_call_for_dealer(
+                dealer_row, full_history, customer_profile, from_number,
+            )
+            tag = "Incoming call - transferring NOW" if transfer else "Call summary - please follow up"
+            body = f"[{get_row_field(dealer_row, DEALER_NAME_ALIASES) or 'Dealership'} AI · {tag}]\n\n{summary}"
+            notify_all_staff(dealer_row, to_number, body)
+        except Exception as e:
+            app.logger.warning("voice handoff notify failed: %s", e)
+
+    if transfer:
+        transfer_num = dealer_phone or normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
+        if transfer_num:
+            vr = VoiceResponse()
+            vr.say(say_text or "Let me connect you now.", voice="Polly.Joanna-Neural")
+            vr.dial(transfer_num)
+            return str(vr)
+        vr = VoiceResponse()
+        vr.say(say_text or "I've sent your details to our team and they'll call you back shortly. Goodbye.",
+               voice="Polly.Joanna-Neural")
+        vr.hangup()
+        return str(vr)
+
+    if take_message:
+        vr = VoiceResponse()
+        vr.say(say_text or "Got it — I've sent your details to our team and someone will reach out to you shortly. Thanks for calling.",
+               voice="Polly.Joanna-Neural")
+        vr.hangup()
+        return str(vr)
+
+    if hangup:
+        vr = VoiceResponse()
+        vr.say(say_text or "Thanks for calling. Goodbye.", voice="Polly.Joanna-Neural")
+        vr.hangup()
+        return str(vr)
+
+    return str(_build_voice_gather(say_text, f"/voice/handle?call_sid={call_sid}"))
 
 
 # =========================
