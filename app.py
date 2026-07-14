@@ -576,6 +576,17 @@ DEALER_NOTIFY_PHONE_ALIASES = {
     "dealer phone number", "dealer phone", "dealership phone number",
     "dealership phone", "phone number", "phone",
 }
+# Where LIVE call transfers ring (a real salesperson), kept SEPARATE from the
+# notify/dealer phone above (which receives staff lead-alert texts and may be a
+# number that can't take voice calls). Transfers prefer this; if a dealer hasn't
+# set a sales line, we fall back to the notify phone.
+DEALER_SALES_PHONE_ALIASES = {
+    "sales", "sales phone", "sales number", "sales line", "sales phone number",
+    "sales team", "sales team number", "sales team phone", "sales desk",
+    "salesman phone number", "salesman phone", "salesman number", "salesman",
+    "salesperson phone number", "salesperson phone", "salesperson number",
+    "transfer", "transfer number", "transfer phone", "transfer line",
+}
 DEALER_ADDRESS_ALIASES = {
     "dealer address", "dealership address", "address",
 }
@@ -13794,7 +13805,12 @@ def voice_handle():
         threading.Thread(target=_do_voice_handoff, daemon=True).start()
 
     if transfer:
-        transfer_num = dealer_phone or normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
+        # Ring the SALES line for transfers (a real person), NOT the notify/dealer
+        # phone (which just receives lead-alert texts). Fall back to the dealer
+        # phone only if no sales line is set.
+        transfer_num = (normalize_phone(get_row_field(dealer_row, DEALER_SALES_PHONE_ALIASES))
+                        or dealer_phone
+                        or normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES)))
         if transfer_num:
             vr = VoiceResponse()
             vr.say(_voice_say_text(say_text or "Let me connect you now."),
