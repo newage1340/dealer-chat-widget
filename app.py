@@ -401,13 +401,13 @@ def _worksheet_to_records(ws: Any) -> List[Dict[str, Any]]:
 
 
 _DEALERS_CACHE: Dict[str, Any] = {"data": None, "ts": 0.0}
-# Dealer rows change rarely, but read_dealers() runs on EVERY voice turn. A short
-# TTL meant a live Google Sheets fetch (+ auth refresh) landed on the hot path
-# constantly — the thing that hung voice calls on Render. Long fresh window +
-# very long stale window keeps voice turns on cached data almost always, and
-# lets us keep serving through a Google outage once warmed.
-_DEALERS_CACHE_TTL = 900.0    # 15 min fresh before we re-fetch
-_DEALERS_STALE_MAX = 86400.0  # serve stale up to 24h on error rather than fail a call
+# The CALL PATH must never block on Google. A background warmer thread (see
+# _dealer_cache_warmer) refreshes this cache every few minutes, so read_dealers()
+# on a voice turn always finds it "fresh" and returns instantly from memory. The
+# long TTL means the hot path effectively never triggers a live fetch itself —
+# the Google round-trip (and its slow cold-connection auth) happens off-thread.
+_DEALERS_CACHE_TTL = 86400.0  # 24h — hot path serves cache; warmer keeps it fresh
+_DEALERS_STALE_MAX = 604800.0 # serve stale up to 7 days on error rather than fail a call
 
 
 def _refresh_gs_client() -> None:
@@ -454,6 +454,32 @@ def read_dealers() -> List[Dict[str, Any]]:
         return cached
 
     raise last_err if last_err else RuntimeError("Sheet read failed and no cache available")
+
+
+def _force_refresh_dealers_cache() -> bool:
+    """Fetch dealers from Google and overwrite the cache, IGNORING the TTL. Runs
+    only in the background warmer thread — never on a call. Fetches into a temp
+    and swaps so a concurrent call always sees a complete cache. Returns success."""
+    try:
+        sh = gs.open_by_key(DEALER_SHEET_ID)
+        data = _worksheet_to_records(sh.sheet1)
+        _DEALERS_CACHE["data"] = data
+        _DEALERS_CACHE["ts"] = time.time()
+        return True
+    except Exception as e:
+        app.logger.warning("dealer cache warmer: refresh failed: %s", e)
+        return False
+
+
+def _dealer_cache_warmer(interval_s: float = 300.0) -> None:
+    """Background loop: keep the dealer cache warm so voice turns never wait on
+    Google. Refreshes immediately at boot, then every `interval_s`. The slow
+    cold-connection Google auth happens HERE, off the call path — a caller
+    always reads the in-memory cache instantly."""
+    while True:
+        ok = _force_refresh_dealers_cache()
+        app.logger.info("dealer cache warmer: refreshed=%s", ok)
+        time.sleep(interval_s)
 
 
 def get_row_field(row: Dict[str, Any], aliases: set) -> str:
@@ -14220,6 +14246,14 @@ def _background_initial_scrape():
 if __name__ != "__main__" and os.getenv("SKIP_STARTUP_SCRAPE", "0") != "1":
     import threading as _threading
     _threading.Thread(target=_background_initial_scrape, daemon=True).start()
+
+# Keep the dealer cache warm off the call path so a voice turn NEVER waits on a
+# live Google Sheets fetch (the ~18s cold-connection auth that made Vapi report
+# 'custom-llm failed' on the first call after the cache expired). Runs in every
+# hosting mode (gunicorn on Render AND local `python app.py`).
+if os.getenv("DISABLE_SCHEDULER", "0") != "1":
+    import threading as _threading2
+    _threading2.Thread(target=_dealer_cache_warmer, daemon=True).start()
 
 
 # =========================
