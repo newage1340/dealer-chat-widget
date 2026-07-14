@@ -13808,9 +13808,22 @@ def voice_handle():
         # Ring the SALES line for transfers (a real person), NOT the notify/dealer
         # phone (which just receives lead-alert texts). Fall back to the dealer
         # phone only if no sales line is set.
-        transfer_num = (normalize_phone(get_row_field(dealer_row, DEALER_SALES_PHONE_ALIASES))
+        _sales_raw = get_row_field(dealer_row, DEALER_SALES_PHONE_ALIASES)
+        _sales_src = "alias"
+        if not _sales_raw:
+            # Fuzzy fallback: any column whose header mentions sales/salesman and
+            # holds a phone-like value. Robust to header wording we didn't list.
+            for _k, _v in (dealer_row or {}).items():
+                _kn = _norm(_k)
+                if ("sales" in _kn or "salesman" in _kn) and normalize_phone(_cell_to_text(_v)):
+                    _sales_raw = _cell_to_text(_v)
+                    _sales_src = f"fuzzy:{_k}"
+                    break
+        transfer_num = (normalize_phone(_sales_raw)
                         or dealer_phone
                         or normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES)))
+        app.logger.info("voice/handle: transfer_num=%s (sales_raw=%r via %s, dealer_phone=%s)",
+                        transfer_num, _sales_raw, _sales_src, dealer_phone)
         if transfer_num:
             vr = VoiceResponse()
             vr.say(_voice_say_text(say_text or "Let me connect you now."),
