@@ -298,6 +298,17 @@ def _build_gspread_client():
     return gspread.service_account(filename=SERVICE_ACCOUNT_JSON, scopes=SCOPES)
 
 
+# HARD BACKSTOP: cap ANY socket op that has no explicit timeout of its own.
+# The Google *auth token refresh* (jwt_grant -> Google's OAuth endpoint) runs
+# with NO timeout and, on Render's gunicorn, hung forever on a cold worker —
+# blocking read_dealers() on every voice turn until the worker was killed
+# (2-min hang -> 500 -> dropped call). gs.session.timeout below only covers the
+# Sheets API calls, NOT the auth refresh. A default socket timeout catches the
+# refresh (and anything else un-timed) without affecting OpenAI/Twilio, which
+# set their own timeouts. 20s < gunicorn's 60s so we fail gracefully to cache.
+import socket as _socket
+_socket.setdefaulttimeout(20)
+
 gs = _build_gspread_client()
 # Fail fast if Google is slow - Twilio gives up waiting on the webhook at ~15s.
 try:
@@ -390,8 +401,13 @@ def _worksheet_to_records(ws: Any) -> List[Dict[str, Any]]:
 
 
 _DEALERS_CACHE: Dict[str, Any] = {"data": None, "ts": 0.0}
-_DEALERS_CACHE_TTL = 60.0  # seconds - fresh window before we re-fetch
-_DEALERS_STALE_MAX = 600.0  # seconds - beyond this we won't serve stale even on error
+# Dealer rows change rarely, but read_dealers() runs on EVERY voice turn. A short
+# TTL meant a live Google Sheets fetch (+ auth refresh) landed on the hot path
+# constantly — the thing that hung voice calls on Render. Long fresh window +
+# very long stale window keeps voice turns on cached data almost always, and
+# lets us keep serving through a Google outage once warmed.
+_DEALERS_CACHE_TTL = 900.0    # 15 min fresh before we re-fetch
+_DEALERS_STALE_MAX = 86400.0  # serve stale up to 24h on error rather than fail a call
 
 
 def _refresh_gs_client() -> None:
@@ -10163,6 +10179,36 @@ def debug_inventory():
 # handoff we LLM-summarize the call and SMS+email the staff so they pick up
 # (or call back) with full context.
 # =========================
+
+# EMERGENCY / SAFETY: transfer to a human immediately, no matter what the LLM
+# decides. Safety-critical, so it's deterministic, not left to the model. Covers
+# vehicle emergencies (fire, crash, brakes, breakdown, stranded) and general
+# urgency/injury. Guarded against negatives ("no accidents on the CARFAX?",
+# "does it have airbags?") by requiring first-person/current-situation framing.
+_EMERGENCY_RE = re.compile(
+    r"\b(on fire|caught fire|it'?s smoking|car'?s smoking|"
+    r"just (?:got in |had )?(?:an? )?(?:accident|crash|wreck)|"
+    r"(?:got in|been in|was in) an? (?:accident|crash|wreck)|"
+    r"brakes? (?:are )?(?:out|gone|failed|not working)|can'?t stop the car|"
+    r"broke down|broken down|stranded|stuck on the (?:side|highway|road)|"
+    r"blew a tire|tire blew|airbag went off|"
+    r"someone'?s (?:hurt|injured|bleeding)|i'?m hurt|we'?re hurt|"
+    r"call (?:9-?1-?1|nine one one)|it'?s an emergency|this is an emergency|"
+    r"leaking gas|smell(?:s|ing)? (?:gas|smoke|burning))\b",
+    re.I,
+)
+# The caller clearly wants OFF the bot and onto a person right now (insistent,
+# not a casual "have someone call me"). Requires an explicit human/agent demand.
+_WANTS_HUMAN_NOW_RE = re.compile(
+    r"\b(?:(?:talk|speak|get me|connect me|put me through|transfer me)\s+"
+    r"(?:to\s+)?(?:a\s+)?(?:real\s+|actual\s+|live\s+)?(?:person|human|"
+    r"someone|somebody|agent|rep|representative|salesperson|manager)|"
+    r"real (?:person|human)|not a (?:bot|robot|machine)|"
+    r"stop (?:talking to|with) the (?:bot|robot)|"
+    r"are you a (?:bot|robot|real person|human)|i want a human|"
+    r"get me a (?:person|human|manager))\b",
+    re.I,
+)
 VOICE_MAX_CALL_TURNS    = 30   # enough headroom for the full intake flow
                                # (greeting + 2-3 inventory turns + 6-7 intake turns
                                # + confirmation/readback). Previous limit of 16
@@ -10854,7 +10900,10 @@ _VOICE_RULES_APPEND = (
     "    • Caller said goodbye after any substantive lead-style conversation\n"
     "    Spoken line should match the wrap-up structure above. Don't say 'call us' — they're on the phone with us right now.\n"
     "\n"
-    "  [TRANSFER] — RARE. Only when caller explicitly demands a live person, is clearly frustrated, or asks for a manager by name.\n"
+    "  [TRANSFER] — connect the caller to a live person NOW. Use it when:\n"
+    "    • EMERGENCY or safety issue — a car on fire, an accident, brakes out, a breakdown, someone stranded or hurt, anything urgent/dangerous. Transfer immediately, don't ask qualifying questions.\n"
+    "    • The caller clearly INSISTS on a real person — 'I need to talk to a human', 'stop, get me someone', asks for a manager by name, or is frustrated that they're talking to a bot. If they'd plainly rather deal with a person than you, hand them over.\n"
+    "    Do NOT [TRANSFER] for a casual 'can someone call me?' or a normal question you can handle — that's a [TAKE_MESSAGE] (take their info, promise a callback). Only transfer when it's an emergency or they genuinely want off the bot and onto a person right now.\n"
     "\n"
     "  [HANGUP] — only after a casual info-only call (no booking, no callback request) AND the caller said goodbye. NEVER mid-call.\n"
     "\n"
@@ -13543,6 +13592,25 @@ def voice_handle():
     transfer     = "[TRANSFER]" in raw_reply
     take_message = _take_msg
     hangup       = "[HANGUP]" in raw_reply
+
+    # DETERMINISTIC TRANSFER OVERRIDES — don't leave these to the LLM.
+    # 1) Emergency/safety: transfer immediately with a calm reassuring line.
+    #    Safety-critical, so it fires regardless of what the model produced.
+    # 2) Insistent "get me a human": honor it, but ONLY a real demand for a
+    #    person — not a casual "have someone call me" (that stays a take-message).
+    if _EMERGENCY_RE.search(speech):
+        app.logger.info("voice/handle: EMERGENCY detected — forcing transfer (%r)", speech)
+        transfer = True
+        take_message = False
+        hangup = False
+        raw_reply = "Okay — stay with me, I'm connecting you to someone right now."
+    elif _WANTS_HUMAN_NOW_RE.search(speech):
+        app.logger.info("voice/handle: caller insists on a human — forcing transfer (%r)", speech)
+        transfer = True
+        take_message = False
+        hangup = False
+        if not raw_reply.strip():
+            raw_reply = "No problem — let me get you to someone on the team."
 
     # Parse META_JSON BEFORE stripping so we can use it for customer SMS
     # confirmation. The chat path uses META_JSON to commit bookings — voice
