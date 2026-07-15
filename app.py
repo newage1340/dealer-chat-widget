@@ -1411,6 +1411,22 @@ def get_call_messages(customer_phone: str, twilio_number: str, call_sid: str,
     return [dict(r) for r in rows]
 
 
+def get_latest_call_sid(customer_phone: str, twilio_number: str) -> Optional[str]:
+    """Return the call_sid of this caller's MOST RECENT voice call, or None for
+    a chat/SMS conversation (those rows have no call_sid). Lets the delayed cold
+    sweep scope its follow-up + lead to the latest call instead of blending in
+    cars from earlier calls the caller never mentioned this time."""
+    conn = _db()
+    row = conn.execute("""
+        SELECT call_sid FROM messages
+        WHERE customer_phone=? AND twilio_number=?
+          AND call_sid IS NOT NULL AND call_sid <> ''
+        ORDER BY id DESC LIMIT 1
+    """, (customer_phone, twilio_number)).fetchone()
+    conn.close()
+    return row["call_sid"] if row else None
+
+
 def get_last_customer_message(customer_phone: str, twilio_number: str) -> str:
     conn = _db()
     row = conn.execute("""
@@ -6475,12 +6491,18 @@ def send_cold_followups() -> None:
             if custom_msg:
                 followup_body = custom_msg
             else:
-                # Pull the FULL recent call, not just the last 10 messages — a
-                # long tail (e.g. an open/closed hours back-and-forth) would
-                # otherwise push the car-of-interest out of the window, so the
-                # follow-up text and the staff lead both missed the car the
-                # caller actually wanted. The summarizer caps at 40 internally.
-                history = get_recent_messages(customer_phone, twilio_number, limit=40)
+                # Scope to the caller's LATEST call, not their blended cross-call
+                # history — otherwise the follow-up AND the staff lead name a car
+                # from a PREVIOUS call the caller never brought up this time (the
+                # "why does it keep mentioning the Mullen?" bug). Web/SMS convos
+                # have no call_sid, so fall back to recent history for those.
+                # Pull up to 40 (the summarizer caps there anyway) so a long
+                # open/closed-hours tail can't push the car-of-interest out.
+                _latest_sid = get_latest_call_sid(customer_phone, twilio_number)
+                if _latest_sid:
+                    history = get_call_messages(customer_phone, twilio_number, _latest_sid, limit=40)
+                else:
+                    history = get_recent_messages(customer_phone, twilio_number, limit=40)
                 try:
                     inventory_rows = get_inventory_for_twilio(twilio_number)
                 except Exception:
@@ -12762,8 +12784,12 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
     elif _open_now is False:
         _status_line = (
             f"OPEN/CLOSED RIGHT NOW: **CLOSED** (today's hours: "
-            f"{_hours_today or 'closed today'}). If asked, say you're closed now "
-            "and give the next open time. Do NOT say you're open.\n")
+            f"{_hours_today or 'closed today'}). If the caller asks whether you're "
+            "open, or wants to come in right now/today, tell them you're closed now "
+            "and give the next open time. Do NOT say you're open. But being closed "
+            "does NOT limit what you can help with — keep answering every other "
+            "question (pricing, availability, vehicle details, financing, trade-ins, "
+            "etc.) fully and normally, just like you would during business hours.\n")
     else:
         _status_line = ""  # hours unparseable — fall back to the rules below
     real_world_block = (
@@ -12775,6 +12801,7 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
         f"{_status_line}"
         "\n"
         "RULES FOR USING THESE FACTS:\n"
+        "- BEING CLOSED NEVER LIMITS WHAT YOU ANSWER. You help 24/7: answer every question fully at any hour — pricing, availability, specs, vehicle history, financing, trade-ins, anything the caller asks. The ONLY thing 'closed right now' affects is an in-person visit happening RIGHT NOW or TODAY; for that, offer the next open time. NEVER say 'I can answer that when we're open', NEVER refuse or defer a question, and NEVER pivot to 'call back during business hours' just because you're closed. Being closed is not a reason to stop helping.\n"
         "- ONLY bring up whether you're open/closed RIGHT NOW when the caller actually asks about CURRENT availability ('are you open?', 'can I come right now?', 'what time do you close today?') or asks to come in TODAY. Use the CURRENT TIME above to answer, not the hours string alone.\n"
         "- If they ask about NOW and the current hour is past close → 'We're actually closed for the night, but we're back open at [open time] tomorrow.' If it's before open → 'we open at [time].'\n"
         "- CRITICAL: when the caller is booking a FUTURE time (tomorrow, a specific day) do NOT mention that you're closed right now — it's irrelevant and it confuses people. Just make sure the future time fits within hours and book it. NEVER randomly announce 'we just closed at 6 PM' during a booking or a general question — only when they specifically ask about coming in right now/today.\n"
