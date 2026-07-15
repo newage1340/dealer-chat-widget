@@ -6087,7 +6087,8 @@ The booking flow is STREAMLINED. Personal info is ONLY collected when the custom
 STEP 0 - Car of interest (only when NO specific vehicle has been discussed yet)
 - Before asking about time, check whether the conversation has referenced a specific vehicle from our inventory (e.g. the customer asked about a specific year/make/model, or the consultant has shown them a particular car).
 - If a specific vehicle is already in context: skip STEP 0 entirely. Use that vehicle as the car of interest.
-- If NO specific vehicle has been discussed AND the customer asks to schedule a visit (e.g. "I'd like to come in", "can I schedule an appointment", "what time can I stop by"): ask whether there's a particular car they want to see — phrased naturally, the way a real salesperson would, NOT as a stiff either/or menu, and NEVER say the words "general visit" (that's an internal term, it sounds robotic to a customer). Keep it to ONE warm, open question. Phrasing example (≤200 chars): "Of course! Is there a particular car you had your eye on, or are you just planning to come take a look around?"
+- If the customer has ALREADY signaled interest in a car but hasn't named the exact year/make/model (e.g. "I'm interested in a car on your website", "I saw one I liked online", "looking at one of your trucks"): they clearly want a SPECIFIC car — do NOT offer a "browse / general visit" alternative and do NOT present any either/or. Just ask WHICH one, warmly, as a single question, e.g. "Awesome — which one caught your eye?" or "Nice, which one were you looking at?"
+- If the customer asks to schedule but has given NO signal of a specific car (e.g. just "I'd like to come in", "can I schedule an appointment", "what time can I stop by"): ask naturally whether there's a particular car they want to see — the way a real salesperson would, as ONE warm question, NOT a stiff either/or menu, and NEVER say the words "general visit" or "standard visit" (internal terms that sound robotic to a customer). Phrasing example (≤200 chars): "Of course! Is there a particular car you had your eye on, or are you just planning to come take a look around?"
 - If the customer names a vehicle: use that as the car of interest, proceed to STEP 1.
 - If the customer says no / just looking / general visit / browsing / similar: the car of interest is "general visit". Proceed to STEP 1. In STEP 3 META_JSON, set car_desc to "general visit".
 - Ask STEP 0 at most ONCE per booking attempt. Never re-ask if the customer has already given a yes/no answer.
@@ -13028,6 +13029,19 @@ def voice_webhook():
         f"Hey, thanks for calling {dealer_name}, {agent_name} here! Who do I have the pleasure of speaking with?",
     ]
     greeting = random.choice(greeting_templates)
+
+    # A returning caller must be eligible for a fresh lead/follow-up on THIS
+    # call. The web/SMS path clears this on re-engagement (Clear Chat / every
+    # inbound SMS), but the voice path never did — so any caller who already
+    # got ONE cold follow-up was permanently excluded from all future leads.
+    # That's the "no lead when I hang up" bug: a reused number (every test call,
+    # and any real repeat caller) silently never fires a lead again. Reset it at
+    # the start of each call so each distinct call can produce its own lead.
+    try:
+        clear_cold_followup(from_number, to_number)
+        clear_followup_history_for_real_phone(from_number, to_number)
+    except Exception as _e:
+        app.logger.warning("voice: cold-followup reset failed for %s: %s", from_number, _e)
 
     _voice_session_record(call_sid, to_number, from_number)
     save_message(from_number, to_number, "assistant", greeting, call_sid=call_sid)
