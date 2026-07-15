@@ -838,6 +838,14 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_messages_chat
             ON messages (customer_phone, twilio_number, id)
         """)
+        # Migration: tag each message with the voice call it belongs to, so the
+        # dealer call-summary can be scoped to THIS call instead of blending the
+        # caller's entire cross-call history. Additive; NULL for chat/SMS rows
+        # and legacy voice rows.
+        try:
+            conn.execute("ALTER TABLE messages ADD COLUMN call_sid TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS pending_appointments (
@@ -1356,12 +1364,13 @@ def purge_old_data() -> None:
     conn.close()
 
 
-def save_message(customer_phone: str, twilio_number: str, role: str, content: str) -> None:
+def save_message(customer_phone: str, twilio_number: str, role: str, content: str,
+                 call_sid: str = None) -> None:
     conn = _db()
     with conn:
         conn.execute(
-            "INSERT INTO messages (customer_phone, twilio_number, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
-            (customer_phone, twilio_number, role, content, _utc_now_iso()),
+            "INSERT INTO messages (customer_phone, twilio_number, role, content, created_at, call_sid) VALUES (?, ?, ?, ?, ?, ?)",
+            (customer_phone, twilio_number, role, content, _utc_now_iso(), call_sid),
         )
         conn.execute("""
             DELETE FROM messages
@@ -1383,6 +1392,23 @@ def get_recent_messages(customer_phone: str, twilio_number: str, limit: int = 14
     """, (customer_phone, twilio_number, limit)).fetchall()
     conn.close()
     return [dict(r) for r in reversed(rows)]
+
+
+def get_call_messages(customer_phone: str, twilio_number: str, call_sid: str,
+                      limit: int = MAX_MESSAGES_PER_CHAT) -> List[Dict[str, Any]]:
+    """Fetch ONLY the turns from one specific voice call, in chronological order.
+    Used for the dealer call-summary so the recap reflects THIS call — not the
+    caller's blended history across every prior call to this dealer number."""
+    if not call_sid:
+        return []
+    conn = _db()
+    rows = conn.execute("""
+        SELECT role, content FROM messages
+        WHERE customer_phone=? AND twilio_number=? AND call_sid=?
+        ORDER BY id ASC LIMIT ?
+    """, (customer_phone, twilio_number, call_sid, limit)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_last_customer_message(customer_phone: str, twilio_number: str) -> str:
@@ -13004,7 +13030,7 @@ def voice_webhook():
     greeting = random.choice(greeting_templates)
 
     _voice_session_record(call_sid, to_number, from_number)
-    save_message(from_number, to_number, "assistant", greeting)
+    save_message(from_number, to_number, "assistant", greeting, call_sid=call_sid)
     app.logger.info("voice/webhook call=%s from=%s to=%s dealer=%s agent=%s",
                     call_sid, from_number, to_number, dealer_name, agent_name)
 
@@ -13098,7 +13124,10 @@ def voice_handle():
         # the auto-text confirmation here (we have no META_JSON), but the
         # team gets a summary they can act on.
         try:
-            full_history = get_recent_messages(from_number, to_number, limit=MAX_MESSAGES_PER_CHAT)
+            full_history = get_call_messages(from_number, to_number, call_sid,
+                                              limit=MAX_MESSAGES_PER_CHAT)
+            if not full_history:
+                full_history = get_recent_messages(from_number, to_number, limit=MAX_MESSAGES_PER_CHAT)
             if len(full_history) >= 4:
                 summary = _summarize_voice_call_for_dealer(
                     dealer_row, full_history, customer_profile, from_number,
@@ -13131,7 +13160,7 @@ def voice_handle():
     # Caller spoke — clear any prior dead-air count so a mid-call pause never
     # carries over toward the hang-up threshold.
     _voice_silence_reset(call_sid)
-    save_message(from_number, to_number, "user", speech)
+    save_message(from_number, to_number, "user", speech, call_sid=call_sid)
 
     # Explicit end-call command ("hang up", "end the call", "stop calling").
     # Honor it immediately with a real Hangup — no LLM round-trip, no re-prompt.
@@ -13225,7 +13254,7 @@ def voice_handle():
                 "No worries — real quick, what's your name?",
                 "Before we get into it, can I get your name?",
             ])
-            save_message(from_number, to_number, "assistant", _gate)
+            save_message(from_number, to_number, "assistant", _gate, call_sid=call_sid)
             app.logger.info("voice/handle: name gate — re-asking for name (asks=%d)", _name_asks)
             return str(_build_voice_gather(_gate, f"/voice/handle?call_sid={call_sid}"))
 
@@ -13453,7 +13482,7 @@ def voice_handle():
                     # else?") can't re-trigger a duplicate — _already scans
                     # assistant turns for this URL.
                     save_message(from_number, to_number, "assistant",
-                                 f"(CARFAX link texted to caller: {_cf})")
+                                 f"(CARFAX link texted to caller: {_cf})", call_sid=call_sid)
                 # If the LLM reply merely OFFERS to text it ("want me to text
                 # it?"), that contradicts the fact we already sent it — replace
                 # with a plain confirmation. A non-offer reply that mentions the
@@ -13741,7 +13770,7 @@ def voice_handle():
     # Belt-and-suspenders: strip ANY leftover [ALL_CAPS_TOKEN] control marker so
     # a garbled one (e.g. [TABLE_MESSAGE]) never gets read aloud by Polly.
     say_text = re.sub(r"\[[A-Z][A-Z0-9_ ]{2,}\]", "", say_text).strip()
-    save_message(from_number, to_number, "assistant", say_text)
+    save_message(from_number, to_number, "assistant", say_text, call_sid=call_sid)
 
     handoff_was_done = call_sid in _VOICE_HANDOFF_DONE
     if (take_message or transfer) and not handoff_was_done:
@@ -13764,7 +13793,31 @@ def voice_handle():
             ctx = app.app_context()
             ctx.push()
             try:
-                full_history = get_recent_messages(from_number, to_number, limit=MAX_MESSAGES_PER_CHAT)
+                dealer_label = get_row_field(dealer_row, DEALER_NAME_ALIASES) or 'Dealership'
+
+                # LIVE TRANSFER: the caller is being connected to the sales line
+                # right now (vr.dial below). Fire the urgent heads-up IMMEDIATELY
+                # — before the slow OpenAI summary — so staff get it as their
+                # phone rings, not seconds later. The full briefing follows.
+                if transfer:
+                    try:
+                        notify_all_staff(
+                            dealer_row, to_number,
+                            f"[{dealer_label} AI · URGENT - LIVE TRANSFER NOW]\n\n"
+                            f"Caller {from_number} is being connected to you right now. "
+                            f"Call briefing to follow.")
+                    except Exception as e:
+                        app.logger.warning("voice transfer heads-up failed: %s", e)
+
+                # Scope the summary to THIS call only. Keying by phone+number
+                # alone blended the caller's entire cross-call history into the
+                # recap — the "summary had nothing to do with the call" bug.
+                full_history = get_call_messages(from_number, to_number, call_sid,
+                                                 limit=MAX_MESSAGES_PER_CHAT)
+                if not full_history:
+                    # Safety net for legacy/untagged rows: a blended recap beats
+                    # none. New calls always have tagged turns, so this is rare.
+                    full_history = get_recent_messages(from_number, to_number, limit=MAX_MESSAGES_PER_CHAT)
                 summary = _summarize_voice_call_for_dealer(
                     dealer_row, full_history, customer_profile, from_number,
                 )
@@ -13775,12 +13828,12 @@ def voice_handle():
                 transcript_blob = " ".join(m.get("content", "") for m in full_history)
                 hot = _is_hot_lead(transcript_blob)
                 if transfer:
-                    tag = "URGENT - LIVE TRANSFER NOW"
+                    tag = "LIVE TRANSFER - call briefing"
                 elif hot:
                     tag = "HOT LEAD - call back ASAP"
                 else:
                     tag = "Call summary - please follow up"
-                body = f"[{get_row_field(dealer_row, DEALER_NAME_ALIASES) or 'Dealership'} AI · {tag}]\n\n{summary}"
+                body = f"[{dealer_label} AI · {tag}]\n\n{summary}"
                 notify_all_staff(dealer_row, to_number, body)
 
                 # The dealer just got a summary/lead for THIS call. Mark the
