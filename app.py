@@ -12084,7 +12084,11 @@ def _voice_disambiguation_question(customer_msg: str,
         listing = f"the {descs[0]} or the {descs[1]}"
     else:
         listing = ", ".join(f"the {d}" for d in descs[:-1]) + f", or the {descs[-1]}"
-    return f"We've actually got a few — {listing}. Which one were you looking at?"
+    return random.choice([
+        f"We've actually got a few — {listing}. Which one were you looking at?",
+        f"Oh, we got a couple actually — {listing}. Which one you thinking?",
+        f"Yeah, a few of those on the lot — {listing}. Which one caught your eye?",
+    ])
 
 
 # Models that are hybrid/EV even when the word "hybrid"/"electric" never appears
@@ -13188,8 +13192,8 @@ def voice_webhook():
     greeting_templates = [
         f"{time_greet}, thanks for calling {dealer_name}! This is {agent_name}. Who do I have the pleasure of speaking with?",
         f"Thanks for calling {dealer_name}, this is {agent_name}! Who am I chatting with today?",
-        f"{dealer_name}, this is {agent_name} speaking — who do I have the pleasure of talking to?",
-        f"Hey, thanks for calling {dealer_name}, {agent_name} here! Who do I have the pleasure of speaking with?",
+        f"{dealer_name}, this is {agent_name}! And who am I speaking with?",
+        f"Hey, thanks for calling {dealer_name}, {agent_name} here! What's your name?",
     ]
     greeting = random.choice(greeting_templates)
 
@@ -13631,8 +13635,11 @@ def voice_handle():
                         str(_cc.get("Model", "")).strip(),
                         _clean_trim(str(_cc.get("Trim", "")).strip()),
                     ] if p)
-                    raw_reply = (f"Got it! Just to make sure we're on the same one — that's the "
-                                 f"{_spoken}, {', '.join(_bits)}, right?")
+                    raw_reply = random.choice([
+                        f"Gotcha, the {_spoken} — {', '.join(_bits)}, that's the one?",
+                        f"Yeah, the {_spoken}, {', '.join(_bits)} — that the one you're after?",
+                        f"Oh nice — the {_spoken}, {', '.join(_bits)}, right?",
+                    ])
                     app.logger.info("voice/handle: deterministic car-confirm for %s", _cc_title)
 
     # Deterministic "similar alternatives": the caller is seeking a specific
@@ -13746,9 +13753,11 @@ def voice_handle():
                                   f"Here's the {_noun} for the {_title}: {_url}")
             app.logger.info("voice/handle: vehicle link SMS to=%s url=%s ok=%s (%s)",
                             from_number, _url, ok, _info)
-            raw_reply = (f"Just texted you the {_noun} for the {_title}. Anything else I can help you with?"
+            _tail = random.choice(["Anything else?", "Need anything else while I've got ya?",
+                                   "That everything for ya?", "Anything else I can grab for ya?"])
+            raw_reply = (f"Just texted you the {_noun} for the {_title}. {_tail}"
                          if ok else
-                         f"I'll get the {_noun} for the {_title} texted right over. Anything else I can help you with?")
+                         f"I'll get the {_noun} for the {_title} texted right over. {_tail}")
         else:
             raw_reply = "Happy to send that over — which vehicle did you want the link for?"
 
@@ -13846,8 +13855,9 @@ def voice_handle():
             r"\s*(take it easy|have a (?:great|good)[^.!?]*|talk soon|bye[^.!?]*|"
             r"take care[^.!?]*)[.!]*\s*$", "", raw_reply, flags=re.I).rstrip()
         if not raw_reply.rstrip().endswith("?"):
-            raw_reply = (raw_reply.rstrip(" .!") +
-                         ". Anything else I can help you with?").strip()
+            raw_reply = (raw_reply.rstrip(" .!") + ". " + random.choice(
+                ["Anything else?", "Anything else I can help with?",
+                 "That everything for ya?", "Need anything else?"])).strip()
         app.logger.info("voice/handle: info-send (link/details), not a callback — keeping line open")
 
     # Safety net: LLM sometimes forgets the token even after the caller clearly
@@ -14180,7 +14190,9 @@ def voice_handle():
                      closing, re.I):
             prompt = closing
         else:
-            prompt = f"{closing} Anything else I can help you with before you go?"
+            prompt = f"{closing} " + random.choice(
+                ["Anything else before you go?", "Anything else I can grab for ya?",
+                 "That everything, or anything else?"])
         return str(_build_voice_gather(prompt, f"/voice/handle?call_sid={call_sid}"))
 
     if hangup:
