@@ -6,4 +6,3 @@ gspread
 apscheduler
 requests
 beautifulsoup4
-playwright

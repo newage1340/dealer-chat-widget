@@ -1163,6 +1163,15 @@ def refresh_inventory_for_twilio(twilio_number: str, website_url: str, max_vehic
 
 
 def refresh_all_inventory(max_vehicles: int = 0) -> None:
+    # SAFETY: scraping is now OFFLOADED (GitHub Actions scrapes and POSTs to
+    # /admin/inventory-upload). Playwright is no longer installed on the web
+    # build, so if this ever runs here it must bail BEFORE touching the DB — a
+    # 0-vehicle scrape must never prune/wipe live inventory.
+    try:
+        import playwright  # noqa: F401
+    except Exception:
+        app.logger.info("refresh_all_inventory: playwright not installed (scraping is offloaded) — skipping.")
+        return
     try:
         dealers = read_dealers()
     except Exception as e:
@@ -1196,6 +1205,77 @@ def refresh_all_inventory(max_vehicles: int = 0) -> None:
             )
         except Exception as e:
             app.logger.error("Inventory refresh failed for %s: %s", dealer_name, e)
+
+
+def _replace_inventory_for_twilio(twilio_number: str, vehicles: List[Dict[str, Any]]) -> int:
+    """Atomically replace ALL inventory rows for one dealer with a fresh set.
+    Used by the /admin/inventory-upload endpoint (the offloaded GitHub-Actions
+    scraper POSTs here). DELETE + INSERT happen in ONE transaction so the bot
+    never sees an empty lot mid-write."""
+    tn = normalize_phone(twilio_number)
+    now = _utc_now_iso()
+    conn = _db()
+    n = 0
+    with conn:
+        conn.execute("DELETE FROM inventory WHERE twilio_number=?", (tn,))
+        for v in vehicles:
+            if not isinstance(v, dict):
+                continue
+            conn.execute("""
+                INSERT INTO inventory
+                (twilio_number, year, make, model, trim, color, price, mileage, vin, stock, description, carfax_url, detail_url, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                tn, v.get("Year", ""), v.get("Make", ""), v.get("Model", ""),
+                v.get("Trim", ""), v.get("Color", ""), v.get("Price", ""),
+                v.get("Mileage", ""), v.get("VIN", ""), v.get("Stock", ""),
+                v.get("Description", ""), v.get("CarfaxURL", ""),
+                v.get("DetailURL", ""), now,
+            ))
+            n += 1
+    conn.close()
+    return n
+
+
+@app.route("/admin/inventory-upload", methods=["POST"])
+def inventory_upload():
+    """Receives a full inventory scrape from the offloaded scraper (GitHub
+    Actions) and writes it to this dealer's rows. Secured with a shared token so
+    only our scraper can write. REFUSES an empty vehicle list, so a failed scrape
+    can never wipe a live dealer's inventory."""
+    expected = os.getenv("INVENTORY_UPLOAD_TOKEN", "").strip()
+    data = request.get_json(silent=True) or {}
+    provided = (request.headers.get("X-Upload-Token", "")
+                or data.get("token", "")).strip()
+    if not expected or provided != expected:
+        app.logger.warning("inventory-upload: unauthorized attempt")
+        return jsonify({"error": "unauthorized"}), 401
+
+    twilio_number = normalize_phone(data.get("twilio_number") or "")
+    vehicles = data.get("vehicles") or []
+    if not twilio_number:
+        return jsonify({"error": "missing twilio_number"}), 400
+    if not isinstance(vehicles, list) or len(vehicles) == 0:
+        # Guard: never DELETE a dealer's whole lot because a scrape came back empty.
+        app.logger.warning("inventory-upload: empty vehicle list for %s — refusing to wipe inventory", twilio_number)
+        return jsonify({"error": "no vehicles — refusing to wipe existing inventory"}), 400
+
+    try:
+        count = _replace_inventory_for_twilio(twilio_number, vehicles)
+    except Exception as e:
+        app.logger.error("inventory-upload: write failed for %s: %s", twilio_number, e)
+        return jsonify({"error": "write failed"}), 500
+
+    doc_fee = str(data.get("doc_fee", "") or "").strip()
+    tt_fee = str(data.get("title_tag_fee", "") or "").strip()
+    if doc_fee or tt_fee:
+        try:
+            save_dealer_fees(twilio_number, doc_fee, tt_fee)
+        except Exception as e:
+            app.logger.warning("inventory-upload: fee save failed for %s: %s", twilio_number, e)
+
+    app.logger.info("inventory-upload: %s ← %d vehicles (offloaded scraper)", twilio_number, count)
+    return jsonify({"ok": True, "twilio_number": twilio_number, "count": count})
 
 
 # =========================
@@ -6770,11 +6850,12 @@ def start_scheduler() -> None:
     scheduler.add_job(send_appointment_reminders, "interval", minutes=5,  id="reminders",         replace_existing=True)
     scheduler.add_job(send_cold_followups,         "interval", minutes=1,  id="cold_followups",    replace_existing=True)
     scheduler.add_job(send_winback_followups,      "interval", minutes=1,  id="winback",           replace_existing=True)
-    # Inventory scrape runs OUT-OF-PROCESS (see _spawn_scrape_subprocess) so the
-    # heavy Chromium work can't starve the web worker and trip gunicorn's kill.
-    scheduler.add_job(_spawn_scrape_subprocess,    "interval", minutes=30, id="inventory_refresh", replace_existing=True)
+    # NOTE: inventory scraping is OFFLOADED to GitHub Actions (it scrapes on a
+    # schedule and POSTs to /admin/inventory-upload). It no longer runs on this
+    # web service at all — that's what keeps Chromium out of the Render build and
+    # takes deploys from ~25 min down to ~2 min.
     scheduler.start()
-    app.logger.info("Scheduler started: reminders 5 min | cold follow-ups 1 min | win-back 1 min | inventory 30 min.")
+    app.logger.info("Scheduler started: reminders 5 min | cold follow-ups 1 min | win-back 1 min | inventory=offloaded to GitHub Actions.")
     send_appointment_reminders()
 
 

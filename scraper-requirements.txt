@@ -1,0 +1,11 @@
+# Deps for the OFFLOADED scraper that runs in GitHub Actions (scrape_and_upload.py).
+# It imports app.py to reuse dealer-reading, so it needs app.py's libs PLUS
+# playwright (which is intentionally NOT in the web service's requirements.txt).
+flask
+openai
+twilio
+gspread
+apscheduler
+requests
+beautifulsoup4
+playwright
