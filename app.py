@@ -13139,6 +13139,34 @@ def voice_webhook():
     app.logger.info("voice/webhook call=%s from=%s to=%s dealer=%s agent=%s",
                     call_sid, from_number, to_number, dealer_name, agent_name)
 
+    # Warm the OpenAI prompt cache for THIS call in the background. On a big
+    # inventory the ~20k-token static rules prefix takes >12s to process COLD,
+    # which was blowing the turn timeout and falling back to "sorry, I had
+    # trouble" on the first turn or two (then it's fast once warm). This fires
+    # one tiny max_tokens=1 completion carrying that same static prefix, so by
+    # the time the caller finishes their first sentence the prefix is cached and
+    # the real turn returns in ~2s instead of timing out. Pure warmup — it
+    # changes NO behavior, only latency, and runs off-thread so it never delays
+    # the greeting.
+    def _warm_prompt_cache():
+        cctx = app.app_context(); cctx.push()
+        try:
+            _inv = get_inventory_for_twilio(to_number)
+            _dphone = normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
+            _msgs = build_dealer_voice_prompt(
+                dealer=dealer_row, inventory_rows=_inv, history=[],
+                customer_msg="hello", dealer_phone=_dphone,
+                customer_name={}, caller_phone=from_number, twilio_number=to_number)
+            openai_client.with_options(max_retries=0).chat.completions.create(
+                model=os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini"),
+                messages=_msgs, max_tokens=1, timeout=20)
+            app.logger.info("voice: prompt cache warmed for call=%s", call_sid)
+        except Exception as _e:
+            app.logger.warning("voice: prompt cache warm failed for %s: %s", call_sid, _e)
+        finally:
+            cctx.pop()
+    threading.Thread(target=_warm_prompt_cache, daemon=True).start()
+
     # Human pickup pacing: randomized 1.5-2.8 second pause so each call's
     # answer-time varies. A perfectly consistent 2-second pickup is itself
     # a robotic tell — real people pick up at slightly different speeds.
@@ -13378,6 +13406,14 @@ def voice_handle():
     # is sub-second for these short voice replies and quality is fine for
     # 1-2 sentence answers.
     voice_model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
+    # Timeout ceiling depends on the transport. Twilio's TwiML webhook drops the
+    # call around 15s, so that path must fail fast at 12s and fall back. Vapi
+    # (the '_via' marker) drives the call itself and waits much longer, so a
+    # cold-cache turn that needs ~13-15s should be allowed to FINISH rather than
+    # bail to "sorry, I had trouble." Cache warming (at greeting) makes cold
+    # turns rare; this is the safety net for when one slips through.
+    _via_vapi = (request.form.get("_via") == "vapi")
+    _llm_timeout = 25 if _via_vapi else 12
     # TIMING PROBE: measure prompt size + OpenAI call duration so we can see
     # exactly where the per-turn latency comes from (prompt bloat vs model
     # speed). ~4 chars/token is a rough estimate, good enough to size it.
@@ -13394,10 +13430,9 @@ def voice_handle():
             messages=msgs,
             temperature=0.25,  # lower = less drift toward safe corporate phrasing
             max_tokens=180,
-            timeout=12,  # ceiling under Twilio's ~15s webhook limit. The voice
-                         # prompt is large (full inventory + rules), so responses
-                         # can run 8-11s; 10s was clipping fine replies. 12s
-                         # catches those while leaving margin to return TwiML.
+            timeout=_llm_timeout,  # 12s on Twilio (under its ~15s webhook drop),
+                                   # 25s on Vapi (it waits far longer) so a cold
+                                   # turn finishes instead of bailing.
         )
         raw_reply = (resp.choices[0].message.content or "").strip()
     except Exception as e:
@@ -14266,6 +14301,10 @@ def _vapi_run_turn(speech, from_number, to_number, call_id, is_greeting):
         "To": to_number,
         "SpeechResult": speech or "",
         "Confidence": "0.95",   # Vapi already did high-quality STT
+        "_via": "vapi",         # lets voice_handle use a longer LLM timeout —
+                                # Vapi tolerates far more than Twilio's ~15s
+                                # webhook limit, so a cold turn can finish
+                                # instead of bailing to the fallback line.
     }
     path = "/voice" if is_greeting else f"/voice/handle?call_sid={call_id}"
     with app.test_request_context(path, method="POST", data=form):
