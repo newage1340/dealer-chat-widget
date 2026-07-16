@@ -914,6 +914,20 @@ def init_db() -> None:
             )
         """)
 
+        # Tracks that the DEALER already got a live lead for a call (via the
+        # in-call handoff). Kept SEPARATE from cold_followups so a live lead
+        # stops the sweep's duplicate DEALER lead WITHOUT also blocking the
+        # CUSTOMER follow-up — the bot can still re-engage the customer if the
+        # sales team never calls back.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS dealer_leads (
+                customer_phone TEXT NOT NULL,
+                twilio_number TEXT NOT NULL,
+                sent_at TEXT NOT NULL,
+                PRIMARY KEY (customer_phone, twilio_number)
+            )
+        """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS terms_acceptance_log (
                 real_phone TEXT PRIMARY KEY,
@@ -1438,6 +1452,17 @@ def get_last_customer_message(customer_phone: str, twilio_number: str) -> str:
     return row["content"] if row else ""
 
 
+def get_last_assistant_message(customer_phone: str, twilio_number: str) -> str:
+    conn = _db()
+    row = conn.execute("""
+        SELECT content FROM messages
+        WHERE customer_phone=? AND twilio_number=? AND role='assistant'
+        ORDER BY id DESC LIMIT 1
+    """, (customer_phone, twilio_number)).fetchone()
+    conn.close()
+    return row["content"] if row else ""
+
+
 def has_primer_been_sent(customer_phone: str, twilio_number: str) -> bool:
     conn = _db()
     row = conn.execute(
@@ -1745,6 +1770,33 @@ def clear_cold_followup(customer_phone, twilio_number):
     conn = _db()
     with conn:
         conn.execute("DELETE FROM cold_followups WHERE customer_phone=? AND twilio_number=?",
+                     (customer_phone, twilio_number))
+    conn.close()
+
+
+def mark_dealer_lead_sent(customer_phone, twilio_number):
+    """Record that the dealer already got a live lead for this call, so the cold
+    sweep skips the redundant DEALER lead — without blocking the CUSTOMER
+    follow-up (which stays gated by cold_followups)."""
+    conn = _db()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO dealer_leads (customer_phone, twilio_number, sent_at) VALUES (?, ?, ?)",
+                     (customer_phone, twilio_number, _utc_now_iso()))
+    conn.close()
+
+
+def has_dealer_lead_been_sent(customer_phone, twilio_number) -> bool:
+    conn = _db()
+    row = conn.execute("SELECT 1 FROM dealer_leads WHERE customer_phone=? AND twilio_number=?",
+                       (customer_phone, twilio_number)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def clear_dealer_lead(customer_phone, twilio_number):
+    conn = _db()
+    with conn:
+        conn.execute("DELETE FROM dealer_leads WHERE customer_phone=? AND twilio_number=?",
                      (customer_phone, twilio_number))
     conn.close()
 
@@ -6536,10 +6588,15 @@ def send_cold_followups() -> None:
                     app.logger.warning("Cold follow-up save_message failed for %s: %s", customer_phone, e)
                 app.logger.info("Sent cold follow-up to %s via %s", outbound_phone, twilio_number)
 
-                # One-shot dealer lead notification. Fires only when the cold
-                # follow-up itself fires (which is gated to once per customer
-                # via cold_followups table), so the dealer is texted at most once.
-                if dealer:
+                # One-shot dealer lead notification. Skip it entirely if the
+                # in-call handoff already sent the dealer a live lead for this
+                # call (dealer_leads flag) — otherwise the dealer gets the same
+                # lead twice. The CUSTOMER follow-up above still went out either
+                # way; only the redundant DEALER lead is suppressed here.
+                if dealer and has_dealer_lead_been_sent(customer_phone, twilio_number):
+                    app.logger.info("Cold sweep: dealer already got a live lead for %s — skipping duplicate lead", customer_phone)
+                elif dealer:
+                    mark_dealer_lead_sent(customer_phone, twilio_number)
                     full_name = (customer_name + (" " + customer_last if customer_last else "")).strip() or "Unknown name"
                     # Rich lead: summarize what the customer actually said (car of
                     # interest, trade-in, budget, context) instead of a bare
@@ -10307,6 +10364,12 @@ VOICE_MAX_SILENT_TURNS  = 2    # consecutive dead-air gathers before we stop
                                # consecutive silence ends the call gracefully.
 VOICE_SILENCE_GOODBYE   = ("Looks like I lost you there — I'll let you go. "
                            "Feel free to call back anytime. Take care!")
+# Low-confidence STT guard: below this Twilio confidence, on a multi-word turn,
+# ask the caller to repeat ONCE rather than feed a mishearing to the LLM (which
+# would confidently answer the wrong question). Tunable — raise it to clarify
+# more often, lower it to clarify less.
+VOICE_LOWCONF_THRESHOLD = 0.45
+VOICE_LOWCONF_REPROMPT  = "Sorry, I didn't quite catch that — mind saying it one more time?"
 VOICE_PUBLIC_BASE_URL   = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
 
@@ -13067,6 +13130,7 @@ def voice_webhook():
     try:
         clear_cold_followup(from_number, to_number)
         clear_followup_history_for_real_phone(from_number, to_number)
+        clear_dealer_lead(from_number, to_number)
     except Exception as _e:
         app.logger.warning("voice: cold-followup reset failed for %s: %s", from_number, _e)
 
@@ -13201,6 +13265,25 @@ def voice_handle():
     # Caller spoke — clear any prior dead-air count so a mid-call pause never
     # carries over toward the hang-up threshold.
     _voice_silence_reset(call_sid)
+
+    # Low-confidence guard: if Twilio transcribed the caller poorly, don't feed
+    # the garbled text to the LLM (it answers a mishearing with full confidence).
+    # Ask them to repeat — but ONLY once: if the previous turn was already this
+    # re-prompt, take whatever we got this time rather than loop. Short answers
+    # ("yes"/"no"/a model name) are left alone so we never nag on clear speech.
+    try:
+        _stt_conf = float(confidence)
+    except (TypeError, ValueError):
+        _stt_conf = 1.0  # unknown confidence → assume fine, don't re-ask
+    if _stt_conf and _stt_conf < VOICE_LOWCONF_THRESHOLD and len(speech.split()) >= 3:
+        _prev_asst = get_last_assistant_message(from_number, to_number)
+        if "didn't quite catch that" not in (_prev_asst or ""):
+            app.logger.info("voice/handle: low STT confidence %.2f on %r — asking to repeat",
+                            _stt_conf, speech)
+            save_message(from_number, to_number, "assistant", VOICE_LOWCONF_REPROMPT, call_sid=call_sid)
+            return str(_build_voice_gather(VOICE_LOWCONF_REPROMPT,
+                                           f"/voice/handle?call_sid={call_sid}"))
+
     save_message(from_number, to_number, "user", speech, call_sid=call_sid)
 
     # Explicit end-call command ("hang up", "end the call", "stop calling").
@@ -13877,14 +13960,22 @@ def voice_handle():
                 body = f"[{dealer_label} AI · {tag}]\n\n{summary}"
                 notify_all_staff(dealer_row, to_number, body)
 
-                # The dealer just got a summary/lead for THIS call. Mark the
-                # conversation handled so the cold-follow-up sweep does NOT fire a
-                # SECOND, redundant lead a minute later — the "summary AND a lead"
-                # duplicate that happens on any call that ends without a booking.
+                # The dealer just got a live lead for THIS call. Prevent the cold
+                # sweep from firing a SECOND, redundant DEALER lead a minute later.
+                # BUT keep the CUSTOMER follow-up alive so the bot can re-engage
+                # the client if the sales team never calls back.
+                #   - Confirmed booking: fully suppress (mark cold_followups) — a
+                #     booked customer must NOT get a "still interested?" nudge.
+                #   - Take-message / transfer: mark ONLY the dealer-lead flag, so
+                #     the sweep skips the duplicate lead but still texts the
+                #     customer a follow-up.
                 try:
-                    mark_cold_followup_sent(from_number, to_number)
+                    if voice_meta and voice_meta.get("confirmed"):
+                        mark_cold_followup_sent(from_number, to_number)
+                    else:
+                        mark_dealer_lead_sent(from_number, to_number)
                 except Exception as e:
-                    app.logger.warning("cold-followup dedupe mark failed: %s", e)
+                    app.logger.warning("lead dedupe mark failed: %s", e)
 
                 # If the LLM emitted META_JSON for a confirmed booking, commit it
                 # like the chat path does AND text the caller a confirmation so
@@ -13949,6 +14040,16 @@ def voice_handle():
             vr.say(_voice_say_text(say_text or "Let me connect you now."),
                    voice="Polly.Joanna-Neural")
             vr.dial(transfer_num)
+            # If <Dial> returns (sales line didn't pick up / rang out), Twilio
+            # keeps reading TwiML — so don't drop the caller in dead silence.
+            # Their details already went to staff via the handoff above; give a
+            # real sign-off instead of the call just vanishing. (Runs ONLY when
+            # the transfer didn't connect, so it never talks over a live human.)
+            vr.say(_voice_say_text("Looks like the team's tied up this second — "
+                                   "I've passed your info along and someone will "
+                                   "reach out shortly. Take it easy!"),
+                   voice="Polly.Joanna-Neural")
+            vr.hangup()
             return str(vr)
         vr = VoiceResponse()
         vr.say(_voice_say_text(say_text or "I've sent your details over and someone will give you a buzz shortly. Take it easy!"),
