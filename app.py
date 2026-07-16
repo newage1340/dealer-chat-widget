@@ -13265,25 +13265,6 @@ def voice_handle():
     # Caller spoke — clear any prior dead-air count so a mid-call pause never
     # carries over toward the hang-up threshold.
     _voice_silence_reset(call_sid)
-
-    # Low-confidence guard: if Twilio transcribed the caller poorly, don't feed
-    # the garbled text to the LLM (it answers a mishearing with full confidence).
-    # Ask them to repeat — but ONLY once: if the previous turn was already this
-    # re-prompt, take whatever we got this time rather than loop. Short answers
-    # ("yes"/"no"/a model name) are left alone so we never nag on clear speech.
-    try:
-        _stt_conf = float(confidence)
-    except (TypeError, ValueError):
-        _stt_conf = 1.0  # unknown confidence → assume fine, don't re-ask
-    if _stt_conf and _stt_conf < VOICE_LOWCONF_THRESHOLD and len(speech.split()) >= 3:
-        _prev_asst = get_last_assistant_message(from_number, to_number)
-        if "didn't quite catch that" not in (_prev_asst or ""):
-            app.logger.info("voice/handle: low STT confidence %.2f on %r — asking to repeat",
-                            _stt_conf, speech)
-            save_message(from_number, to_number, "assistant", VOICE_LOWCONF_REPROMPT, call_sid=call_sid)
-            return str(_build_voice_gather(VOICE_LOWCONF_REPROMPT,
-                                           f"/voice/handle?call_sid={call_sid}"))
-
     save_message(from_number, to_number, "user", speech, call_sid=call_sid)
 
     # Explicit end-call command ("hang up", "end the call", "stop calling").
