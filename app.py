@@ -11508,10 +11508,50 @@ def _build_focused_inventory_block(inventory_rows: List[Dict[str, Any]],
             narrowed = further
             break
 
+    # If the caller named a YEAR this turn, narrow to it. A year+make+model
+    # usually pins down ONE specific car — without this, the block below dumps
+    # EVERY year of that model and tells the LLM to list them all (the "you named
+    # a 2015 Camry and it rattled off every Camry we've got" robot tell). If the
+    # named year matches nothing, leave the set alone so the normal "we don't
+    # have that year, but we do have X" honesty still fires.
+    _yrs = set(_VOICE_DISAMBIG_YEAR_RE.findall(current_msg or ""))
+    if _yrs:
+        _by_year = [r for r in narrowed if str(r.get("Year", "")).strip() in _yrs]
+        if _by_year:
+            narrowed = _by_year
+
     if not narrowed or len(narrowed) > 12:
         # Don't overwhelm — if the filter pulled too many, skip the block
         # and let the LLM use the regular inventory listing.
         return ""
+
+    # Exactly one car matches what they named (and, if they gave a year, it IS
+    # that year) — focus on THAT car instead of listing alternatives. This is
+    # the fix for "caller names a specific car, bot lists every one of them."
+    if len(narrowed) == 1 and (not _yrs or str(narrowed[0].get("Year", "")).strip() in _yrs):
+        r = narrowed[0]
+        year  = str(r.get("Year", "")).strip()
+        make  = str(r.get("Make", "")).strip()
+        model = str(r.get("Model", "")).strip()
+        price = str(r.get("Price", "")).strip()
+        color = str(r.get("Color", "")).strip()
+        stock = (str(r.get("Stock", "")).strip() or
+                 get_row_field(r, STOCK_ALIASES).strip())
+        bits = [f"YEAR={year}", f"MAKE={make}", f"MODEL={model}"]
+        if price: bits.append(f"PRICE=${price}")
+        if color: bits.append(f"COLOR={color}")
+        if stock: bits.append(f"STOCK#={stock}")
+        car_short = " ".join(p for p in [year, make, model] if p)
+        return (
+            "\n=== THE CALLER'S CAR (SINGLE MATCH — DO NOT LIST OTHERS) ===\n"
+            "The caller named a specific vehicle and it maps to exactly ONE car on the lot:\n"
+            f"  • {' | '.join(bits)}\n"
+            f"Talk about THIS car only. Do NOT list other {model}s, do NOT ask which year or "
+            "which one, and do NOT say 'we've got a few' — they already pinned it down. Just "
+            f"confirm it naturally with a detail (e.g. 'Yeah, the {car_short}, the "
+            f"{color or 'one'} one—') and keep moving.\n"
+            "=== END ===\n"
+        )
 
     lines = ["", "=== FOCUSED MATCHES FOR THIS CALLER'S QUERY ===",
              "These are EVERY matching vehicle on the lot. Treat each line as a "
