@@ -11514,7 +11514,7 @@ def _build_focused_inventory_block(inventory_rows: List[Dict[str, Any]],
     # a 2015 Camry and it rattled off every Camry we've got" robot tell). If the
     # named year matches nothing, leave the set alone so the normal "we don't
     # have that year, but we do have X" honesty still fires.
-    _yrs = set(_VOICE_DISAMBIG_YEAR_RE.findall(current_msg or ""))
+    _yrs = set(_VOICE_DISAMBIG_YEAR_RE.findall(_spoken_year_to_digits(current_msg or "")))
     if _yrs:
         _by_year = [r for r in narrowed if str(r.get("Year", "")).strip() in _yrs]
         if _by_year:
@@ -11542,6 +11542,7 @@ def _build_focused_inventory_block(inventory_rows: List[Dict[str, Any]],
         if color: bits.append(f"COLOR={color}")
         if stock: bits.append(f"STOCK#={stock}")
         car_short = " ".join(p for p in [year, make, model] if p)
+        app.logger.info("voice: FOCUSED single-car block fired — %s (steering to it, not listing)", car_short)
         return (
             "\n=== THE CALLER'S CAR (SINGLE MATCH — DO NOT LIST OTHERS) ===\n"
             "The caller named a specific vehicle and it maps to exactly ONE car on the lot:\n"
@@ -11883,6 +11884,80 @@ def _voice_price_directive(customer_msg: str,
     )
 
 
+_YR_ONES = {'oh': 0, 'o': 0, 'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4,
+            'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15,
+            'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19}
+_YR_TENS = {'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60,
+            'seventy': 70, 'eighty': 80, 'ninety': 90}
+
+
+def _spoken_year_to_digits(text: str) -> str:
+    """Voice callers SAY years as words and STT often keeps them that way
+    ('twenty twenty three', 'twenty fifteen', 'nineteen ninety eight', 'two
+    thousand five'). Our year detection only matches 4-digit numbers, so those
+    slip through and the bot can't narrow by year. This appends the digit form
+    ALONGSIDE the original text (non-destructive) so year detection catches it."""
+    if not text:
+        return text
+    t = text.lower()
+    found: List[str] = []
+    # "two thousand [and] N"  -> 2000-2099
+    for m in re.finditer(r"\btwo thousand(?:\s+and)?(?:\s+([a-z]+))?(?:\s+([a-z]+))?", t):
+        w1, w2 = m.group(1), m.group(2)
+        val = 2000
+        if w1 in _YR_TENS:
+            val += _YR_TENS[w1] + (_YR_ONES[w2] if (w2 in _YR_ONES and _YR_ONES[w2] < 10) else 0)
+        elif w1 in _YR_ONES:
+            val += _YR_ONES[w1]
+        if 2000 <= val <= 2099:
+            found.append(str(val))
+    # "<century> <low two digits>": nineteen/twenty + teen | tens [ones] | oh one
+    for m in re.finditer(r"\b(nineteen|twenty)\s+([a-z]+)(?:\s+([a-z]+))?", t):
+        cen = 1900 if m.group(1) == 'nineteen' else 2000
+        a, b = m.group(2), m.group(3)
+        low = None
+        if a in _YR_ONES and _YR_ONES[a] >= 10:            # 'twenty fifteen'
+            low = _YR_ONES[a]
+        elif a in _YR_TENS:                                # 'twenty twenty three' / 'ninety eight'
+            low = _YR_TENS[a] + (_YR_ONES[b] if (b in _YR_ONES and _YR_ONES[b] < 10) else 0)
+        elif a in ('oh', 'o', 'zero') and b in _YR_ONES and _YR_ONES[b] < 10:  # 'twenty oh five'
+            low = _YR_ONES[b]
+        if low is not None and 0 <= low <= 99:
+            found.append(str(cen + low))
+    return (text + " " + " ".join(found)) if found else text
+
+
+def _voice_single_car_focus_directive(cars: List[Dict[str, Any]]) -> str:
+    """When the caller named a model + year that pins down exactly ONE car,
+    steer the LLM to talk about THAT car instead of reciting the model's other
+    years (the 'named the 2023 Camry, bot lists every Camry' robot tell)."""
+    lines = []
+    model_words = set()
+    for r in cars:
+        y  = str(r.get("year")  or r.get("Year")  or "").strip()
+        mk = str(r.get("make")  or r.get("Make")  or "").strip()
+        md = str(r.get("model") or r.get("Model") or "").strip()
+        tr = _clean_trim(str(r.get("trim") or r.get("Trim") or "").strip())
+        pr = str(r.get("price") or r.get("Price") or "").strip()
+        co = str(r.get("color") or r.get("Color") or "").strip()
+        if md:
+            model_words.add(md.split()[0])
+        parts = [p for p in [y, mk, md, tr] if p]
+        extra = ", ".join(x for x in [co, f"${pr}" if pr else ""] if x)
+        lines.append("  • " + " ".join(parts) + (f" — {extra}" if extra else ""))
+    mw = next((m for m in model_words if m), "one")
+    return (
+        "\n\n=== THE CALLER'S CAR (SINGLE MATCH — DO NOT LIST OTHERS) ===\n"
+        "The caller named a specific car and it maps to exactly ONE vehicle on the lot:\n"
+        + "\n".join(lines) + "\n"
+        f"Talk about THIS car only. Do NOT say 'we've got a few', do NOT list other "
+        f"{mw}s or other model years, and do NOT ask which one — they already pinned it "
+        "down by year. Just confirm it naturally with a detail and keep moving.\n"
+        "=== END ===\n"
+    )
+
+
 def _voice_disambiguation_directive(customer_msg: str,
                                     inventory_rows: List[Dict[str, Any]],
                                     history: List[Dict[str, Any]]) -> str:
@@ -11899,7 +11974,7 @@ def _voice_disambiguation_directive(customer_msg: str,
     # model (two 2012 Priuses), the caller still hasn't picked one. So rather
     # than bailing whenever ANY year appears, we narrow candidates BY that year
     # and only stay silent when the year leaves 0-1 matches.
-    asked_years = set(_VOICE_DISAMBIG_YEAR_RE.findall(customer_msg))
+    asked_years = set(_VOICE_DISAMBIG_YEAR_RE.findall(_spoken_year_to_digits(customer_msg)))
     # If the caller gave no year but the bot's most recent turn already raised
     # one (e.g. it asked "what year?"), let that exchange play out.
     if not asked_years:
@@ -11929,6 +12004,9 @@ def _voice_disambiguation_directive(customer_msg: str,
     msg_tokens = {_canon_tok(w) for w in re.sub(r"[^a-z0-9 ]", " ", msg_lower).split() if w}
     # each entry: (model_key, candidate_rows, year_already_pinned)
     triggered: List[Any] = []
+    # cars the caller pinned to exactly ONE by naming model + year — steer the
+    # LLM to focus on these instead of reciting the model's other years.
+    focus_cars: List[Dict[str, Any]] = []
     for model_key, rows in by_model.items():
         if len(rows) < 2:
             continue
@@ -11940,8 +12018,14 @@ def _voice_disambiguation_directive(customer_msg: str,
         year_pinned = False
         if asked_years:
             narrowed = [r for r in rows if _row_year(r) in asked_years]
-            if len(narrowed) <= 1:
-                continue  # the year resolves it (or points elsewhere) — no ambiguity
+            if len(narrowed) == 1:
+                # Caller named model + year that pins ONE car. Don't go silent
+                # (that let the LLM recite every year of the model) — record it
+                # so we steer the LLM to THIS one below.
+                focus_cars.append(narrowed[0])
+                continue
+            if len(narrowed) == 0:
+                continue  # a year we don't carry — let zero-hallucination handle it
             candidates = narrowed
             year_pinned = True
         # If the caller's words already single out ONE candidate by its
@@ -11958,6 +12042,13 @@ def _voice_disambiguation_directive(customer_msg: str,
         triggered.append((model_key, candidates, year_pinned))
 
     if not triggered:
+        # No genuine ambiguity. But if the caller pinned a specific car by year,
+        # tell the LLM to talk about THAT one instead of reciting the model's
+        # other years — the "named the 2023 Camry, bot lists every Camry" bug.
+        if focus_cars:
+            app.logger.info("voice: SINGLE-CAR FOCUS fired (caller pinned model+year, %d car) — steering to it, not listing",
+                            len(focus_cars))
+            return _voice_single_car_focus_directive(focus_cars)
         return ""
 
     lines: List[str] = []
@@ -12021,7 +12112,7 @@ def _voice_disambiguation_question(customer_msg: str,
     reply. Trigger logic is kept in lock-step with _voice_disambiguation_directive."""
     if not customer_msg or not inventory_rows:
         return ""
-    asked_years = set(_VOICE_DISAMBIG_YEAR_RE.findall(customer_msg))
+    asked_years = set(_VOICE_DISAMBIG_YEAR_RE.findall(_spoken_year_to_digits(customer_msg)))
     if not asked_years:
         for m in reversed(history or []):
             if isinstance(m, dict) and m.get("role") == "assistant":
