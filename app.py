@@ -10614,13 +10614,15 @@ def _looks_like_caller_decline(speech: str) -> bool:
 
 def _bot_is_signing_off(reply_text: str) -> bool:
     """True when the bot's reply is a closing goodbye with no open question —
-    meaning the call should end. If the reply still ends in a question (e.g.
-    'feel free to reach out! Anything else?'), the bot is keeping the line open
-    on purpose, so we do NOT hang up."""
+    meaning the call should end. If the reply contains a question ANYWHERE (e.g.
+    'feel free to reach out! Anything else?', or 'Would you like to come in
+    today? We're open till 6.'), the bot is keeping the line open on purpose, so
+    we do NOT hang up. Checking only the END missed booking questions with a
+    sentence after them — the premature-hangup bug."""
     t = (reply_text or "").strip()
     if not t:
         return False
-    if t.rstrip().endswith("?"):
+    if "?" in t:
         return False
     return bool(_VOICE_BOT_SIGNOFF_RE.search(t))
 
@@ -13926,9 +13928,12 @@ def voice_handle():
         #  - the same message is actively booking ("...noon tomorrow"), or
         #  - it's really a confirmation ("yeah, that's it" = yes, that's the car),
         #    which we detect because the bot's OWN reply is still ASKING the
-        #    caller something (ends in "?"). Hanging up on your own question is
-        #    the premature-end bug. Only force the wrap-up when neither holds.
-        _bot_still_asking = raw_reply.rstrip().endswith("?")
+        #    caller something. Check for a "?" ANYWHERE, not just at the end — a
+        #    booking question like "Would you like to come in today? We're open
+        #    till 6." doesn't END in "?" but is absolutely an open question, and
+        #    hanging up on your own question is the premature-end bug we keep
+        #    hitting. Only force the wrap-up when the bot isn't asking anything.
+        _bot_still_asking = "?" in raw_reply
         if _looks_like_voice_wrapup(speech) and not _has_scheduling_intent(speech) and not _bot_still_asking:
             app.logger.info("voice/handle: wrap-up cue detected, forcing [TAKE_MESSAGE]")
             raw_reply = raw_reply.rstrip() + "\n[TAKE_MESSAGE]"
