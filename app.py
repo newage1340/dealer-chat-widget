@@ -1,10 +1,12 @@
 # twilio-bot2/app.py
 import os
 import re
+import sys
 import json
 import sqlite3
 import logging
 import threading
+import subprocess
 import time
 import random
 import smtplib
@@ -6722,12 +6724,43 @@ def send_winback_followups() -> None:
         app.logger.info("Win-back sweep: sent %d message(s).", sent)
 
 
+# Handle to the currently-running scrape subprocess (if any), so we never spawn
+# a second overlapping scrape while one is still going.
+_scrape_proc: Optional[subprocess.Popen] = None
+
+
+def _spawn_scrape_subprocess() -> None:
+    """Run the periodic inventory scrape in a SEPARATE PROCESS instead of inside
+    the web worker. Chromium + parsing in-process was starving the single
+    gunicorn worker until gunicorn's timeout killed it mid-call (silent drop, no
+    log, self-recovers on restart). A child process keeps its CPU/GIL off the web
+    worker. Contained failure mode: if the child can't launch, inventory just
+    goes stale this cycle — the web app is never touched."""
+    global _scrape_proc
+    try:
+        if _scrape_proc is not None and _scrape_proc.poll() is None:
+            app.logger.info("inventory scrape: previous subprocess still running — skipping this cycle")
+            return
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_scrape.py")
+        env = dict(os.environ)
+        env["DISABLE_SCHEDULER"] = "1"
+        env["SKIP_STARTUP_SCRAPE"] = "1"
+        env["DEV_CLEAR_DB"] = "0"
+        _scrape_proc = subprocess.Popen([sys.executable, script], env=env)
+        app.logger.info("inventory scrape: spawned subprocess pid=%s", _scrape_proc.pid)
+    except Exception as e:
+        # Never let a spawn failure kill the scheduler thread — just skip.
+        app.logger.error("inventory scrape: failed to spawn subprocess: %s", e)
+
+
 def start_scheduler() -> None:
     scheduler = BackgroundScheduler()
     scheduler.add_job(send_appointment_reminders, "interval", minutes=5,  id="reminders",         replace_existing=True)
     scheduler.add_job(send_cold_followups,         "interval", minutes=1,  id="cold_followups",    replace_existing=True)
     scheduler.add_job(send_winback_followups,      "interval", minutes=1,  id="winback",           replace_existing=True)
-    scheduler.add_job(refresh_all_inventory,       "interval", minutes=30, id="inventory_refresh", replace_existing=True)
+    # Inventory scrape runs OUT-OF-PROCESS (see _spawn_scrape_subprocess) so the
+    # heavy Chromium work can't starve the web worker and trip gunicorn's kill.
+    scheduler.add_job(_spawn_scrape_subprocess,    "interval", minutes=30, id="inventory_refresh", replace_existing=True)
     scheduler.start()
     app.logger.info("Scheduler started: reminders 5 min | cold follow-ups 1 min | win-back 1 min | inventory 30 min.")
     send_appointment_reminders()
