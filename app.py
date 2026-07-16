@@ -10670,7 +10670,18 @@ def _strip_soft_close_tail(reply: str) -> str:
     bot has already asked the same close in the recent 2-3 turns — repeating
     'would you like to schedule a time to come in?' on every reply is the
     LLM's strongest stuck default and pure prompt rules don't suppress it."""
-    return _SOFT_CLOSE_TAIL_RE.sub("", reply or "").strip()
+    out = _SOFT_CLOSE_TAIL_RE.sub("", reply or "").strip()
+    # Stripping just the closing QUESTION can leave a dangling lead-in clause,
+    # e.g. "...sixty-three five hundred. Since we're open until 6 today," — which
+    # ends on a comma and sounds broken/robotic. Drop a trailing comma/connector,
+    # and if the reply no longer ends on sentence punctuation, cut back to the
+    # last complete sentence so it always ends clean.
+    out = re.sub(r"[\s,;:]+$", "", out).strip()
+    if out and out[-1] not in ".!?":
+        cut = max(out.rfind("."), out.rfind("!"), out.rfind("?"))
+        if cut != -1:
+            out = out[:cut + 1].strip()
+    return out
 
 
 _FALSE_CLOSED_RE = re.compile(
@@ -14056,6 +14067,20 @@ def voice_handle():
     # Belt-and-suspenders: strip ANY leftover [ALL_CAPS_TOKEN] control marker so
     # a garbled one (e.g. [TABLE_MESSAGE]) never gets read aloud by Polly.
     say_text = re.sub(r"\[[A-Z][A-Z0-9_ ]{2,}\]", "", say_text).strip()
+
+    # BOOKING JUST COMMITTED → force a SHORT closing so the bot can't recap the
+    # whole appointment a SECOND time. The full readback already happened on the
+    # prior turn ("...trading in the Mustang, financing — that the best number?");
+    # the LLM loves to recap it ALL over again on the confirm turn, which sounds
+    # broken. Replace that with one clean line. Only when the booking is actually
+    # committing (not when it's held for missing intake).
+    if voice_meta and voice_meta.get("confirmed") and not _booking_held:
+        _vt = (voice_meta.get("visit_time") or "").strip()
+        _first = ((customer_profile or {}).get("name") or
+                  (voice_meta.get("customer_name") or "")).strip()
+        say_text = ("Perfect" + (f", {_first}" if _first else "") + " — you're all set"
+                    + (f" for {_vt}" if _vt else "") + "! We'll see you then. Take it easy!")
+
     save_message(from_number, to_number, "assistant", say_text, call_sid=call_sid)
 
     handoff_was_done = call_sid in _VOICE_HANDOFF_DONE
