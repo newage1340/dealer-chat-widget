@@ -10391,10 +10391,12 @@ VOICE_MAX_CALL_TURNS    = 30   # enough headroom for the full intake flow
                                # cut off bookings mid-confirmation.
 VOICE_WRAPUP_MESSAGE    = ("Thanks for the time — our sales team will follow up. "
                            "If you need immediate help, please call back during business hours.")
-VOICE_MAX_SILENT_TURNS  = 2    # consecutive dead-air gathers before we stop
-                               # re-prompting and end the call. 1st silence gets
-                               # one "sorry, I missed that" re-prompt; the 2nd
-                               # consecutive silence ends the call gracefully.
+VOICE_MAX_SILENT_TURNS  = 3    # consecutive dead-air gathers before we stop
+                               # re-prompting and end the call. Bumped 2->3 so a
+                               # BRIEF STT hiccup mid-call (a turn or two of empty
+                               # transcript) doesn't prematurely hang up on a
+                               # caller who's still there — they get another
+                               # "you still there?" before we let them go.
 VOICE_SILENCE_GOODBYE   = ("Looks like I lost you there — I'll let you go. "
                            "Feel free to call back anytime. Take care!")
 # Low-confidence STT guard: below this Twilio confidence, on a multi-word turn,
@@ -11328,7 +11330,7 @@ _VOICE_RULES_INTELLIGENCE = (
     "  2. TRADE-IN ASK (casual): 'Cool — got anything you're thinking of trading in?' If they DON'T have one, move on. If they DO, you need TWO things — the VEHICLE and its MILEAGE + CONDITION — but NEVER re-ask for something they've already told you:\n"
     "       (a) VEHICLE (year/make/model): if they ALREADY named it (e.g. 'trade in my 2006 Ford Mustang'), do NOT ask 'what is it?' again — just acknowledge it ('Nice, the 2006 Mustang'). ONLY ask 'what is it — year, make, model?' if they genuinely haven't said the vehicle yet.\n"
     "       (b) MILEAGE + CONDITION: as a short follow-up, 'Gotcha — about how many miles on it, and what kind of shape's it in?' — unless they already gave both.\n"
-    "     REQUIRED: don't move to financing or the summary until you have the vehicle AND its mileage/condition — the rep needs those. But re-asking for a detail they already gave sounds broken, so only ask for what's actually missing. (Title status only if they bring it up.)\n"
+    "     REQUIRED: if they have a trade-in, you MUST get BOTH its mileage AND its condition. Do NOT move on to financing, the final readback, or the booking — and do NOT confirm the appointment or emit the booking — while a trade-in's mileage or condition is still missing. The rep needs those to prep. But re-asking for a detail they already gave sounds broken, so only ask for what's actually missing. (Title status only if they bring it up.)\n"
     "\n"
     "  3. FINANCING ASK (casual, one question): 'Cool, and you thinking of financing it or paying cash?' If financing, optionally offer: 'Cool, want our finance guy to give you a call beforehand so you've got numbers ready?' Do NOT recap the appointment here — just capture cash/finance and move on.\n"
     "\n"
