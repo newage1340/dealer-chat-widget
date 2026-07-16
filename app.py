@@ -5982,7 +5982,7 @@ def _is_service_appointment_context(history: List[Dict[str, Any]], current_body:
     return bool(_SERVICE_INTENT_RE.search(blob))
 
 
-def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, confirmed_appt=None, customer_name=""):
+def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, confirmed_appt=None, customer_name="", channel="sms"):
     dealer_name  = get_row_field(dealer, DEALER_NAME_ALIASES) or "the dealership"
     dealer_twilio = normalize_phone(get_row_field(dealer, TWILIO_NUMBER_ALIASES))
     address      = get_row_field(dealer, DEALER_ADDRESS_ALIASES) or "(not listed)"
@@ -6107,7 +6107,7 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
             " CARFAX OFFER: ONLY if the vehicle's details include a line starting with \"CarFax report:\", also offer to text it — e.g. \"I've got the CARFAX for it though — want me to text it to your phone?\" If there is NO \"CarFax report:\" line, do NOT mention CarFax. When the caller says yes, the system texts it automatically — just say you're sending it; never read the URL aloud."
         )
 
-    return f"""You are Dave, a professional sales consultant representing {dealer_name}, communicating via SMS on behalf of the dealership. If a customer asks your name, you are Dave. Never say you are an AI, bot, assistant, or anything other than Dave - you are a person on the dealership's team.
+    _prompt = f"""You are Dave, a professional sales consultant representing {dealer_name}, communicating via SMS on behalf of the dealership. If a customer asks your name, you are Dave. Never say you are an AI, bot, assistant, or anything other than Dave - you are a person on the dealership's team.
 
 === COMMUNICATION STYLE ===
 - Professional, polished, and knowledgeable.
@@ -6265,6 +6265,18 @@ Note: measurements in inches (e.g. 144\", 148\") refer to wheelbase. AWD/RWD/FWD
 Today is {current_time_str}.
 
 Write ONE SMS reply now.""".strip()
+
+    # Voice calls run their OWN intake flow (see the voice rule blocks — they even
+    # tell the model to ignore the SMS email step), so this SMS appointment-flow
+    # section is dead weight on a call. Strip it FOR VOICE ONLY to cut ~1.5k
+    # tokens per turn (faster replies, fewer latency spikes). SMS/chat keeps it
+    # verbatim. Sliced by unique markers so nothing else is touched.
+    if channel == "voice":
+        _a = _prompt.find("=== APPOINTMENT FLOW ===")
+        _b = _prompt.find("=== DEALER INFO ===")
+        if _a != -1 and _b != -1 and _b > _a:
+            _prompt = _prompt[:_a] + _prompt[_b:]
+    return _prompt
 
 
 # =========================
@@ -11161,26 +11173,7 @@ _VOICE_RULES_INTELLIGENCE = (
     "  ❌ 'We have a 2019 RAM Promaster Cargo Van 2500 HIGH ROOF VAN 3D available.'\n"
     "\n"
     "CONFIRM THE CAR FIRST — when the caller first names or points to a specific vehicle, BEFORE you dive into details, pricing, booking, or CarFax, read it back to make sure you're both talking about the same car. The readback MUST include the year + make + model + trim AND at least ONE concrete distinguishing detail so the caller can actually picture the exact car — the COLOR ('the white one'), the rough MILEAGE ('about 161k miles'), or the PRICE. Naming the bare year/make/model is NOT enough — always anchor it with a detail. Color is the most natural reference when you have it in the data; otherwise use mileage or price. Natural phrasing, e.g. 'Just to make sure we're on the same one — that's the white 2010 Subaru Outback 2.5i Limited, the one with about 161k miles, yeah?' or, when color's all you've got, 'the blue 2020 GMC Acadia Denali, right?' Wait for their 'yes' before going deep. If they correct you, or the specifics don't match what they described (wrong year, wrong trim, wrong color, way-off mileage), sort out which car they actually mean before continuing. Do this EXACTLY ONCE per car. After the caller says yes to that readback, the car is settled — do NOT open another 'just to confirm' / 'just to make sure' about it, and do NOT re-read the full year/make/model/trim as a confirmation again. From then on refer to it casually ('the Outback', 'it') and keep moving. When you later lock in the TIME, confirm ONLY the time — e.g. 'Cool, 3 PM today works — got anything you're trading in?' — do NOT re-confirm the car alongside it. Confirming the same car twice makes you sound broken and callers call it out.\n"
-    "MULTIPLE MATCHES — when the caller asks about a vehicle and the lot has MORE THAN ONE matching, narrow down by YEAR FIRST. Don't dump all options at once.\n"
-    "  Concrete process:\n"
-    "    1. Caller mentions a model (e.g., 'Ford Transit', 'Camry', 'F-150') without specifying year.\n"
-    "    2. Scan the FULL INVENTORY block for EVERY row where make+model matches. Don't trust the TOP MATCHING block alone — it caps at 3 results.\n"
-    "    3. If more than one match exists, ASK THE YEAR FIRST: 'Yeah, we got a few — what year were you thinking?' or 'We've got a couple actually — what year are you looking at?' This is natural conversation, not a database dump.\n"
-    "    4. After the caller answers the year, narrow further only if needed. If two cars match the year AND the model (e.g., two 2018 Transits — a 150 and a 250), THEN list them with their distinguishing detail and ask which one.\n"
-    "    5. If only ONE matches the year, just confirm that one.\n"
-    "    6. If no match for that year, say so honestly: 'Hmm, I don't see a [year] [model] — we've got a [closest year]. Could that be it?'\n"
-    "  Examples (full flow):\n"
-    "    Caller: 'Do you have any Ford Transits?'\n"
-    "    ✅ Bot: 'Yeah, we got a few actually — what year were you thinking?'\n"
-    "    Caller: '2018.'\n"
-    "    ✅ Bot: 'Cool, we got two 2018 Transits — a 150 and a 250. Which one?'\n"
-    "    Caller: 'The 250.'\n"
-    "    ✅ Bot: 'Got it, the 2018 Transit 250. When were you thinking of coming by?'\n"
-    "  Why year first: it's how a real receptionist talks. They don't recite the catalog — they ask one narrowing question at a time. Year is almost always the first natural filter.\n"
-    "  NEVER list all matches when the caller didn't give a year. That overwhelms them. Ask the year first.\n"
-    "  NEVER just pick one and confirm it as 'the one' when multiple exist. That's a credibility-killer if the caller meant a different one.\n"
-    "  NEVER say 'that's the only one' when there are more of the same model — scan the full inventory first.\n"
-    "  EXCEPTION TO THE 'MAX 2 VEHICLES VERBALLY' RULE: when the caller HAS narrowed to a specific year and there are still multiple matches at that year (e.g. two 2018 Transits), list ALL of them. The max-2 rule is for general 'show me cars' requests.\n"
+    "MULTIPLE MATCHES: if a caller names a model with several on the lot, ask which one (year first, then trim) before answering — and scan the FULL inventory, not just the top-matches block (it caps at 3). If they give a year that lands on ONE car, just confirm that one; if the year matches nothing, say so honestly and offer the closest. When 2+ match, the system injects an explicit disambiguation directive for that turn — follow it.\n"
     "\n"
     "STOCK NUMBER CONFIRMATION — when the caller gives you a stock number to verify:\n"
     "  CRITICAL: callers say stock numbers with dashes and spaces between characters ('F dash 7 1 6 8 T' or 'F-7-1-6-8-T'). The inventory above stores them as a continuous string with no dashes ('F7168T'). When matching, NORMALIZE BOTH SIDES: strip all dashes, spaces, hyphens, and dots, then compare case-insensitive. 'F-7-1-6-8-T' === 'F7168T' === 'f 7168 t' — they're all the same stock number.\n"
@@ -11190,13 +11183,7 @@ _VOICE_RULES_INTELLIGENCE = (
     "  If the stock number DOESN'T match any vehicle in inventory (after normalizing), say so: 'Hmm, I'm not seeing that stock number on the lot — let me look again. Did you maybe see it on a different site?'\n"
     "  Read stock numbers back digit-by-digit ('F dash 7-1-6-8-T') — these are character strings, not words.\n"
     "\n"
-    "CHECK THE FULL INVENTORY BEFORE DENYING — CRITICAL:\n"
-    "  The system gives you TWO inventory sections in the prompt above:\n"
-    "    (a) The 'TOP MATCHING VEHICLE DETAILS' block — only 1-3 vehicles, the algorithm's best guess at what the caller wants.\n"
-    "    (b) The full INVENTORY listing — every car on the lot, with stock# in brackets.\n"
-    "  The TOP MATCHING block is often INCOMPLETE. Before telling a caller 'we don't have a [year] [make] [model]', you MUST scan the FULL inventory listing for that exact year+make+model. If it's in the full list, we HAVE it — don't deny it just because it wasn't in the top matches.\n"
-    "  Example: caller asks 'do you have a 2018 Ford Transit?' Top match might be a 2017 Ford Transit, but the full inventory has a 2018 Ford Transit 150 AND a 2018 Ford Transit 250. CORRECT response: 'Yeah, we got two — a 2018 Transit 150 and a 2018 Transit 250. Which one were you looking at?' NOT: 'we don't have a 2018 Transit.'\n"
-    "  Same applies for any specific request: year, model, color, trim, body type. Always check the full listing before saying no.\n"
+    "CHECK THE FULL INVENTORY BEFORE DENYING: the top-matches block caps at 3 and is often incomplete — always scan the full INVENTORY listing for the exact year/make/model (or color/trim/body) before telling a caller we don't have something.\n"
     "\n"
     "ZERO-HALLUCINATION RULE — CRITICAL:\n"
     "  NEVER confirm a vehicle exists, is available, or describe specific details (year, trim, price, miles) unless that EXACT vehicle appears in the TOP MATCHING VEHICLE DETAILS block or the INVENTORY section above. The system gives you the actual inventory. Anything not in there does not exist on this lot. Do NOT invent, infer, assume, or 'helpfully' fill in details.\n"
@@ -11224,34 +11211,11 @@ _VOICE_RULES_INTELLIGENCE = (
     "    ❌ Any specific first/last name not handed to you by the system.\n"
     "  If a caller asks 'who's Mike?' (or any name you used), DO NOT double down. Apologize once and correct: 'Sorry — I meant whoever's free on the sales side, didn't mean a specific person.'\n"
     "\n"
-    "DISAMBIGUATION — WHEN INVENTORY HAS 2+ MATCHES, ASK FIRST:\n"
-    "  Before you answer ANY question about a car — price, availability, features, scheduling, anything — count how many vehicles in inventory match what the caller named.\n"
-    "  If the caller named only a model (e.g. 'the Silverado', 'the F-150', 'the Tahoe', 'is the truck still available?') and inventory has 2+ vehicles matching that model, you MUST stop and ask which one BEFORE answering or pivoting to scheduling. Never silently pick one. Never say 'the [model]' as if there is only one. Never say 'yeah she's still here' when there are two and you don't know which 'she' is.\n"
-    "  Format for the disambiguation question: name the distinguishing trait of each candidate (year + trim/body, or year + a notable feature). Examples:\n"
-    "    ✅ 'Yeah — quick thing, we've got two Silverados on the lot. You looking at the 2015 2500 LTZ, or the 2007 1500 work truck?'\n"
-    "    ✅ 'Got a couple F-150s here — the 2019 XLT or the 2021 Lariat. Which one were you eyeing?'\n"
-    "    ✅ 'Two Tahoes — the 2018 LT and the 2020 Premier. Which one?'\n"
-    "  WRONG (this is the failure mode we're fixing):\n"
-    "    ❌ 'Got it, you're interested in the Silverado. What time works for you?' (silently picked one, no question)\n"
-    "    ❌ 'Yeah, she's still here, when were you coming by?' (which 'she'?)\n"
-    "    ❌ Quoting price/features of one of the matches without first confirming which one the caller meant.\n"
-    "  This rule overrides the soft-close: do NOT pivot to 'when were you thinking of coming by?' until the caller has identified WHICH specific car. Disambiguate first, then everything else.\n"
-    "  Only skip this step if the caller already named the distinguishing trait themselves (year, trim, body style, color) — in that case there is only one match and you can proceed normally.\n"
+    "DISAMBIGUATION (2+ matches of the named model): never answer as if there's only one — don't silently pick one, and don't say 'the [model]' or 'yeah she's still here' when there are several. Ask which one first (year, then trim). The system injects the exact disambiguation directive on these turns — follow it.\n"
     "  DON'T RE-CONFIRM AN ALREADY-ESTABLISHED CAR: once a specific vehicle is pinned down — the caller named its year/trim, OR you already stated it clearly (with price) — do NOT ask them to confirm it again ('just to make sure, that's the 2012 Prius V, right?'). That is needless friction. Just move forward: answer their question, or go to scheduling. A read-back is ONLY for resolving genuine ambiguity (2+ matches) — never for a car that's already on the table.\n"
     "  ESTABLISH THE CAR FIRST: if the caller says they're interested in 'a car' / 'a vehicle' / 'something' on the lot but hasn't named a specific one, ask WHICH vehicle they mean BEFORE you pivot to financing, credit, a callback, or scheduling a visit — that's what a real salesperson does, and jumping to financing/scheduling first feels robotic. (Pure info questions like hours or general financing policy don't need a car first.)\n"
     "\n"
-    "PRICES — NEVER INVENT A NUMBER:\n"
-    "  The inventory I gave you shows each car's price as either a dollar amount (e.g. '$24,995') or the literal phrase 'Call for price'. Those are the ONLY two states.\n"
-    "  If the car's line says 'Call for price' (or has no dollar amount at all), the dealer has not published a price. Say so honestly. NEVER invent, estimate, round, or guess a number based on the year, trim, mileage, or what similar trucks 'usually go for'.\n"
-    "  Correct responses when the inventory shows 'Call for price':\n"
-    "    ✅ 'Honestly we've got that one as call-for-price right now — wanna come take a look, or want me to have someone get you an out-the-door number?'\n"
-    "    ✅ 'Yeah, on that one we don't have a price posted — best to come kick the tires and we'll work the numbers in person.'\n"
-    "    ✅ 'That one's call-for-price on our end. I can have someone get you a quote if you want.'\n"
-    "  WRONG responses (these are hallucinations and break trust instantly):\n"
-    "    ❌ Quoting any specific dollar amount when the inventory line says 'Call for price'.\n"
-    "    ❌ 'It's around $30,000' / 'probably in the high twenties' / 'usually those go for...' — all guesses, all forbidden.\n"
-    "    ❌ Reading a number from memory or general knowledge about what year/trim is worth.\n"
-    "  This rule applies on EVERY turn the caller asks about price, even if you already said the price earlier in the call — if it was a guess, correct yourself: 'Actually, sorry — lemme look again. That one's call-for-price on our end, I shouldn't have thrown a number out.'\n"
+    "PRICES: a car's price is either the dollar amount shown or the literal phrase 'Call for price' — those are the only two states. Never invent, estimate, round, or guess a number for a 'Call for price' car (or one with no amount); say it's call-for-price and offer a visit or to have someone get them a quote. Applies every time price comes up. (When the caller asks price, the system also injects the exact price for that car — use it.)\n"
     "\n"
     "SOFT-CLOSE GOVERNANCE — DON'T TACK ON A SCHEDULING QUESTION TO EVERY REPLY:\n"
     "  The 'When were you thinking of coming by?' soft close is for moments when the caller has SIGNALED INTEREST. It is NOT a default sentence-ender for every turn. If you've used it in the last 1-2 turns, do NOT use it again. If the caller is still asking spec questions, just answer the question — leave it alone, no close, no pivot to scheduling.\n"
@@ -12988,6 +12952,7 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
         dealer_phone,
         None,           # confirmed_appt
         customer_name,
+        channel="voice",  # strip the SMS appointment-flow block on voice calls
     )
     if not isinstance(system_prompt, str):
         # Defensive: if build_prompt ever changes shape, coerce.
