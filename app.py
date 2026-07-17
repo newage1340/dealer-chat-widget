@@ -1278,6 +1278,49 @@ def inventory_upload():
     return jsonify({"ok": True, "twilio_number": twilio_number, "count": count})
 
 
+@app.route("/admin/clear-conversation", methods=["GET", "POST"])
+def clear_conversation():
+    """Wipe ALL stored history for a single customer phone number so the bot
+    treats it as a brand-new texter/caller (fresh slate — no old messages, no
+    remembered name, no pending/follow-up state). Everyone else's threads are
+    untouched.
+
+    Browser-friendly: paste this into your address bar (URL-encode the +, or the
+    browser will usually do it for you):
+        /admin/clear-conversation?token=YOUR_TOKEN&phone=+13175551234
+
+    Reuses INVENTORY_UPLOAD_TOKEN so there's no new secret to set up."""
+    expected = os.getenv("INVENTORY_UPLOAD_TOKEN", "").strip()
+    provided = (request.values.get("token", "")
+                or request.headers.get("X-Upload-Token", "")).strip()
+    if not expected or provided != expected:
+        app.logger.warning("clear-conversation: unauthorized attempt")
+        return jsonify({"error": "unauthorized"}), 401
+
+    phone = normalize_phone(request.values.get("phone", "") or "")
+    if not phone:
+        return jsonify({"error": "missing phone (e.g. ?phone=+13175551234)"}), 400
+
+    # Best-effort wipe across every table keyed by customer_phone. Wrapped per
+    # table so a schema that lacks one of these won't fail the whole clear.
+    tables = ["messages", "customer_names", "cold_followups", "dealer_leads",
+              "pending_appointments", "pending_reconfirmations",
+              "pending_cancellations", "appointments", "primer_sent",
+              "voice_sessions"]
+    conn = _db()
+    wiped = {}
+    for t in tables:
+        try:
+            cur = conn.execute(f"DELETE FROM {t} WHERE customer_phone=?", (phone,))
+            wiped[t] = cur.rowcount
+        except Exception:
+            pass  # table doesn't exist / no such column — skip it
+    conn.commit()
+    conn.close()
+    app.logger.info("clear-conversation: fresh slate for %s — %s", phone, wiped)
+    return jsonify({"ok": True, "phone": phone, "cleared": wiped})
+
+
 # =========================
 # SQLITE - CUSTOMER NAMES
 # =========================
