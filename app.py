@@ -14867,28 +14867,41 @@ if os.getenv("DISABLE_SCHEDULER", "0") != "1":
 # warm. Pure latency; changes no behavior. Skipped when the scheduler is off
 # (tests / the offloaded scraper).
 def _boot_warm_prompt_cache():
-    try:
-        time.sleep(10)  # let the dealer-cache warmer populate first
-        dealers = read_dealers()
-    except Exception as _e:
-        app.logger.warning("boot cache warm: dealer read failed: %s", _e)
-        return
+    """Aggressively warm the OpenAI voice prompt cache right after a deploy. A
+    deploy restarts the app COLD (empty prefix cache) — that's the '10-15 min of
+    dead air on the first calls after going live' window. So instead of warming
+    ONCE, we warm immediately and keep re-warming every ~30s for the first few
+    minutes, so the cache is already hot before those early calls land. Pure
+    latency warmup, no behavior change, runs off-thread. After this burst the
+    steady-state keep_prompt_cache_warm job (every 4 min) takes over."""
     _model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
-    for _d in (dealers or [])[:3]:
+    _rounds = 10   # ~5 minutes of post-deploy coverage (10 rounds x 30s)
+    _gap = 30      # seconds between re-warms
+    time.sleep(5)  # small head start for the dealer-cache warmer
+    for _round in range(_rounds):
         try:
-            _tn = normalize_phone(get_row_field(_d, TWILIO_NUMBER_ALIASES))
-            if not _tn:
-                continue
-            _inv = get_inventory_for_twilio(_tn)
-            _dp = normalize_phone(get_row_field(_d, DEALER_NOTIFY_PHONE_ALIASES))
-            _msgs = build_dealer_voice_prompt(
-                dealer=_d, inventory_rows=_inv, history=[], customer_msg="hello",
-                dealer_phone=_dp, customer_name={}, caller_phone="", twilio_number=_tn)
-            openai_client.with_options(max_retries=0).chat.completions.create(
-                model=_model, messages=_msgs, max_tokens=1, timeout=25)
-            app.logger.info("boot: prompt cache warmed for %s", _tn)
+            dealers = read_dealers()
         except Exception as _e:
-            app.logger.warning("boot cache warm failed for a dealer: %s", _e)
+            app.logger.warning("boot cache warm: dealer read failed (round %d): %s", _round, _e)
+            dealers = []
+        for _d in (dealers or [])[:3]:
+            try:
+                _tn = normalize_phone(get_row_field(_d, TWILIO_NUMBER_ALIASES))
+                if not _tn:
+                    continue
+                _inv = get_inventory_for_twilio(_tn)
+                _dp = normalize_phone(get_row_field(_d, DEALER_NOTIFY_PHONE_ALIASES))
+                _msgs = build_dealer_voice_prompt(
+                    dealer=_d, inventory_rows=_inv, history=[], customer_msg="hello",
+                    dealer_phone=_dp, customer_name={}, caller_phone="", twilio_number=_tn)
+                openai_client.with_options(max_retries=0).chat.completions.create(
+                    model=_model, messages=_msgs, max_tokens=1, timeout=25)
+                if _round == 0:
+                    app.logger.info("boot: prompt cache warmed for %s", _tn)
+            except Exception as _e:
+                app.logger.warning("boot cache warm failed for a dealer: %s", _e)
+        if _round < _rounds - 1:
+            time.sleep(_gap)
 
 
 if os.getenv("DISABLE_SCHEDULER", "0") != "1":
