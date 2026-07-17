@@ -6888,17 +6888,48 @@ def _spawn_scrape_subprocess() -> None:
         app.logger.error("inventory scrape: failed to spawn subprocess: %s", e)
 
 
+def keep_prompt_cache_warm() -> None:
+    """Re-warm the OpenAI voice prompt cache on a timer so a call after an idle
+    stretch doesn't hit a COLD ~20k-token prefix (which takes >12s to process and
+    blows Vapi's turn timeout → caller hears only background noise, has to redial
+    3-4 times before the cache warms up). Fires one tiny max_tokens=1 completion
+    per dealer carrying that same static prefix. Pure latency warmup — changes no
+    behavior. Runs on the scheduler every few minutes; OpenAI's prefix cache lives
+    ~5-10 min, so this keeps it perpetually hot and the first call is fast."""
+    try:
+        dealers = read_dealers()
+    except Exception as _e:
+        app.logger.warning("keep-warm: dealer read failed: %s", _e)
+        return
+    _model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
+    for _d in (dealers or [])[:3]:
+        try:
+            _tn = normalize_phone(get_row_field(_d, TWILIO_NUMBER_ALIASES))
+            if not _tn:
+                continue
+            _inv = get_inventory_for_twilio(_tn)
+            _dp = normalize_phone(get_row_field(_d, DEALER_NOTIFY_PHONE_ALIASES))
+            _msgs = build_dealer_voice_prompt(
+                dealer=_d, inventory_rows=_inv, history=[], customer_msg="hello",
+                dealer_phone=_dp, customer_name={}, caller_phone="", twilio_number=_tn)
+            openai_client.with_options(max_retries=0).chat.completions.create(
+                model=_model, messages=_msgs, max_tokens=1, timeout=25)
+        except Exception as _e:
+            app.logger.warning("keep-warm failed for a dealer: %s", _e)
+
+
 def start_scheduler() -> None:
     scheduler = BackgroundScheduler()
     scheduler.add_job(send_appointment_reminders, "interval", minutes=5,  id="reminders",         replace_existing=True)
     scheduler.add_job(send_cold_followups,         "interval", minutes=1,  id="cold_followups",    replace_existing=True)
     scheduler.add_job(send_winback_followups,      "interval", minutes=1,  id="winback",           replace_existing=True)
+    scheduler.add_job(keep_prompt_cache_warm,      "interval", minutes=4,  id="keep_warm",         replace_existing=True)
     # NOTE: inventory scraping is OFFLOADED to GitHub Actions (it scrapes on a
     # schedule and POSTs to /admin/inventory-upload). It no longer runs on this
     # web service at all — that's what keeps Chromium out of the Render build and
     # takes deploys from ~25 min down to ~2 min.
     scheduler.start()
-    app.logger.info("Scheduler started: reminders 5 min | cold follow-ups 1 min | win-back 1 min | inventory=offloaded to GitHub Actions.")
+    app.logger.info("Scheduler started: reminders 5 min | cold follow-ups 1 min | win-back 1 min | keep-warm 4 min | inventory=offloaded to GitHub Actions.")
     send_appointment_reminders()
 
 
