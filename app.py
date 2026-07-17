@@ -13112,12 +13112,16 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
     elif _open_now is False:
         _status_line = (
             f"OPEN/CLOSED RIGHT NOW: **CLOSED** (today's hours: "
-            f"{_hours_today or 'closed today'}). If the caller asks whether you're "
-            "open, or wants to come in right now/today, tell them you're closed now "
-            "and give the next open time. Do NOT say you're open. But being closed "
-            "does NOT limit what you can help with — keep answering every other "
-            "question (pricing, availability, vehicle details, financing, trade-ins, "
-            "etc.) fully and normally, just like you would during business hours.\n")
+            f"{_hours_today or 'closed today'}). Do NOT volunteer that you're closed "
+            "when the caller is just asking about a car or hasn't brought up coming "
+            "in — leading with 'we're closed' out of nowhere is confusing. When it "
+            "IS relevant (they ask if you're open, or want to come in now), don't "
+            "just state you're closed — turn it into a booking for the next open "
+            "time, e.g. 'We're actually closed for the night, but I'd love to get "
+            "you in tomorrow — we open at [open time]. What time works for ya?'. "
+            "Never say you're open. Being closed does NOT limit what you can answer "
+            "— keep helping with pricing, details, financing, trade-ins, everything, "
+            "just like normal.\n")
     else:
         _status_line = ""  # hours unparseable — fall back to the rules below
     real_world_block = (
@@ -13131,7 +13135,8 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
         "RULES FOR USING THESE FACTS:\n"
         "- BEING CLOSED NEVER LIMITS WHAT YOU ANSWER. You help 24/7: answer every question fully at any hour — pricing, availability, specs, vehicle history, financing, trade-ins, anything the caller asks. The ONLY thing 'closed right now' affects is an in-person visit happening RIGHT NOW or TODAY; for that, offer the next open time. NEVER say 'I can answer that when we're open', NEVER refuse or defer a question, and NEVER pivot to 'call back during business hours' just because you're closed. Being closed is not a reason to stop helping.\n"
         "- ONLY bring up whether you're open/closed RIGHT NOW when the caller actually asks about CURRENT availability ('are you open?', 'can I come right now?', 'what time do you close today?') or asks to come in TODAY. Use the CURRENT TIME above to answer, not the hours string alone.\n"
-        "- If they ask about NOW and the current hour is past close → 'We're actually closed for the night, but we're back open at [open time] tomorrow.' If it's before open → 'we open at [time].'\n"
+        "- If the caller just expressed interest in a car (and did NOT ask about hours or coming in right now), do NOT mention being closed at all — pivot toward booking naturally: 'When were you thinking of coming to see it?'. Only surface 'closed' if they then ask to come now/today.\n"
+        "- When you DO mention being closed, ALWAYS turn it into a booking offer for the next open time — never leave 'we're closed' just hanging there. Past close → 'We're closed for the night, but I can get you in tomorrow — we open at [open time]. What time works?' Before open → 'We open at [time] — want me to set you up for then?'\n"
         "- CRITICAL: when the caller is booking a FUTURE time (tomorrow, a specific day) do NOT mention that you're closed right now — it's irrelevant and it confuses people. Just make sure the future time fits within hours and book it. NEVER randomly announce 'we just closed at 6 PM' during a booking or a general question — only when they specifically ask about coming in right now/today.\n"
         "- Do NOT say 'we're open until 6 PM today' if the current time is already past 6 PM. That's a credibility-killer.\n"
         "- For test drive scheduling: only suggest times that fit within the dealer's hours AND are in the future. Don't suggest 'today at 7' if it's already 8 PM.\n"
@@ -13905,7 +13910,19 @@ def voice_handle():
                 else:
                     if not _mentions_cf:
                         raw_reply = f"I'll get the CARFAX for the {_ctitle} texted right over. " + raw_reply
-        # No CarFax on file for this car → let the original LLM reply stand.
+        else:
+            # No CarFax URL on file for this car. The LLM often still PROMISES to
+            # "send the CARFAX" anyway — a promise we can't keep, since there's
+            # nothing to text. Don't let that dead promise stand: be honest and
+            # offer real alternatives. Only override when it actually promised it.
+            _promised_cf = bool(
+                re.search(r"\b(send|text|shoot|get|sending|texting|shooting|getting|have someone (?:text|send))\b[^.?!]{0,45}car\s*fax", raw_reply, re.I)
+                or re.search(r"car\s*fax[^.?!]{0,35}\b(to you|over|shortly|right (?:over|away)|in a (?:bit|moment|sec|min))", raw_reply, re.I))
+            if _promised_cf:
+                _ct = _vehicle_title(_cm) if _cm else "that one"
+                raw_reply = (f"Honestly, I don't have a CARFAX report on file for the {_ct} to text over — "
+                             "but I can send you the full listing, or have someone on the team pull the "
+                             "history and reach out. Want me to do either of those?")
 
     # Vehicle-link send: voice has no other way to deliver a URL (Polly can't read
     # one aloud and the prompt forbids speaking URLs), so when the caller asks for
@@ -14181,9 +14198,16 @@ def voice_handle():
                 .replace("[TAKE_MESSAGE]", "")
                 .replace("[HANGUP]", "")
                 .strip())
-    # Belt-and-suspenders: strip ANY leftover [ALL_CAPS_TOKEN] control marker so
-    # a garbled one (e.g. [TABLE_MESSAGE]) never gets read aloud by Polly.
-    say_text = re.sub(r"\[[A-Z][A-Z0-9_ ]{2,}\]", "", say_text).strip()
+    # Belt-and-suspenders: strip ANY leftover [bracketed] control marker so a
+    # garbled one never gets read aloud by Polly. The old regex only caught
+    # ALL-CAPS tokens and MISSED ones with a colon/lowercase, so callers heard
+    # "[TIME: 9 AM tomorrow]" and "[TABLE_MESSAGE]" spoken out loud. Strip every
+    # [ ... ] segment — a voice reply never legitimately contains brackets — then
+    # tidy the double spaces / stray punctuation the removal leaves behind.
+    say_text = re.sub(r"\[[^\]]*\]", "", say_text)
+    say_text = re.sub(r"\s+([.,!?])", r"\1", say_text)   # no space before punctuation
+    say_text = re.sub(r"([.!?])\s*\.", r"\1", say_text)  # collapse "! ." -> "!"
+    say_text = re.sub(r"\s{2,}", " ", say_text).strip()
 
     # BOOKING JUST COMMITTED → force a SHORT closing so the bot can't recap the
     # whole appointment a SECOND time. The full readback already happened on the
@@ -14759,6 +14783,43 @@ if __name__ != "__main__" and os.getenv("SKIP_STARTUP_SCRAPE", "0") != "1":
 if os.getenv("DISABLE_SCHEDULER", "0") != "1":
     import threading as _threading2
     _threading2.Thread(target=_dealer_cache_warmer, daemon=True).start()
+
+
+# Warm the OpenAI prompt cache at BOOT so the FIRST call after a deploy isn't
+# cold. A deploy restarts the worker and blows OpenAI's cache; the per-call
+# warm-up races the caller's first sentence, so on a fresh deploy that first turn
+# can be slow ("no voice for a bit after every deploy"). This primes the big
+# static prompt prefix a few seconds after boot — by the time anyone calls, it's
+# warm. Pure latency; changes no behavior. Skipped when the scheduler is off
+# (tests / the offloaded scraper).
+def _boot_warm_prompt_cache():
+    try:
+        time.sleep(10)  # let the dealer-cache warmer populate first
+        dealers = read_dealers()
+    except Exception as _e:
+        app.logger.warning("boot cache warm: dealer read failed: %s", _e)
+        return
+    _model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
+    for _d in (dealers or [])[:3]:
+        try:
+            _tn = normalize_phone(get_row_field(_d, TWILIO_NUMBER_ALIASES))
+            if not _tn:
+                continue
+            _inv = get_inventory_for_twilio(_tn)
+            _dp = normalize_phone(get_row_field(_d, DEALER_NOTIFY_PHONE_ALIASES))
+            _msgs = build_dealer_voice_prompt(
+                dealer=_d, inventory_rows=_inv, history=[], customer_msg="hello",
+                dealer_phone=_dp, customer_name={}, caller_phone="", twilio_number=_tn)
+            openai_client.with_options(max_retries=0).chat.completions.create(
+                model=_model, messages=_msgs, max_tokens=1, timeout=25)
+            app.logger.info("boot: prompt cache warmed for %s", _tn)
+        except Exception as _e:
+            app.logger.warning("boot cache warm failed for a dealer: %s", _e)
+
+
+if os.getenv("DISABLE_SCHEDULER", "0") != "1":
+    import threading as _threading3
+    _threading3.Thread(target=_boot_warm_prompt_cache, daemon=True).start()
 
 
 # =========================
