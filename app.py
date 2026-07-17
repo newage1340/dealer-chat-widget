@@ -11516,7 +11516,7 @@ def _build_focused_inventory_block(inventory_rows: List[Dict[str, Any]],
     Detects make+model mentions in the most recent caller message and the
     last few turns. Returns empty string if nothing matched (LLM falls back
     to the full inventory listing as before)."""
-    blob = (current_msg + " " + " ".join(
+    blob = _normalize_spoken_models(current_msg + " " + " ".join(
         (m.get("content") or "") for m in (history or [])[-4:]
     )).lower()
 
@@ -11563,7 +11563,7 @@ def _build_focused_inventory_block(inventory_rows: List[Dict[str, Any]],
     narrowed = matched
     for tok in spotted_model_tokens:
         further = [r for r in matched
-                   if tok in str(r.get("Model", "")).lower()]
+                   if tok in str(r.get("Model", "")).lower().replace("-", "")]
         if further:
             narrowed = further
             break
@@ -11988,6 +11988,42 @@ def _spoken_year_to_digits(text: str) -> str:
     return (text + " " + " ".join(found)) if found else text
 
 
+_MODEL_ONES = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+               'six': 6, 'seven': 7, 'eight': 8, 'nine': 9}
+_MODEL_MULT = {'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+               'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19,
+               'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60,
+               'seventy': 70, 'eighty': 80, 'ninety': 90}
+
+
+def _normalize_spoken_models(text: str) -> str:
+    """Voice callers say truck/model numbers as words and STT keeps them that way:
+    'f two fifty' (F-250), 'f one fifty' (F-150), 'fifteen hundred' (1500),
+    'twenty five hundred' (2500), 'c two fifty' (C250), 'e five fifty' (E550).
+    Inventory stores them as digits ('F-250', '1500'), so the spoken forms never
+    match — the bot then can't disambiguate 'the F-250' across several F-250s.
+    This APPENDS the digit form alongside the original text (non-destructive)."""
+    if not text:
+        return text
+    t = text.lower()
+    found: List[str] = []
+    # X50 models: optional single letter + <ones> + [hundred] + fifty
+    #   -> 150/250/350/450/550, f250, c250, e550, transit 250, etc.
+    for m in re.finditer(r"\b([a-z]\s+)?(one|two|three|four|five|six|seven|eight|nine)(?:\s+hundred)?\s+fifty\b", t):
+        letter = (m.group(1) or "").replace(" ", "")
+        found.append(f"{letter}{_MODEL_ONES[m.group(2)] * 100 + 50}")
+    # X500 models: <15|25|35|45...> hundred -> 1500/2500/3500/4500
+    #   (RAM/Silverado/Sierra 1500-3500, Promaster, Express, LCF)
+    for m in re.finditer(
+        r"\b((?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[\s-]+(?:one|two|three|four|five|six|seven|eight|nine))?"
+        r"|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\s+hundred\b", t):
+        words = re.split(r"[\s-]+", m.group(1))
+        val = sum(_MODEL_MULT.get(w, 0) + _MODEL_ONES.get(w, 0) for w in words)
+        if val:
+            found.append(str(val * 100))
+    return (text + " " + " ".join(found)) if found else text
+
+
 def _voice_single_car_focus_directive(cars: List[Dict[str, Any]]) -> str:
     """When the caller named a model + year that pins down exactly ONE car,
     steer the LLM to talk about THAT car instead of reciting the model's other
@@ -12060,7 +12096,7 @@ def _voice_disambiguation_directive(customer_msg: str,
         _t = _JUNK_TRIM_RE.sub(" ", str(r.get("trim") or r.get("Trim") or "").lower())
         return {_canon_tok(w) for w in re.sub(r"[^a-z0-9 ]", " ", f"{_m} {_t}").split() if w}
 
-    msg_lower = customer_msg.lower()
+    msg_lower = _normalize_spoken_models(customer_msg).lower()
     msg_tokens = {_canon_tok(w) for w in re.sub(r"[^a-z0-9 ]", " ", msg_lower).split() if w}
     # each entry: (model_key, candidate_rows, year_already_pinned)
     triggered: List[Any] = []
@@ -12194,7 +12230,7 @@ def _voice_disambiguation_question(customer_msg: str,
         _t = _JUNK_TRIM_RE.sub(" ", str(r.get("trim") or r.get("Trim") or "").lower())
         return {_canon_tok(w) for w in re.sub(r"[^a-z0-9 ]", " ", f"{_m} {_t}").split() if w}
 
-    msg_lower = customer_msg.lower()
+    msg_lower = _normalize_spoken_models(customer_msg).lower()
     msg_tokens = {_canon_tok(w) for w in re.sub(r"[^a-z0-9 ]", " ", msg_lower).split() if w}
     chosen = None
     for model_key, rows in by_model.items():
