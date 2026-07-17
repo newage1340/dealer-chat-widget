@@ -6768,16 +6768,24 @@ def send_cold_followups() -> None:
             if custom_msg:
                 followup_body = custom_msg
             else:
-                # Scope to the caller's LATEST call, not their blended cross-call
-                # history — otherwise the follow-up AND the staff lead name a car
-                # from a PREVIOUS call the caller never brought up this time (the
-                # "why does it keep mentioning the Mullen?" bug). Web/SMS convos
-                # have no call_sid, so fall back to recent history for those.
-                # Pull up to 40 (the summarizer caps there anyway) so a long
-                # open/closed-hours tail can't push the car-of-interest out.
-                _latest_sid = get_latest_call_sid(customer_phone, twilio_number)
+                # Scope the follow-up to the caller's LATEST CALL so it names the
+                # car they actually just called about — not a stale car from an
+                # earlier web chat or previous call ("why does it keep mentioning
+                # the Mullen?" bug). The voice call is saved under the caller's
+                # REAL phone, which for a lingering web session is the RESOLVED
+                # outbound number — NOT this session's +web... id. So check the
+                # outbound real phone for a recent call FIRST; that's what stops a
+                # web session from following up about the wrong car. Fall back to
+                # this session's own call, then its recent history. Pull up to 40
+                # (the summarizer caps there anyway) so a long open/closed-hours
+                # tail can't push the car-of-interest out.
+                _latest_sid = get_latest_call_sid(outbound_phone, twilio_number)
+                _hist_phone = outbound_phone
+                if not _latest_sid:
+                    _latest_sid = get_latest_call_sid(customer_phone, twilio_number)
+                    _hist_phone = customer_phone
                 if _latest_sid:
-                    history = get_call_messages(customer_phone, twilio_number, _latest_sid, limit=40)
+                    history = get_call_messages(_hist_phone, twilio_number, _latest_sid, limit=40)
                 else:
                     history = get_recent_messages(customer_phone, twilio_number, limit=40)
                 try:
@@ -14080,9 +14088,17 @@ def voice_handle():
             _mentions_cf = bool(re.search(r"car\s*fax", raw_reply, re.I))
 
             if _already and not _wants_resend:
-                # Once per car: it's already in their texts — don't spam a duplicate.
-                raw_reply = (f"I already sent the CARFAX for the {_ctitle} over — should be in your texts, "
-                             "with the accident history, prior owners, and service records.")
+                # Already texted this car's CarFax earlier in the call. ONLY say so
+                # if the LLM's OWN reply is (wrongly) re-offering/re-mentioning the
+                # CarFax. Otherwise the caller is just acknowledging receipt ("yeah,
+                # I got it, thanks") — and overwriting their reply with "I already
+                # sent it" loops that exact line every single turn (the caller kept
+                # saying "yes I got it" and kept hearing "I already sent it"). When
+                # they're just acknowledging, leave the LLM's reply alone — it has
+                # already moved the conversation on (e.g. to booking).
+                if _mentions_cf:
+                    raw_reply = (f"I already sent the CARFAX for the {_ctitle} over — should be in your texts, "
+                                 "with the accident history, prior owners, and service records.")
             else:
                 ok, _info = _send_sms(from_number, to_number,
                                       f"Here's the CARFAX report for the {_ctitle} — accident history, "
