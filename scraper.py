@@ -347,34 +347,45 @@ def _ds_scrape_detail_page(html: str, detail_url: str = "") -> Optional[Dict[str
     full_description = " || ".join(filter(None, [description, spec_summary, features_text]))[:8000]
 
     # CarFax link — the DealerSocket detail page exposes a per-VIN CarFax link
-    # (e.g. carfax.com/cfm/check_order.cfm?partner=...&VIN=...). Grab any anchor
-    # pointing at carfax.com so accident/history questions can hand it out.
+    # (e.g. carfax.com/cfm/check_order.cfm?partner=...&VIN=...) as a plain <a> in
+    # the SERVER-rendered HTML. Catch: the site's JavaScript swaps that anchor for
+    # a CarFax widget in the live DOM, so the headless browser's page.content()
+    # loses the plain carfax.com link entirely — which is why cloud scrapes came
+    # back 0/90 while a plain fetch finds it on every car. So: try the browser
+    # HTML first, and if it's missing, RE-FETCH the page with a plain GET (proven
+    # to contain the anchor) and pull it from there.
+    def _scan_carfax(text: str) -> str:
+        cands = [c.replace("&amp;", "&").strip()
+                 for c in re.findall(r"https?://[^\s\"'<>\\]*carfax\.com[^\s\"'<>\\]*", text or "", re.I)]
+        if not cands:
+            return ""
+        return next((c for c in cands if any(k in c.lower()
+                     for k in ("check_order", "vehiclehistory", "vin="))), cands[0])
+
+    def _build_from_vin(text: str) -> str:
+        if not vin:
+            return ""
+        _pm = re.search(r"partner=([A-Za-z0-9_]+)", text or "")
+        return (f"https://www.carfax.com/cfm/check_order.cfm?partner={_pm.group(1)}&VIN={vin.upper()}"
+                if _pm else "")
+
     carfax_url = ""
     for a in soup.find_all("a", href=True):
         if "carfax.com" in a["href"].lower():
             carfax_url = a["href"].strip()
             break
     if not carfax_url:
-        # The CarFax link on these sites frequently is NOT an <a href> — it's
-        # embedded in a script/config or a data attribute and rendered client
-        # side, so the anchor scan above misses it (this is why headless cloud
-        # scrapes came back with 0 CarFax links while a local run found them).
-        # Scan the RAW html for any carfax.com URL and prefer a per-VIN report
-        # link (check_order/vehiclehistory) over a generic one.
-        cands = [c.replace("&amp;", "&").strip()
-                 for c in re.findall(r"https?://[^\s\"'<>\\]*carfax\.com[^\s\"'<>\\]*", html, re.I)]
-        if cands:
-            carfax_url = next(
-                (c for c in cands if any(k in c.lower()
-                 for k in ("check_order", "vehiclehistory", "vin="))),
-                cands[0])
-    if not carfax_url and vin:
-        # Last resort: build the standard CARFAX badge link from the VIN using
-        # a partner code found anywhere on the page. Only fires when a real
-        # carfax.com URL wasn't present at all.
-        _pm = re.search(r"partner=([A-Za-z0-9_]+)", html)
-        if _pm:
-            carfax_url = f"https://www.carfax.com/cfm/check_order.cfm?partner={_pm.group(1)}&VIN={vin.upper()}"
+        carfax_url = _scan_carfax(html)          # scan the browser HTML as-is
+    if not carfax_url and detail_url:
+        # Re-fetch the raw server HTML — this is the reliable source.
+        try:
+            import requests
+            _raw = requests.get(detail_url, timeout=20, headers={"User-Agent": UA}).text
+            carfax_url = _scan_carfax(_raw) or _build_from_vin(_raw)
+        except Exception as _e:
+            logger.warning("carfax raw refetch failed for %s: %s", detail_url, _e)
+    if not carfax_url:
+        carfax_url = _build_from_vin(html)       # last resort from browser HTML
 
     if not parsed.get("year") and not parsed.get("make"):
         return None
