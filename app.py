@@ -10,6 +10,15 @@ import subprocess
 import time
 import random
 import smtplib
+import netrc  # noqa: F401 - PRE-IMPORTED ON PURPOSE. `requests` does a lazy
+             # `import netrc` inside get_netrc_auth() on first use. Under our
+             # threaded setup (voice greeting calling read_dealers() at the same
+             # moment the background cache/prompt warmers hit Google auth), that
+             # first-time lazy import can deadlock on Python's import lock and
+             # freeze the worker until gunicorn's 60s timeout kills it -> dead
+             # air on the call. Importing it here, once, single-threaded at boot,
+             # means the lazy import always finds it already loaded and never
+             # touches the import lock under contention. DO NOT REMOVE.
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -1319,6 +1328,49 @@ def clear_conversation():
     conn.close()
     app.logger.info("clear-conversation: fresh slate for %s — %s", phone, wiped)
     return jsonify({"ok": True, "phone": phone, "cleared": wiped})
+
+
+@app.route("/admin/inventory-check", methods=["GET"])
+def inventory_check():
+    """Read-only diagnostic: for a dealer's Twilio number, list each car in the
+    DB and whether it has a CarFax URL stored. Lets us SEE (without guessing)
+    whether the offloaded scraper is populating CarFax links or leaving them
+    empty. Paste into a browser:
+        /admin/inventory-check?token=YOUR_TOKEN&twilio=+18882810403
+    Reuses INVENTORY_UPLOAD_TOKEN. Touches nothing — pure read."""
+    expected = os.getenv("INVENTORY_UPLOAD_TOKEN", "").strip()
+    provided = (request.values.get("token", "")
+                or request.headers.get("X-Upload-Token", "")).strip()
+    if not expected or provided != expected:
+        return jsonify({"error": "unauthorized"}), 401
+
+    twilio_number = normalize_phone(request.values.get("twilio", "") or "")
+    if not twilio_number:
+        return jsonify({"error": "missing twilio (e.g. ?twilio=+18882810403)"}), 400
+
+    try:
+        rows = get_inventory_for_twilio(twilio_number) or []
+    except Exception as e:
+        return jsonify({"error": f"inventory read failed: {e}"}), 500
+
+    cars = []
+    with_cf = 0
+    for r in rows:
+        cf = str(r.get("CarfaxURL", "") or "").strip()
+        if cf:
+            with_cf += 1
+        cars.append({
+            "car": f"{r.get('Year','')} {r.get('Make','')} {r.get('Model','')}".strip(),
+            "has_carfax": bool(cf),
+            "carfax": cf,
+        })
+    return jsonify({
+        "twilio_number": twilio_number,
+        "total_cars": len(cars),
+        "cars_with_carfax": with_cf,
+        "cars_without_carfax": len(cars) - with_cf,
+        "cars": cars,
+    })
 
 
 # =========================
@@ -6579,6 +6631,31 @@ def send_appointment_reminders() -> None:
             app.logger.warning("Reminder failed for appt #%d: %s", appointment_id, err)
 
 
+def _phone_on_active_call(phone: str, twilio_number: str, within_s: int = 240) -> bool:
+    """True if this number has a voice-call message (call_sid set) in the last
+    `within_s` seconds — i.e. they're mid-call right now. Cold follow-up / win-back
+    texts must NOT fire while someone is on a live call with the bot: to the caller
+    that reads as the bot spamming them a 'sorry we missed you' text while they're
+    literally still talking to it. Matches the E.164 number the voice turns are
+    saved under (which is also the resolved outbound number for web sessions)."""
+    if not phone:
+        return False
+    try:
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None)
+                  - timedelta(seconds=within_s)).isoformat(timespec="seconds")
+        conn = _db()
+        row = conn.execute(
+            "SELECT 1 FROM messages WHERE customer_phone=? AND twilio_number=? "
+            "AND call_sid IS NOT NULL AND created_at >= ? LIMIT 1",
+            (phone, twilio_number, cutoff),
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except Exception as e:
+        app.logger.warning("active-call check failed for %s: %s", phone, e)
+        return False
+
+
 def send_cold_followups() -> None:
     cold = get_cold_conversations()
     app.logger.info("Cold follow-up sweep: %d conversation(s) eligible.", len(cold))
@@ -6650,6 +6727,17 @@ def send_cold_followups() -> None:
                 app.logger.info(
                     "Cold follow-up: no real phone for %s via %s yet, skipping",
                     customer_phone, twilio_number,
+                )
+                continue
+
+            # Don't text someone a "sorry we missed you" follow-up while they're
+            # ON a live call with the bot. Skip WITHOUT marking sent, so it can
+            # still fire later if the conversation genuinely goes cold after the
+            # call ends.
+            if _phone_on_active_call(outbound_phone, twilio_number):
+                app.logger.info(
+                    "Cold follow-up: %s is on an active call — skipping this cycle",
+                    outbound_phone,
                 )
                 continue
 
@@ -6834,6 +6922,11 @@ def send_winback_followups() -> None:
             outbound = resolve_outbound_customer_phone(customer_phone, twilio_number)
             if not outbound or not outbound.startswith("+"):
                 mark_winback_sent(r["id"])
+                continue
+            # Same rule as cold follow-up: never text while they're on a live call.
+            # Skip WITHOUT marking so it can still fire after the call ends.
+            if _phone_on_active_call(outbound, twilio_number):
+                app.logger.info("Win-back: %s is on an active call — skipping this cycle", outbound)
                 continue
             dealer    = select_dealer_for_twilio_number(dealers, twilio_number) if dealers else {}
             dealer_nm = (get_row_field(dealer, DEALER_NAME_ALIASES) or "").strip() if dealer else ""
