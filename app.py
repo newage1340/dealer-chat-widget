@@ -13653,6 +13653,38 @@ def voice_webhook():
     return str(vr)
 
 
+def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, customer_profile):
+    """Fire a 'called, didn't book' lead to the dealer when a voice call ENDS
+    without an explicit handoff or booking. Without this, a caller who clearly
+    showed interest (asked about a car, price, history, took the CarFax) but just
+    said 'that's all, thanks' and hung up produced NO lead — the in-call handoff
+    only fires on [TAKE_MESSAGE]/booking or the turn limit, and the cold-sweep
+    backup gets deduped against any abandoned web session on the same number.
+
+    Deduped so it can NEVER double-send: skipped if a live handoff already
+    notified the team (dealer_leads flag, set by the [TAKE_MESSAGE] handoff) or
+    if they actually booked (the booking flow notifies staff separately). Keyed
+    on the caller's phone, so it's independent of web-session follow-up dedup."""
+    try:
+        if not dealer_row:
+            return
+        if has_dealer_lead_been_sent(from_number, to_number):
+            return  # a live handoff already notified the team on this call
+        if get_latest_appointment(from_number, to_number):
+            return  # they booked — the booking flow already alerts staff
+        history = get_call_messages(from_number, to_number, call_sid, limit=MAX_MESSAGES_PER_CHAT)
+        if len(history) < 4:
+            return  # too short to be a real lead (wrong number / instant hangup)
+        mark_dealer_lead_sent(from_number, to_number)  # mark FIRST so nothing double-fires
+        summary = _summarize_voice_call_for_dealer(dealer_row, history, customer_profile or {}, from_number)
+        _disp = get_row_field(dealer_row, DEALER_NAME_ALIASES) or "Dealership"
+        body = f"[{_disp} AI · Possible lead — called, didn't book]\n\n{summary}"
+        notify_all_staff(dealer_row, to_number, body)
+        app.logger.info("voice/handle: call-end lead sent for %s (call %s)", from_number, call_sid)
+    except Exception as e:
+        app.logger.warning("call-end lead failed for %s: %s", from_number, e)
+
+
 @app.route("/voice/handle", methods=["POST"])
 def voice_handle():
     call_sid    = (request.args.get("call_sid") or request.form.get("CallSid") or "").strip()
@@ -14578,6 +14610,7 @@ def voice_handle():
             vr = VoiceResponse()
             vr.say(_voice_say_text(goodbye), voice="Polly.Joanna-Neural")
             vr.hangup()
+            _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, customer_profile)
             return str(vr)
         closing = (say_text or "Cool, you're all set.").rstrip()
         # Don't tack on our "anything else?" if the LLM's reply already asks it —
@@ -14596,6 +14629,7 @@ def voice_handle():
         vr.say(_voice_say_text(say_text or "Alright, take it easy!"),
                voice="Polly.Joanna-Neural")
         vr.hangup()
+        _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, customer_profile)
         return str(vr)
 
     # The bot's reply is a closing goodbye with no open question — the call is
@@ -14607,6 +14641,7 @@ def voice_handle():
         vr = VoiceResponse()
         vr.say(_voice_say_text(say_text), voice="Polly.Joanna-Neural")
         vr.hangup()
+        _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, customer_profile)
         return str(vr)
 
     return str(_build_voice_gather(say_text, f"/voice/handle?call_sid={call_sid}"))
@@ -14968,8 +15003,10 @@ def _boot_warm_prompt_cache():
     latency warmup, no behavior change, runs off-thread. After this burst the
     steady-state keep_prompt_cache_warm job (every 4 min) takes over."""
     _model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
-    _rounds = 10   # ~5 minutes of post-deploy coverage (10 rounds x 30s)
-    _gap = 30      # seconds between re-warms
+    _rounds = 3    # a couple of gentle passes post-deploy; the every-4-min
+                   # keep_prompt_cache_warm job handles steady state. Kept light
+                   # so the warmer never competes hard with a live call.
+    _gap = 45      # seconds between re-warms
     time.sleep(5)  # small head start for the dealer-cache warmer
     for _round in range(_rounds):
         try:
