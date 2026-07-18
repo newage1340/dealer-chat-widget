@@ -11371,7 +11371,13 @@ _VOICE_RULES_APPEND = (
     "\n"
     "If you DO need their info: ONE FIELD PER TURN. Never bundle. Never justify with 'so we can...':\n"
     "  Turn A: 'Real quick, what's your name?' (just first name, then ask for last separately if you need it for the booking)\n"
-    "  Turn B: You ALREADY have their number from caller ID (see CALLER'S NUMBER block below) — do NOT ask for it. CONFIRM it: 'Got it, [name] — and I've got you at [read the caller-ID number digit-by-digit], that the best number for ya?' Only ask for a different number if they say that one's wrong.\n"
+    "  Turn B: You ALREADY have their number from caller ID (see CALLER'S NUMBER block below) — do NOT ask for it. CONFIRM it: 'Got it — and I've got you at [read the caller-ID number digit-by-digit], that the best number for ya?' Only ask for a different number if they say that one's wrong.\n"
+    "\n"
+    "=== NEVER SAY THE CALLER'S NAME OUT LOUD ===\n"
+    "Ask for their name and REMEMBER it (the system saves it for the team) — the call still needs a name. But do NOT speak their name back in ANY reply. Phone speech-to-text mis-hears names constantly, and calling someone by the WRONG name sounds worse than not using it at all.\n"
+    "  ❌ 'Nice to meet you, Evan!'   ❌ 'Got it, Sarah — and I've got you at...'   ❌ 'Thanks, Mike!'\n"
+    "  ✅ 'Nice to meet you!'         ✅ 'Got it — and I've got you at...'          ✅ 'Thanks so much!'\n"
+    "After they give their name, warmly acknowledge WITHOUT repeating it ('Great, nice to meet you!') and move on. Never put their first name into a spoken sentence.\n"
     "  Turn C: 'Cool, and the best email — or skip if you'd rather we just call?'\n"
     "Never use formal phrasings:\n"
     "  ❌ 'Could you please provide your full name and phone number?'\n"
@@ -11749,9 +11755,31 @@ def _build_focused_inventory_block(inventory_rows: List[Dict[str, Any]],
     Detects make+model mentions in the most recent caller message and the
     last few turns. Returns empty string if nothing matched (LLM falls back
     to the full inventory listing as before)."""
-    blob = _normalize_spoken_models(current_msg + " " + " ".join(
-        (m.get("content") or "") for m in (history or [])[-4:]
-    )).lower()
+    # BROWSE / FILTER queries must NOT trigger single-car focus. If the caller is
+    # shopping by PRICE ("between 15 and 20k", "under 10k", "cheapest"), by BODY
+    # STYLE / CATEGORY ("two-door", "sports car", "SUV", "truck", "coupe",
+    # "sedan"), or asking a general "what do you have / anything else" — they want
+    # a FILTERED LIST, not one pinned car. Firing focus here is exactly what made
+    # it lock onto a single (often out-of-range) car and ignore the request. Bail
+    # so the LLM lists from full inventory instead.
+    _cur = (current_msg or "").lower()
+    if re.search(
+        r"\b(under|over|below|above|less than|more than|between|around|about|up to|cheapest|"
+        r"budget|price range|two[\s-]?door|three[\s-]?door|four[\s-]?door|2[\s-]?door|4[\s-]?door|"
+        r"coupe|coop|sedan|suv|truck|van|convertible|hatchback|sport|"
+        r"what (?:cars|do you|kind|else|other)|anything (?:else|under|over|cheaper|around)|"
+        r"any (?:other|cheaper|two|four|more))\b", _cur):
+        return ""
+
+    # Detect the car ONLY from what the CALLER said (current message + their
+    # recent turns) — NOT from the bot's own replies. Including assistant turns
+    # meant that once Sarah SUGGESTED a car, its make/model got picked up and
+    # pinned the focus on the next turn, so the conversation got stuck on a car
+    # the caller never asked about (the "why does it keep talking about the wrong
+    # car?" bug).
+    _recent_user = [(m.get("content") or "") for m in (history or [])
+                    if isinstance(m, dict) and m.get("role") == "user"]
+    blob = _normalize_spoken_models(current_msg + " " + " ".join(_recent_user[-3:])).lower()
 
     # Extract make tokens from the conversation
     spotted_makes = [mk for mk in _DEALER_MAKES if re.search(rf"\b{re.escape(mk)}\b", blob)]
@@ -13616,10 +13644,10 @@ def voice_webhook():
     # early-hangup / didn't-schedule leads still reach the sales team WITH a name
     # instead of just a phone number.
     greeting_templates = [
-        f"{time_greet}, thanks for calling {dealer_name}! This is {agent_name}. Who do I have the pleasure of speaking with?",
-        f"Thanks for calling {dealer_name}, this is {agent_name}! Who am I chatting with today?",
-        f"{dealer_name}, this is {agent_name}! And who am I speaking with?",
-        f"Hey, thanks for calling {dealer_name}, {agent_name} here! What's your name?",
+        f"{time_greet}, thank you for calling {dealer_name}. This is {agent_name} — and who do I have the pleasure of speaking with?",
+        f"Thank you for calling {dealer_name}, this is {agent_name}. May I ask who I'm speaking with?",
+        f"{time_greet}, this is {agent_name} over at {dealer_name}. Who do I have the pleasure of speaking with today?",
+        f"Thank you for calling {dealer_name}, this is {agent_name}. And may I have your name to get started?",
     ]
     greeting = random.choice(greeting_templates)
 
