@@ -13719,6 +13719,32 @@ def voice_webhook():
     return str(vr)
 
 
+def _appointment_booked_on_this_call(customer_phone, twilio_number, call_sid) -> bool:
+    """True only if an appointment for this number was booked DURING this call
+    (created at/after the call's first turn). A prior call's appointment is older
+    than this call's greeting, so it won't count — that's what lets the call-end
+    lead still fire on later calls from a number that booked once before (exactly
+    the repeat-caller / repeated-testing case)."""
+    if not call_sid:
+        return False
+    conn = _db()
+    try:
+        row = conn.execute(
+            "SELECT MIN(created_at) FROM messages WHERE customer_phone=? AND twilio_number=? AND call_sid=?",
+            (customer_phone, twilio_number, call_sid)).fetchone()
+        call_start = row[0] if row else None
+        if not call_start:
+            return False
+        appt = conn.execute(
+            "SELECT 1 FROM appointments WHERE customer_phone=? AND twilio_number=? AND created_at >= ? LIMIT 1",
+            (customer_phone, twilio_number, call_start)).fetchone()
+        return appt is not None
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
 def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, customer_profile):
     """Fire a 'called, didn't book' lead to the dealer when a voice call ENDS
     without an explicit handoff or booking. Without this, a caller who clearly
@@ -13736,8 +13762,14 @@ def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, cust
             return
         if has_dealer_lead_been_sent(from_number, to_number):
             return  # a live handoff already notified the team on this call
-        if get_latest_appointment(from_number, to_number):
-            return  # they booked — the booking flow already alerts staff
+        if _phone_on_active_call(from_number, to_number, within_s=90):
+            return  # they're on a call RIGHT NOW (a newer call started) — don't
+                    # fire a previous call's lead mid-call; the sweep will pick it
+                    # up once the current call also goes idle.
+        if _appointment_booked_on_this_call(from_number, to_number, call_sid):
+            return  # they booked ON THIS call — the booking flow already alerts
+                    # staff. (A prior call's appointment must NOT suppress this
+                    # call's lead — that's the repeat-caller gap.)
         history = get_call_messages(from_number, to_number, call_sid, limit=MAX_MESSAGES_PER_CHAT)
         if len(history) < 4:
             return  # too short to be a real lead (wrong number / instant hangup)
