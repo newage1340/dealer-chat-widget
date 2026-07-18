@@ -6631,6 +6631,63 @@ def send_appointment_reminders() -> None:
             app.logger.warning("Reminder failed for appt #%d: %s", appointment_id, err)
 
 
+def get_recently_ended_calls(idle_seconds: int = 120, max_age_seconds: int = 3600):
+    """Voice calls whose LAST turn was between `idle_seconds` and
+    `max_age_seconds` ago — i.e. the call has ended (no new turn) but recently
+    enough to still notify staff. Grouped by call_sid. Powers the call-end lead
+    sweep, which fires a dealer lead for EVERY ended call regardless of how it
+    ended (bot wrap-up OR the caller just hanging up — the latter sends no final
+    turn, so it can't be caught inside the turn handler)."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    newest = (now - timedelta(seconds=idle_seconds)).isoformat(timespec="seconds")
+    oldest = (now - timedelta(seconds=max_age_seconds)).isoformat(timespec="seconds")
+    conn = _db()
+    try:
+        rows = conn.execute("""
+            SELECT customer_phone, twilio_number, call_sid,
+                   MAX(created_at) AS last_at, COUNT(*) AS msg_count
+            FROM messages
+            WHERE call_sid IS NOT NULL
+            GROUP BY call_sid
+            HAVING last_at <= ? AND last_at >= ?
+        """, (newest, oldest)).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def send_call_end_leads() -> None:
+    """Fire a 'called, didn't book' dealer lead for every voice call that just
+    ENDED without a booking or a live handoff — no matter HOW it ended (bot
+    wrap-up OR the caller simply hanging up). Runs on the 1-min scheduler. This
+    is the RELIABLE lead path: a caller-initiated hangup sends no final turn (so
+    nothing inside the turn handler can catch it), and the cold-followup backup
+    gets deduped against lingering web sessions. Deduped via the dealer_leads
+    flag (cleared at the start of each call), so at most one lead per call."""
+    try:
+        ended = get_recently_ended_calls()
+    except Exception as e:
+        app.logger.warning("call-end lead sweep: query failed: %s", e)
+        return
+    if not ended:
+        return
+    try:
+        dealers = read_dealers()
+    except Exception:
+        dealers = []
+    for call in ended:
+        try:
+            tn = call.get("twilio_number")
+            phone = call.get("customer_phone")
+            if not tn or not phone:
+                continue
+            dealer = select_dealer_for_twilio_number(dealers, tn) if dealers else {}
+            profile = get_customer_profile(phone, tn) or {}
+            _maybe_send_call_end_lead(call.get("call_sid"), phone, tn, dealer, profile)
+        except Exception as e:
+            app.logger.warning("call-end lead sweep: failed for %s: %s", call.get("call_sid"), e)
+
+
 def _phone_on_active_call(phone: str, twilio_number: str, within_s: int = 240) -> bool:
     """True if this number has a voice-call message (call_sid set) in the last
     `within_s` seconds — i.e. they're mid-call right now. Cold follow-up / win-back
@@ -7024,6 +7081,7 @@ def start_scheduler() -> None:
     scheduler.add_job(send_appointment_reminders, "interval", minutes=5,  id="reminders",         replace_existing=True)
     scheduler.add_job(send_cold_followups,         "interval", minutes=1,  id="cold_followups",    replace_existing=True)
     scheduler.add_job(send_winback_followups,      "interval", minutes=1,  id="winback",           replace_existing=True)
+    scheduler.add_job(send_call_end_leads,         "interval", minutes=1,  id="call_end_leads",    replace_existing=True)
     scheduler.add_job(keep_prompt_cache_warm,      "interval", minutes=4,  id="keep_warm",         replace_existing=True)
     # NOTE: inventory scraping is OFFLOADED to GitHub Actions (it scrapes on a
     # schedule and POSTs to /admin/inventory-upload). It no longer runs on this
@@ -14626,7 +14684,6 @@ def voice_handle():
             vr = VoiceResponse()
             vr.say(_voice_say_text(goodbye), voice="Polly.Joanna-Neural")
             vr.hangup()
-            _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, customer_profile)
             return str(vr)
         closing = (say_text or "Cool, you're all set.").rstrip()
         # Don't tack on our "anything else?" if the LLM's reply already asks it —
@@ -14645,7 +14702,6 @@ def voice_handle():
         vr.say(_voice_say_text(say_text or "Alright, take it easy!"),
                voice="Polly.Joanna-Neural")
         vr.hangup()
-        _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, customer_profile)
         return str(vr)
 
     # The bot's reply is a closing goodbye with no open question — the call is
@@ -14657,7 +14713,6 @@ def voice_handle():
         vr = VoiceResponse()
         vr.say(_voice_say_text(say_text), voice="Polly.Joanna-Neural")
         vr.hangup()
-        _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, customer_profile)
         return str(vr)
 
     return str(_build_voice_gather(say_text, f"/voice/handle?call_sid={call_sid}"))
