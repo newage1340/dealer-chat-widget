@@ -11755,6 +11755,13 @@ _VOICE_RULES_INTELLIGENCE = (
     "  WRAP (turn 7+): collect info if needed, summary readback, emit token.\n"
     "If you're past turn 7 and haven't closed for a visit OR a callback, gently move toward one.\n"
     "\n"
+    "\"JUST LOOKING\" — RESPECT IT: If the caller says they're 'just looking,' 'just browsing,' "
+    "'just taking a look,' 'just checking,' or 'just getting info,' do NOT push a visit and do NOT "
+    "ask 'when do you want to come in?' Answer their questions and be helpful. You may ONCE, softly, "
+    "note they're welcome to swing by anytime — then drop it and let them lead. Pushing a visit on "
+    "someone who just told you they're only looking is the exact pushy-salesman feel to avoid. Only "
+    "move toward booking if THEY signal buying/visiting intent.\n"
+    "\n"
     "HOT LEAD SIGNALS — recognize and elevate when caller shows these:\n"
     "  'I want to come in today' → urgent. Emit [TAKE_MESSAGE] with urgency flag.\n"
     "  'I'm a cash buyer' → high priority. Note in summary.\n"
@@ -14055,7 +14062,15 @@ def voice_handle():
     # left to do, so a decline genuinely means the call is over. The scheduling
     # guard is belt-and-suspenders. Confirmations ("yeah that's it") can't match
     # — the pattern requires a leading no/nope.
-    if (call_sid in _VOICE_HANDOFF_DONE) and _looks_like_caller_decline(speech) and not _has_scheduling_intent(speech):
+    # Post-handoff, a bare standalone "no" / "nope" / "I'm good" / "that's it"
+    # ALSO means "end the call" — there's nothing left to do. Anchored to the
+    # WHOLE utterance so "no, I have a question about financing" does NOT match
+    # (that has content after the "no" and must still be answered).
+    _post_handoff_end = bool(re.match(
+        r"\s*(no|nope|nah|no thanks|no thank you|nothing|nothing else|i'?m good|"
+        r"we'?re good|that'?s it|that'?s all|that'?ll be it|i'?m done|we'?re done|all good)"
+        r"[\s.,!]*$", speech or "", re.I))
+    if (call_sid in _VOICE_HANDOFF_DONE) and (_looks_like_caller_decline(speech) or _post_handoff_end) and not _has_scheduling_intent(speech):
         app.logger.info("voice/handle: post-handoff caller decline %r — ending call %s", speech, call_sid)
         bye = "Perfect — you're all set. Take it easy!"
         vr = VoiceResponse()
@@ -14697,7 +14712,8 @@ def voice_handle():
     # the LLM loves to recap it ALL over again on the confirm turn, which sounds
     # broken. Replace that with one clean line. Only when the booking is actually
     # committing (not when it's held for missing intake).
-    if voice_meta and voice_meta.get("confirmed") and not _booking_held:
+    _booking_just_committed = bool(voice_meta and voice_meta.get("confirmed") and not _booking_held)
+    if _booking_just_committed:
         _vt = (voice_meta.get("visit_time") or "").strip()
         say_text = ("Perfect — you're all set"
                     + (f" for {_vt}" if _vt else "") + "! We'll see you then. Take it easy!")
@@ -14879,11 +14895,17 @@ def voice_handle():
             re.search(r"anything else|pass along|anything i can (?:help|do)",
                       (m.get("content") or ""), re.I)
             for m in history if isinstance(m, dict) and m.get("role") == "assistant")
-        if handoff_was_done or caller_done or already_asked_else:
-            # Booking/handoff already confirmed earlier (or we already asked
-            # "anything else") — end on a short, clean goodbye instead of the
-            # LLM's (often rambly) reply, so it doesn't trail off or double-ask.
-            if handoff_was_done:
+        if _booking_just_committed or handoff_was_done or caller_done or already_asked_else:
+            # A booking that JUST committed ends the call right here — say the
+            # confirmation and hang up. Do NOT ask "anything else before you go?"
+            # on the commit turn: that reopened a call that was supposed to be
+            # over, and when the caller answered "no" the LLM rambled and even
+            # threatened to cancel the appointment. Booking done = call done.
+            # (Also end when a handoff already committed earlier, the caller
+            # signaled they're done, or we already asked "anything else.")
+            if _booking_just_committed:
+                goodbye = say_text  # already the clean "you're all set for {time}" line
+            elif handoff_was_done:
                 goodbye = "Perfect — you're all set. Take it easy!"
             else:
                 goodbye = say_text or "Alright, sounds good — take it easy!"
