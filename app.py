@@ -13797,6 +13797,13 @@ def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, cust
     try:
         if not dealer_row:
             return
+        if call_sid in _VOICE_HANDOFF_DONE:
+            return  # this call already committed a booking / handoff / cancellation
+                    # — staff were notified for real. A "didn't book" lead here is a
+                    # stray duplicate. This flag survives even if the appointment is
+                    # later CANCELED (which deletes the appt record), unlike the
+                    # appointment-existence check below — that canceled-after-booking
+                    # case is exactly what fired the stray lead.
         if has_dealer_lead_been_sent(from_number, to_number):
             return  # a live handoff already notified the team on this call
         if _phone_on_active_call(from_number, to_number, within_s=90):
@@ -13965,6 +13972,11 @@ def voice_handle():
                     visit_time=_vt, car_desc=_cd, action="cancelled")
             except Exception as _e:
                 app.logger.warning("voice cancel commit failed for %s: %s", from_number, _e)
+            # Mark this call as a REAL outcome so the call-end sweep won't fire a
+            # stray/duplicate "didn't book" lead for it. We deliberately do NOT
+            # suppress the cold follow-up here — the post-cancel "still interested?"
+            # text is wanted (it's a re-booking nudge).
+            _VOICE_HANDOFF_DONE.add(call_sid)
             app.logger.info("voice/handle: appointment CANCELED for %s (call %s)", from_number, call_sid)
             _say = (f"Okay, your appointment for {_vt} is all canceled. If you want to set "
                     "something up again down the road, just give us a call. Take care!")
