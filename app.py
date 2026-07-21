@@ -14247,6 +14247,17 @@ def voice_handle():
         if not _cc and _body_mentions_car(speech, inventory_rows):
             _ccm = find_inventory_matches(inventory_rows, speech, top_k=1, current_msg=speech)
             _cc = _ccm[0] if _ccm else None
+        # YEAR GUARD: if the caller named a year, the read-back car MUST be that
+        # year. The fuzzy find_inventory_matches fallback otherwise mismatched
+        # e.g. "2022 Ford F-150" -> a 2017 Ford Transit 250 and clobbered the
+        # LLM's correct reply with the wrong truck. When the year disagrees, bail
+        # and leave the LLM's answer alone.
+        if _cc:
+            _said_years = set(_VOICE_DISAMBIG_YEAR_RE.findall(_spoken_year_to_digits(speech or "")))
+            if _said_years and str(_cc.get("Year", "")).strip() not in _said_years:
+                app.logger.info("voice/handle: car-confirm year mismatch (said %s, matched %s) — skipping override",
+                                _said_years, _cc.get("Year", ""))
+                _cc = None
         if _cc:
             _cc_title = _vehicle_title(_cc)
             _cc_key = (call_sid, _cc_title)
