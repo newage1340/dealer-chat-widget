@@ -6798,6 +6798,15 @@ def send_cold_followups() -> None:
                 )
                 continue
 
+            # Already BOOKED under their real phone — don't nag a booked customer
+            # with a "still interested?" text. The appointment saves under the
+            # caller's phone, but this eligible session can be the leftover web
+            # +web… session, and get_latest_appointment(customer_phone) can't see
+            # a phone-booked appointment. Check the RESOLVED outbound phone too.
+            if get_latest_appointment(outbound_phone, twilio_number):
+                _safe_mark(customer_phone, twilio_number)
+                continue
+
             # Sibling-session dedupe: if another session sharing this real
             # phone already fired in the current cycle, just mark this one
             # as sent (so it stops being eligible) and move on. Prevents
@@ -13811,6 +13820,32 @@ def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, cust
         app.logger.warning("call-end lead failed for %s: %s", from_number, e)
 
 
+def _strip_spoken_name(text: str, first_name: str) -> str:
+    """Remove the caller's first name from a SPOKEN voice reply. We still collect
+    and store the name for the lead — we just never say it aloud, because phone
+    speech-to-text mis-hears names constantly and calling someone the WRONG name
+    is worse than using none. The prompt asks the model not to, but it slips, so
+    this is the deterministic backstop. Only strips the name in clear DIRECT-
+    ADDRESS positions (after a greeting/ack word, or set off by a comma at a
+    clause edge) so it can never chop an unrelated word out of mid-sentence."""
+    if not text or not first_name or len(first_name.strip()) < 2:
+        return text
+    n = re.escape(first_name.strip())
+    t = text
+    # greeting/ack word directly followed by the name: "Hey Evan" -> "Hey"
+    t = re.sub(rf"\b(hey|hi|hello|oh|yeah|yep|sure|okay|ok|awesome|great|perfect|alright|"
+               rf"thanks|thank you|no problem|got it|welcome|good morning|good afternoon|good evening)"
+               rf"\s+{n}\b", r"\1", t, flags=re.I)
+    # ", Evan" right at a clause edge: "Got it, Evan!" -> "Got it!"
+    t = re.sub(rf",\s*{n}\b(?=\s*(?:[!.?,—-]|and\b|$))", "", t, flags=re.I)
+    # "Evan," at the very start: "Evan, we've got..." -> "we've got..."
+    t = re.sub(rf"^\s*{n}\s*,\s*", "", t, flags=re.I)
+    # tidy up any doubled spaces / space-before-punctuation the removal left
+    t = re.sub(r"\s{2,}", " ", t)
+    t = re.sub(r"\s+([,!.?])", r"\1", t)
+    return t.strip() or text
+
+
 @app.route("/voice/handle", methods=["POST"])
 def voice_handle():
     call_sid    = (request.args.get("call_sid") or request.form.get("CallSid") or "").strip()
@@ -13903,6 +13938,59 @@ def voice_handle():
         vr.hangup()
         return str(vr)
 
+    # ── Voice appointment CANCELLATION (mirror the /sms cancel flow) ─────────
+    # Without this, a caller cancelling BY PHONE only got a conversational "okay,
+    # it's canceled" from the LLM — the appointment was NEVER removed from the DB,
+    # staff got a generic 'please follow up' lead instead of a cancellation notice,
+    # and the caller got no confirmation text. Do it deterministically, exactly
+    # like /sms: confirm → cancel_appointment + staff cancel notice + customer
+    # cancel text. Runs BEFORE the LLM so the model can't just narrate a cancel it
+    # didn't actually perform.
+    _pending_cancel = get_pending_cancellation(from_number, to_number)
+    if _pending_cancel:
+        _vt = _pending_cancel.get("visit_time", "")
+        _cd = _pending_cancel.get("car_desc", "")
+        if YES_RE.search(speech):
+            try:
+                cancel_appointment(from_number, to_number)
+                clear_pending_cancellation(from_number, to_number)
+                notify_all_staff(dealer_row, to_number, _dealer_cancellation_body(
+                    customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number,
+                    customer_name=customer_profile.get("name", ""),
+                    customer_last_name=customer_profile.get("last_name", ""),
+                    customer_email=customer_profile.get("email", ""),
+                    dealership_line=to_number, visit_time=_vt, car_desc=_cd))
+                notify_customer_appointment(dealer_row, customer_phone=from_number,
+                    twilio_number=to_number, customer_name=customer_profile.get("name", ""),
+                    visit_time=_vt, car_desc=_cd, action="cancelled")
+            except Exception as _e:
+                app.logger.warning("voice cancel commit failed for %s: %s", from_number, _e)
+            app.logger.info("voice/handle: appointment CANCELED for %s (call %s)", from_number, call_sid)
+            _say = (f"Okay, your appointment for {_vt} is all canceled. If you want to set "
+                    "something up again down the road, just give us a call. Take care!")
+            save_message(from_number, to_number, "assistant", _say, call_sid=call_sid)
+            vr = VoiceResponse()
+            vr.say(_voice_say_text(_say), voice="Polly.Joanna-Neural")
+            vr.hangup()
+            return str(vr)
+        if NO_RE.search(speech):
+            clear_pending_cancellation(from_number, to_number)
+            _say = f"No problem — your appointment for {_vt} is still on. We'll see you then!"
+            save_message(from_number, to_number, "assistant", _say, call_sid=call_sid)
+            return str(_build_voice_gather(_say, f"/voice/handle?call_sid={call_sid}"))
+        _say = f"Just to make sure — do you want me to cancel your appointment for {_vt}? You can say yes or no."
+        save_message(from_number, to_number, "assistant", _say, call_sid=call_sid)
+        return str(_build_voice_gather(_say, f"/voice/handle?call_sid={call_sid}"))
+
+    _existing_appt = get_latest_appointment(from_number, to_number)
+    if _existing_appt and CANCEL_APPT_RE.search(speech):
+        set_pending_cancellation(from_number, to_number, dealer_phone,
+                                 _existing_appt.get("visit_time", ""), _existing_appt.get("car_desc", ""))
+        _say = (f"Sure, I can help with that — just to confirm, you want to cancel your appointment "
+                f"for {_existing_appt.get('visit_time','')}? You can say yes or no.")
+        save_message(from_number, to_number, "assistant", _say, call_sid=call_sid)
+        return str(_build_voice_gather(_say, f"/voice/handle?call_sid={call_sid}"))
+
     # Negation-led decline ("no, that'll be it" and its speech-to-text garbles).
     # End the call HERE, before the LLM runs, so it can't respond by pushing yet
     # another visit ("when were you stopping by?") — the thing that made the bot
@@ -13919,9 +14007,7 @@ def voice_handle():
     # — the pattern requires a leading no/nope.
     if (call_sid in _VOICE_HANDOFF_DONE) and _looks_like_caller_decline(speech) and not _has_scheduling_intent(speech):
         app.logger.info("voice/handle: post-handoff caller decline %r — ending call %s", speech, call_sid)
-        cust_first = (customer_profile.get("name") or "").strip()
-        bye = (f"Perfect{', ' + cust_first if cust_first else ''} — you're all set. "
-               "Take it easy!")
+        bye = "Perfect — you're all set. Take it easy!"
         vr = VoiceResponse()
         vr.say(_voice_say_text(bye), voice="Polly.Joanna-Neural")
         vr.hangup()
@@ -14538,6 +14624,8 @@ def voice_handle():
     # [ ... ] segment — a voice reply never legitimately contains brackets — then
     # tidy the double spaces / stray punctuation the removal leaves behind.
     say_text = re.sub(r"\[[^\]]*\]", "", say_text)
+    # Never speak the caller's name (STT mis-hears it — wrong name is worse than none).
+    say_text = _strip_spoken_name(say_text, (customer_profile.get("name") or ""))
     say_text = re.sub(r"\s+([.,!?])", r"\1", say_text)   # no space before punctuation
     say_text = re.sub(r"([.!?])\s*\.", r"\1", say_text)  # collapse "! ." -> "!"
     say_text = re.sub(r"\s{2,}", " ", say_text).strip()
@@ -14550,9 +14638,7 @@ def voice_handle():
     # committing (not when it's held for missing intake).
     if voice_meta and voice_meta.get("confirmed") and not _booking_held:
         _vt = (voice_meta.get("visit_time") or "").strip()
-        _first = ((customer_profile or {}).get("name") or
-                  (voice_meta.get("customer_name") or "")).strip()
-        say_text = ("Perfect" + (f", {_first}" if _first else "") + " — you're all set"
+        say_text = ("Perfect — you're all set"
                     + (f" for {_vt}" if _vt else "") + "! We'll see you then. Take it easy!")
 
     save_message(from_number, to_number, "assistant", say_text, call_sid=call_sid)
@@ -14736,9 +14822,7 @@ def voice_handle():
             # "anything else") — end on a short, clean goodbye instead of the
             # LLM's (often rambly) reply, so it doesn't trail off or double-ask.
             if handoff_was_done:
-                cust_first = ((customer_profile or {}).get("name") or "").strip()
-                goodbye = (f"Perfect{', ' + cust_first if cust_first else ''} — you're all set. "
-                           "Take it easy!")
+                goodbye = "Perfect — you're all set. Take it easy!"
             else:
                 goodbye = say_text or "Alright, sounds good — take it easy!"
             vr = VoiceResponse()
