@@ -984,6 +984,14 @@ def init_db() -> None:
             conn.execute("ALTER TABLE voice_sessions ADD COLUMN silent_turns INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # column already exists
+        # Migration: durable "this call had a real outcome (booking / handoff /
+        # cancellation)" flag, so the call-end lead sweep never fires a stray
+        # "didn't book" duplicate for it — and, unlike the in-memory
+        # _VOICE_HANDOFF_DONE set, this SURVIVES a process restart / redeploy.
+        try:
+            conn.execute("ALTER TABLE voice_sessions ADD COLUMN lead_suppressed INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
         if DEV_CLEAR_DB:
             app.logger.warning("DEV_CLEAR_DB=1 - wiping appointments, pending, messages, cold_followups, customer_names, terms_acceptance_log")
@@ -10810,6 +10818,34 @@ def _voice_session_bump(call_sid: str) -> int:
     return row["turns"] if row else 0
 
 
+def mark_call_lead_suppressed(call_sid: str) -> None:
+    """Durably flag a call as having a real outcome (booking / handoff /
+    cancellation) so the call-end lead sweep never fires a stray 'didn't book'
+    duplicate for it — and it survives a redeploy, unlike the in-memory set."""
+    if not call_sid:
+        return
+    try:
+        conn = _db()
+        with conn:
+            conn.execute("UPDATE voice_sessions SET lead_suppressed=1 WHERE call_sid=?", (call_sid,))
+        conn.close()
+    except Exception as e:
+        app.logger.warning("mark_call_lead_suppressed failed for %s: %s", call_sid, e)
+
+
+def is_call_lead_suppressed(call_sid: str) -> bool:
+    if not call_sid:
+        return False
+    try:
+        conn = _db()
+        row = conn.execute("SELECT lead_suppressed FROM voice_sessions WHERE call_sid=?",
+                           (call_sid,)).fetchone()
+        conn.close()
+        return bool(row and row["lead_suppressed"])
+    except Exception:
+        return False
+
+
 def _voice_silence_bump(call_sid: str) -> int:
     """Increment and return the consecutive silent-turn counter for this call.
     Called when a /voice/handle turn arrives with no SpeechResult (dead air)."""
@@ -13797,13 +13833,14 @@ def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, cust
     try:
         if not dealer_row:
             return
-        if call_sid in _VOICE_HANDOFF_DONE:
+        if call_sid in _VOICE_HANDOFF_DONE or is_call_lead_suppressed(call_sid):
             return  # this call already committed a booking / handoff / cancellation
                     # — staff were notified for real. A "didn't book" lead here is a
-                    # stray duplicate. This flag survives even if the appointment is
-                    # later CANCELED (which deletes the appt record), unlike the
-                    # appointment-existence check below — that canceled-after-booking
-                    # case is exactly what fired the stray lead.
+                    # stray duplicate. The durable is_call_lead_suppressed() flag
+                    # survives a redeploy (the in-memory set does NOT — a restart
+                    # within the hour after a booking is what fired the stray lead),
+                    # AND it survives the appointment being CANCELED (which deletes
+                    # the appt record the check below would otherwise rely on).
         if has_dealer_lead_been_sent(from_number, to_number):
             return  # a live handoff already notified the team on this call
         if _phone_on_active_call(from_number, to_number, within_s=90):
@@ -13977,6 +14014,7 @@ def voice_handle():
             # suppress the cold follow-up here — the post-cancel "still interested?"
             # text is wanted (it's a re-booking nudge).
             _VOICE_HANDOFF_DONE.add(call_sid)
+            mark_call_lead_suppressed(call_sid)  # durable across a redeploy
             app.logger.info("voice/handle: appointment CANCELED for %s (call %s)", from_number, call_sid)
             _say = (f"Okay, your appointment for {_vt} is all canceled. If you want to set "
                     "something up again down the road, just give us a call. Take care!")
@@ -14660,6 +14698,7 @@ def voice_handle():
         if len(_VOICE_HANDOFF_DONE) > 2000:
             _VOICE_HANDOFF_DONE.clear()
         _VOICE_HANDOFF_DONE.add(call_sid)
+        mark_call_lead_suppressed(call_sid)  # durable: no stray call-end lead even across a redeploy
 
         # Run the handoff (call summary + staff alert + booking commit +
         # customer SMS) in a BACKGROUND THREAD. These are slow external calls
