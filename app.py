@@ -7001,6 +7001,15 @@ def send_cold_followups() -> None:
                 # way; only the redundant DEALER lead is suppressed here.
                 if dealer and has_dealer_lead_been_sent(customer_phone, twilio_number):
                     app.logger.info("Cold sweep: dealer already got a live lead for %s — skipping duplicate lead", customer_phone)
+                elif dealer and (get_latest_call_sid(outbound_phone, twilio_number)
+                                 or get_latest_call_sid(customer_phone, twilio_number)):
+                    # This is a CALL conversation. The call-end lead sweep OWNS
+                    # call leads and applies the junk/interest filter (so a
+                    # butt-dial with no real interest sends nothing). This
+                    # cold-sweep path has NO such filter — firing it for a call is
+                    # exactly how butt-dial calls were still leaking a dealer lead.
+                    # Leave call leads to the call-end sweep.
+                    app.logger.info("Cold sweep: %s is a call — dealer lead handled by the call-end sweep (filtered); skipping here", customer_phone)
                 elif dealer:
                     mark_dealer_lead_sent(customer_phone, twilio_number)
                     full_name = (customer_name + (" " + customer_last if customer_last else "")).strip() or "Unknown name"
