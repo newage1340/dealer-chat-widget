@@ -1318,24 +1318,51 @@ def clear_conversation():
     if not phone:
         return jsonify({"error": "missing phone (e.g. ?phone=+13175551234)"}), 400
 
-    # Best-effort wipe across every table keyed by customer_phone. Wrapped per
-    # table so a schema that lacks one of these won't fail the whole clear.
+    conn = _db()
+
+    # CRITICAL: also gather every WEB WIDGET session tied to this real phone. A
+    # web session is stored under its own id ('+websess…') with a profile whose
+    # real_phone POINTS AT this number — so wiping only `phone` left the web
+    # session alive, and it kept firing stale follow-ups (e.g. a Prius from an
+    # old web chat) to this number even after a "clear." Find them via
+    # customer_names.real_phone and wipe them too.
+    related = {phone}
+    try:
+        for row in conn.execute(
+                "SELECT customer_phone FROM customer_names WHERE real_phone=?",
+                (phone,)).fetchall():
+            cp = (row["customer_phone"] if not isinstance(row, tuple) else row[0])
+            if cp:
+                related.add(cp)
+    except Exception as e:
+        app.logger.warning("clear-conversation: web-session lookup failed: %s", e)
+
+    # Best-effort wipe across every table keyed by customer_phone, for the phone
+    # AND all its web sessions. Wrapped per table so a schema that lacks one of
+    # these won't fail the whole clear.
     tables = ["messages", "customer_names", "cold_followups", "dealer_leads",
               "pending_appointments", "pending_reconfirmations",
               "pending_cancellations", "appointments", "primer_sent",
               "voice_sessions"]
-    conn = _db()
     wiped = {}
     for t in tables:
-        try:
-            cur = conn.execute(f"DELETE FROM {t} WHERE customer_phone=?", (phone,))
-            wiped[t] = cur.rowcount
-        except Exception:
-            pass  # table doesn't exist / no such column — skip it
+        for cp in related:
+            try:
+                cur = conn.execute(f"DELETE FROM {t} WHERE customer_phone=?", (cp,))
+                wiped[t] = wiped.get(t, 0) + cur.rowcount
+            except Exception:
+                pass  # table doesn't exist / no such column — skip it
+    # Terms log is keyed by real_phone, not customer_phone — clear it separately.
+    try:
+        conn.execute("DELETE FROM terms_acceptance_log WHERE real_phone=?", (phone,))
+    except Exception:
+        pass
     conn.commit()
     conn.close()
-    app.logger.info("clear-conversation: fresh slate for %s — %s", phone, wiped)
-    return jsonify({"ok": True, "phone": phone, "cleared": wiped})
+    app.logger.info("clear-conversation: fresh slate for %s (sessions: %s) — %s",
+                    phone, sorted(related), wiped)
+    return jsonify({"ok": True, "phone": phone,
+                    "sessions_cleared": sorted(related), "cleared": wiped})
 
 
 @app.route("/admin/inventory-check", methods=["GET"])
