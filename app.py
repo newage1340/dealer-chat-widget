@@ -1381,6 +1381,65 @@ def inventory_check():
     })
 
 
+@app.route("/admin/winback-check", methods=["GET"])
+def winback_check():
+    """Read-only diagnostic for win-back: shows the parsed interval, the current
+    dealer-local time, each of this number's appointments (visit time, how long
+    since it, whether a win-back was already sent), and whether it's eligible to
+    fire RIGHT NOW — so we can see exactly why one did or didn't send.
+      /admin/winback-check?token=YOUR_TOKEN&phone=+13175551234&twilio=+18882810403
+    Reuses INVENTORY_UPLOAD_TOKEN. Touches nothing."""
+    expected = os.getenv("INVENTORY_UPLOAD_TOKEN", "").strip()
+    provided = (request.values.get("token", "")
+                or request.headers.get("X-Upload-Token", "")).strip()
+    if not expected or provided != expected:
+        return jsonify({"error": "unauthorized"}), 401
+    phone = normalize_phone(request.values.get("phone", "") or "")
+    twilio_number = normalize_phone(request.values.get("twilio", "") or "")
+    if not phone or not twilio_number:
+        return jsonify({"error": "need ?phone=+1... and ?twilio=+1..."}), 400
+
+    try:
+        dealers = read_dealers()
+    except Exception as e:
+        return jsonify({"error": f"dealer read failed: {e}"}), 500
+    interval = _winback_interval_for_twilio(dealers, twilio_number)
+    now = _now_local()
+
+    conn = _db()
+    try:
+        rows = conn.execute(
+            "SELECT id, visit_time, visit_time_iso, car_desc, winback_sent, created_at "
+            "FROM appointments WHERE customer_phone=? AND twilio_number=? "
+            "ORDER BY visit_time_iso DESC", (phone, twilio_number)).fetchall()
+    finally:
+        conn.close()
+
+    appts = []
+    for r in rows:
+        r = dict(r)
+        vdt = _parse_visit_time_iso_to_local_naive(str(r.get("visit_time_iso") or "").strip())
+        elapsed = (now - vdt).total_seconds() if vdt else None
+        eligible = bool(interval is not None and vdt
+                        and not r.get("winback_sent") and (now - vdt) >= interval)
+        r["_visit_parsed"] = str(vdt)
+        r["_seconds_since_visit"] = elapsed
+        r["_eligible_now"] = eligible
+        appts.append(r)
+
+    return jsonify({
+        "phone": phone,
+        "twilio_number": twilio_number,
+        "now_dealer_local": str(now),
+        "winback_interval": (str(interval) if interval is not None
+                             else "DISABLED — 'Win Back Number' is blank / 0 / not matched"),
+        "winback_sheet_note": "a bare number = DAYS; 'test' = 1 minute",
+        "on_active_call_now": _phone_on_active_call(phone, twilio_number),
+        "appointment_count": len(appts),
+        "appointments": appts,
+    })
+
+
 # =========================
 # SQLITE - CUSTOMER NAMES
 # =========================
