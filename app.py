@@ -1367,10 +1367,14 @@ def inventory_check():
         cf = str(r.get("CarfaxURL", "") or "").strip()
         if cf:
             with_cf += 1
+        _desc = str(r.get("Description", "") or "")
+        _tm = re.search(r"Transmission:\s*([^|]+?)(?:\s*\|\|\s*|\s*\|\s*|$)", _desc, re.I)
         cars.append({
             "car": f"{r.get('Year','')} {r.get('Make','')} {r.get('Model','')}".strip(),
             "has_carfax": bool(cf),
             "carfax": cf,
+            "transmission_extracted": (_tm.group(1).strip() if _tm else ""),
+            "description_snippet": _desc[:400],
         })
     return jsonify({
         "twilio_number": twilio_number,
