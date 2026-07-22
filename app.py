@@ -2359,7 +2359,16 @@ def format_inventory_rows(rows: List[Dict[str, Any]], limit: int = 200) -> str:
         if trim and trim.lower() not in car.lower():
             car += f" {trim}"
         price_part = f"${price}" if price else "Call for price"
-        extras = [x for x in [color, f"{mileage} mi" if mileage else "", price_part] if x]
+        # Surface TRANSMISSION so the bot can answer "is it a manual?" from real
+        # data instead of guessing 'automatic'. It's captured by the scraper into
+        # the Description spec block ("...| Transmission: X | ...") but was never
+        # shown to the model. Pull it out; omit cleanly when not captured.
+        _trans = ""
+        _tm = re.search(r"Transmission:\s*([^|]+?)(?:\s*\|\|\s*|\s*\|\s*|$)",
+                        str(r.get("Description", "") or ""), re.I)
+        if _tm:
+            _trans = _tm.group(1).strip()
+        extras = [x for x in [color, f"{mileage} mi" if mileage else "", price_part, _trans] if x]
         if extras:
             car += " (" + ", ".join(extras) + ")"
         # Include stock# so the LLM can match when callers ask about
@@ -11497,8 +11506,14 @@ _VOICE_RULES_APPEND = (
     "- 'How are the brakes / tires / engine condition?' — 'Good question — our service guys could walk you through that better than I can. Want me to have someone call you, or wanna come look at it?'\n"
     "- 'Do you finance bad credit / no credit?' — 'We work with a few different banks, so all kinds of situations come through here. Our finance guy can dig into specifics — want him to give you a call?'\n"
     "- 'Anything cheaper than [car]?' — 'What's your budget? Lemme see what we've got in that range.' Then list MAX 2 vehicles before pausing to check interest.\n"
+    "- BUDGET CEILING — COMMON SENSE: When a caller gives a price CEILING ('under 20k', 'up to 20 grand', 'less than 20,000', 'around 20k', 'in the 20s'), they want the BEST vehicle near the TOP of that budget — NOT the cheapest, oldest, or highest-mileage car on the lot. LEAD with vehicles in the UPPER part of their range (within a few thousand of their ceiling), best/newest first. Opening a budget shopper with the cheapest beater reads as clueless and pushes them away. ONLY start at the bottom if they explicitly say 'cheapest,' 'lowest price,' or 'as cheap as possible.' Otherwise: top of budget, working down. Still max 2 cars per turn.\n"
+    "- CATEGORY / TYPE BROWSING: When a caller shops by TYPE instead of a specific car — 'any luxury cars?', 'sports cars?', 'anything sporty/fast?', 'German cars?', 'trucks?', 'SUVs?', 'a family car', 'a work van' — recognize it and pull 1-2 MATCHING vehicles from the inventory using make/model knowledge:\n"
+    "    LUXURY = BMW, Mercedes-Benz, Audi, Cadillac, Lexus, Land Rover/Range Rover, Genesis, Acura, Infiniti.  GERMAN = BMW, Mercedes-Benz, Audi, Volkswagen, Porsche.  SPORTY/FAST = Corvette, Mustang, Camaro, Charger/Challenger, coupes & performance trims.  TRUCK = F-150/F-250, Silverado, Ram, Ranger.  SUV = Escape, Traverse, Pilot, X5/X7, Acadia, Santa Fe, Palisade, etc.  VAN/WORK = Transit, ProMaster, Express, Metris.\n"
+    "    Name 1-2 that actually fit (from what's ON the lot), then ask if they want to hear more. If nothing on the lot fits the category, say so honestly and offer the closest thing you DO have. Never invent a car that isn't in inventory.\n"
+    "- PERSONALITY + SMART SUGGESTIONS: You're a real, warm, upbeat salesperson — not a script. When a caller is browsing or unsure, don't just wait for them to name a car: pick up on what they drop (family, long commute, first car, towing, winters, tight budget, wants something fun) and proactively suggest 1-2 SPECIFIC cars from the lot WITH a quick reason it fits — give the WHY, not just the name. E.g. 'For hauling the kids around, the Palisade's a great shout — three rows, low miles, and loaded,' or 'If you want something fun, that Corvette'll put a smile on your face.' Use light, natural warmth ('oh you'll love this one,' 'honestly, solid pick,' 'she's a looker') — genuine, never stiff, never over-the-top or cheesy. Match the car to their LIFE, not just their exact words. That's what makes you feel like a sharp human who actually knows the lot.\n"
     "- 'What's your trade worth?' — 'Honest answer is we really need eyes on it to say — wanna swing by, or want me to have someone call you with what to expect?'\n"
     "- 'Tell me about [vehicle]' — quote from inventory: year, make, model, price, mileage, ONE notable feature. That's it. Don't dump every detail.\n"
+    "- TRANSMISSION / HARD SPECS — NEVER GUESS: Only state a car's transmission (manual vs automatic), drivetrain, engine, or similar hard spec if it is ACTUALLY in that vehicle's inventory data. NEVER assume 'automatic' just because most cars are — some on this lot are manual (e.g. certain Audi/BMW/sport trims). If the data says manual, it IS manual — say manual. If the spec isn't in the data or you're not certain, do NOT assert it and do NOT argue — say 'Good question — let me double-check that one for you and I'll confirm,' and offer a callback or to have someone verify. Being firmly WRONG about a spec destroys trust worse than saying you'll check.\n"
     "- LISTING INVENTORY: NEVER list more than 2 cars verbally per turn. After 2, ask 'either of those interest you, or want me to keep going?'\n"
     "- NEVER read VINs, stock numbers, full street addresses, or anything digit-heavy unless the caller asks. Real receptionists don't dictate strings.\n"
     "\n"
