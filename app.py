@@ -13964,8 +13964,24 @@ def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, cust
                     # staff. (A prior call's appointment must NOT suppress this
                     # call's lead — that's the repeat-caller gap.)
         history = get_call_messages(from_number, to_number, call_sid, limit=MAX_MESSAGES_PER_CHAT)
-        if len(history) < 4:
-            return  # too short to be a real lead (wrong number / instant hangup)
+        # Junk filter, but SMART: a long back-and-forth is always a lead; a SHORT
+        # call is still a lead if the caller actually expressed interest (named a
+        # car/make, said they're looking/financing, asked a price, etc.) — someone
+        # who says "I'm interested in the Camry" and hangs up IS a lead. Only a
+        # call with no meaningful caller speech (butt-dial / instant wrong number)
+        # is filtered.
+        _user_said = " ".join(str(m.get("content") or "") for m in history
+                              if m.get("role") == "user").strip()
+        if len(_user_said) < 4:
+            return  # no real caller speech at all — junk
+        _expressed_interest = bool(re.search(
+            r"\b(look(?:ing)?|interest|financ|price|pricing|how much|cost|available|in stock|"
+            r"test\s*drive|come\s*in|stop\s*by|cash|buy|buying|purchase|trade|payment|down|"
+            r"mileage|miles|carfax|do you have|you got|got any|thinking about|checking out|"
+            r"see the|about the|about a)\b", _user_said, re.I)) or \
+            any(mk in _user_said.lower() for mk in _DEALER_MAKES)
+        if len(history) < 4 and not _expressed_interest:
+            return  # short AND no clear interest signal — skip to avoid junk leads
         mark_dealer_lead_sent(from_number, to_number)  # mark FIRST so nothing double-fires
         summary = _summarize_voice_call_for_dealer(dealer_row, history, customer_profile or {}, from_number)
         _disp = get_row_field(dealer_row, DEALER_NAME_ALIASES) or "Dealership"
