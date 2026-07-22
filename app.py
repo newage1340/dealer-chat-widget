@@ -1920,7 +1920,22 @@ def get_pending_cancellation(customer_phone, twilio_number):
     row = conn.execute("SELECT * FROM pending_cancellations WHERE customer_phone=? AND twilio_number=?",
                        (customer_phone, twilio_number)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    if not row:
+        return None
+    # TTL: a pending cancellation is only a live "confirm yes/no" state for a
+    # short window. Without this, a stale row (SMS 'cancel' never answered, or a
+    # call dropped mid-confirm) would hijack an UNRELATED later call — the opener
+    # "yeah, I'm calling about the F-150" matches YES and would auto-cancel a real
+    # appointment. Expire anything older than 30 min so only a genuinely in-flight
+    # cancel is honored.
+    try:
+        _created = datetime.fromisoformat(str(dict(row).get("created_at") or "").replace("Z", ""))
+        if (datetime.now(timezone.utc).replace(tzinfo=None) - _created) > timedelta(minutes=30):
+            clear_pending_cancellation(customer_phone, twilio_number)
+            return None
+    except (ValueError, TypeError):
+        pass
+    return dict(row)
 
 
 def clear_pending_cancellation(customer_phone, twilio_number):
@@ -6938,29 +6953,30 @@ def send_cold_followups() -> None:
             customer_profile_local = get_customer_profile(customer_phone, twilio_number)
             customer_name = customer_profile_local.get("name", "")
             customer_last = customer_profile_local.get("last_name", "")
+            # Scope THIS iteration's history to the caller's LATEST CALL so it
+            # names the car they actually just called about — not a stale car from
+            # an earlier web chat or previous call. Computed ALWAYS (before the
+            # custom_msg branch) so the dealer-lead summary below can never reuse a
+            # STALE `history` from a PREVIOUS loop iteration — that leaked one
+            # customer's conversation (a different car) into another's lead, which
+            # is exactly the wrong-car ("Camry") lead bug. The voice call is saved
+            # under the caller's REAL phone, which for a lingering web session is
+            # the RESOLVED outbound number — NOT this session's +web… id — so check
+            # the outbound real phone for a recent call FIRST, then this session's
+            # call, then recent history.
+            _latest_sid = get_latest_call_sid(outbound_phone, twilio_number)
+            _hist_phone = outbound_phone
+            if not _latest_sid:
+                _latest_sid = get_latest_call_sid(customer_phone, twilio_number)
+                _hist_phone = customer_phone
+            if _latest_sid:
+                history = get_call_messages(_hist_phone, twilio_number, _latest_sid, limit=40)
+            else:
+                history = get_recent_messages(customer_phone, twilio_number, limit=40)
+
             if custom_msg:
                 followup_body = custom_msg
             else:
-                # Scope the follow-up to the caller's LATEST CALL so it names the
-                # car they actually just called about — not a stale car from an
-                # earlier web chat or previous call ("why does it keep mentioning
-                # the Mullen?" bug). The voice call is saved under the caller's
-                # REAL phone, which for a lingering web session is the RESOLVED
-                # outbound number — NOT this session's +web... id. So check the
-                # outbound real phone for a recent call FIRST; that's what stops a
-                # web session from following up about the wrong car. Fall back to
-                # this session's own call, then its recent history. Pull up to 40
-                # (the summarizer caps there anyway) so a long open/closed-hours
-                # tail can't push the car-of-interest out.
-                _latest_sid = get_latest_call_sid(outbound_phone, twilio_number)
-                _hist_phone = outbound_phone
-                if not _latest_sid:
-                    _latest_sid = get_latest_call_sid(customer_phone, twilio_number)
-                    _hist_phone = customer_phone
-                if _latest_sid:
-                    history = get_call_messages(_hist_phone, twilio_number, _latest_sid, limit=40)
-                else:
-                    history = get_recent_messages(customer_phone, twilio_number, limit=40)
                 try:
                     inventory_rows = get_inventory_for_twilio(twilio_number)
                 except Exception:
@@ -7001,15 +7017,17 @@ def send_cold_followups() -> None:
                 # way; only the redundant DEALER lead is suppressed here.
                 if dealer and has_dealer_lead_been_sent(customer_phone, twilio_number):
                     app.logger.info("Cold sweep: dealer already got a live lead for %s — skipping duplicate lead", customer_phone)
-                elif dealer and (get_latest_call_sid(outbound_phone, twilio_number)
-                                 or get_latest_call_sid(customer_phone, twilio_number)):
-                    # This is a CALL conversation. The call-end lead sweep OWNS
-                    # call leads and applies the junk/interest filter (so a
-                    # butt-dial with no real interest sends nothing). This
-                    # cold-sweep path has NO such filter — firing it for a call is
-                    # exactly how butt-dial calls were still leaking a dealer lead.
-                    # Leave call leads to the call-end sweep.
-                    app.logger.info("Cold sweep: %s is a call — dealer lead handled by the call-end sweep (filtered); skipping here", customer_phone)
+                elif dealer and (_phone_on_active_call(outbound_phone, twilio_number, within_s=3600)
+                                 or _phone_on_active_call(customer_phone, twilio_number, within_s=3600)):
+                    # A RECENT call (within the last hour — same window the
+                    # call-end sweep covers). The call-end lead sweep OWNS call
+                    # leads and applies the junk/interest filter (so a butt-dial
+                    # with no real interest sends nothing). Firing this unfiltered
+                    # cold-sweep lead for a recent call is how butt-dials leaked a
+                    # lead — leave it to the call-end sweep. Time-bounded so a
+                    # number that called weeks ago but now has a genuinely cold WEB
+                    # chat still gets its (web) lead here.
+                    app.logger.info("Cold sweep: %s had a recent call — dealer lead handled by the call-end sweep (filtered); skipping here", customer_phone)
                 elif dealer:
                     mark_dealer_lead_sent(customer_phone, twilio_number)
                     full_name = (customer_name + (" " + customer_last if customer_last else "")).strip() or "Unknown name"
@@ -7095,6 +7113,13 @@ def send_winback_followups() -> None:
         dealers = []
     now = _now_local()
     sent = 0
+    # Dedup win-backs by the real outbound phone so a customer with BOTH a stale
+    # +web-session appointment (old car) AND a real +1 appointment doesn't get two
+    # win-backs — one about the wrong/old car. Process REAL-phone (non +web…)
+    # appointments FIRST so the correct car wins the slot; a sibling +web row then
+    # gets marked sent and skipped instead of texting the wrong car.
+    seen_outbound: set = set()
+    rows = sorted(rows, key=lambda _r: str(_r["customer_phone"]).startswith("+web"))
     for r in rows:
         try:
             customer_phone = r["customer_phone"]
@@ -7111,6 +7136,13 @@ def send_winback_followups() -> None:
                 continue
             outbound = resolve_outbound_customer_phone(customer_phone, twilio_number)
             if not outbound or not outbound.startswith("+"):
+                mark_winback_sent(r["id"])
+                continue
+            # Sibling dedup: this real phone already got a win-back this cycle
+            # (from the real-phone appointment, processed first) — don't also text
+            # the stale +web session's wrong/old car. Mark sent so it stops being
+            # eligible.
+            if outbound in seen_outbound:
                 mark_winback_sent(r["id"])
                 continue
             # Same rule as cold follow-up: never text while they're on a live call.
@@ -7131,6 +7163,7 @@ def send_winback_followups() -> None:
             ok, err = send_sms_to_customer(customer_phone=outbound, from_number=twilio_number, body=body)
             if ok:
                 mark_winback_sent(r["id"])
+                seen_outbound.add(outbound)  # dedup: no second win-back to this phone this cycle
                 save_message(customer_phone, twilio_number, "assistant", body)
                 app.logger.info("Sent win-back to %s for appt #%d", outbound, r["id"])
                 sent += 1
