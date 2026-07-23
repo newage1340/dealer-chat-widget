@@ -14051,8 +14051,17 @@ def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, cust
                     # within the hour after a booking is what fired the stray lead),
                     # AND it survives the appointment being CANCELED (which deletes
                     # the appt record the check below would otherwise rely on).
-        if has_dealer_lead_been_sent(from_number, to_number):
-            return  # a live handoff already notified the team on this call
+        # DO NOT gate on the per-phone dealer_leads flag here. It is keyed
+        # (customer_phone, twilio_number) — NOT per call — so a lead already sent
+        # for an EARLIER call to this number would suppress THIS call's lead. That
+        # is exactly the "staff got a recap for the previous call, the current
+        # call dropped" bug: the older call becomes idle (≥120s) first, fires its
+        # lead, sets the per-phone flag, and the newer call is then skipped forever.
+        # Per-call dedup is already handled above by is_call_lead_suppressed(call_sid)
+        # and _VOICE_HANDOFF_DONE (both set — durably — by the live handoff/booking/
+        # cancel at commit time), and we mark THIS call suppressed after sending
+        # (below) so a later sweep cycle can't re-fire the SAME call's lead. Each
+        # distinct call now gets its own lead, which is the documented intent.
         if _phone_on_active_call(from_number, to_number, within_s=90):
             return  # they're on a call RIGHT NOW (a newer call started) — don't
                     # fire a previous call's lead mid-call; the sweep will pick it
@@ -14080,7 +14089,9 @@ def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, cust
             any(mk in _user_said.lower() for mk in _DEALER_MAKES)
         if len(history) < 4 and not _expressed_interest:
             return  # short AND no clear interest signal — skip to avoid junk leads
-        mark_dealer_lead_sent(from_number, to_number)  # mark FIRST so nothing double-fires
+        mark_dealer_lead_sent(from_number, to_number)  # per-phone: cold sweep skips its dup lead
+        mark_call_lead_suppressed(call_sid)  # per-call + durable across redeploy: THIS exact call
+        #   never re-fires on a later sweep, but sibling calls on the same number still get their own lead
         summary = _summarize_voice_call_for_dealer(dealer_row, history, customer_profile or {}, from_number)
         _disp = get_row_field(dealer_row, DEALER_NAME_ALIASES) or "Dealership"
         body = f"[{_disp} AI · Possible lead — called, didn't book]\n\n{summary}"
