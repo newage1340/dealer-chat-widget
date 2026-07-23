@@ -1426,14 +1426,24 @@ def winback_check():
     if not expected or provided != expected:
         return jsonify({"error": "unauthorized"}), 401
     phone = normalize_phone(request.values.get("phone", "") or "")
+    if not phone:
+        return jsonify({"error": "need ?phone=+1..."}), 400
     twilio_number = normalize_phone(request.values.get("twilio", "") or "")
-    if not phone or not twilio_number:
-        return jsonify({"error": "need ?phone=+1... and ?twilio=+1..."}), 400
 
     try:
         dealers = read_dealers()
     except Exception as e:
         return jsonify({"error": f"dealer read failed: {e}"}), 500
+    # twilio number is optional — default to the (single) dealer's number so you
+    # only need ?phone= in the URL.
+    if not twilio_number:
+        for _d in (dealers or []):
+            _tn = normalize_phone(get_row_field(_d, TWILIO_NUMBER_ALIASES))
+            if _tn:
+                twilio_number = _tn
+                break
+    if not twilio_number:
+        return jsonify({"error": "no twilio number found; pass ?twilio=+1..."}), 400
     interval = _winback_interval_for_twilio(dealers, twilio_number)
     now = _now_local()
 
@@ -1458,6 +1468,23 @@ def winback_check():
         r["_eligible_now"] = eligible
         appts.append(r)
 
+    # DEBUG: show exactly what the code reads for this dealer — so we can tell a
+    # sheet/row/header mismatch from a real blank. If the dealer's columns don't
+    # even contain a "Win Back Number", the code is reading a DIFFERENT sheet than
+    # the one being edited (the sheet ID below), or a different row.
+    _dbg = {}
+    try:
+        _d = select_dealer_for_twilio_number(dealers, twilio_number) if dealers else {}
+        _dbg = {
+            "dealer_sheet_id": DEALER_SHEET_ID,
+            "matched_dealer_columns": sorted(list(_d.keys())) if _d else [],
+            "winback_raw_value": get_row_field(_d, WINBACK_DAYS_ALIASES) if _d else "",
+            "dealer_name_read": get_row_field(_d, DEALER_NAME_ALIASES) if _d else "",
+            "dealer_count": len(dealers or []),
+        }
+    except Exception as _e:
+        _dbg = {"debug_error": str(_e)}
+
     return jsonify({
         "phone": phone,
         "twilio_number": twilio_number,
@@ -1468,6 +1495,7 @@ def winback_check():
         "on_active_call_now": _phone_on_active_call(phone, twilio_number),
         "appointment_count": len(appts),
         "appointments": appts,
+        "debug": _dbg,
     })
 
 
@@ -7105,7 +7133,20 @@ def _winback_interval_for_twilio(dealers: List[Dict[str, Any]], twilio_number: s
 def send_winback_followups() -> None:
     rows = get_appointments_for_winback()
     if not rows:
+        # Diagnostic: separate "no appointments" from "appointments exist but are
+        # all excluded" (win-back already sent, or SHADOWED by a later-dated appt
+        # on the same number, or blank visit_time_iso) — the win-back mystery.
+        try:
+            _c = _db()
+            _tot = _c.execute("SELECT COUNT(*) AS c FROM appointments WHERE winback_sent=0").fetchone()
+            _c.close()
+            if _tot and _tot["c"]:
+                app.logger.info("Win-back: 0 sendable, but %d unsent appointment(s) exist — "
+                                "excluded as shadowed-by-a-later-appt or blank visit_time_iso.", _tot["c"])
+        except Exception:
+            pass
         return
+    app.logger.info("Win-back sweep: %d appointment(s) to evaluate.", len(rows))
     try:
         dealers = read_dealers()
     except Exception as e:
@@ -7127,9 +7168,13 @@ def send_winback_followups() -> None:
             car_desc       = r["car_desc"]
             interval = _winback_interval_for_twilio(dealers, twilio_number)
             if interval is None:
+                app.logger.info("Win-back: appt #%d SKIP — interval DISABLED ('Win Back Number' "
+                                "column blank or not matched in the sheet).", r["id"])
                 continue  # dealer has win-back disabled
             visit_dt = _parse_visit_time_iso_to_local_naive(str(r["visit_time_iso"] or "").strip())
             if not visit_dt or (now - visit_dt) < interval:
+                app.logger.info("Win-back: appt #%d SKIP — not due yet (now=%s, visit=%s, interval=%s).",
+                                r["id"], now, visit_dt, interval)
                 continue
             if normalize_phone(customer_phone) == normalize_phone(twilio_number):
                 mark_winback_sent(r["id"])
@@ -14496,6 +14541,37 @@ def voice_handle():
             raw_reply = _alt_reply
             app.logger.info("voice/handle: deterministic similar-%s alternatives", _alt_cat)
 
+    # Transmission question — answer DETERMINISTICALLY from the car's data. The
+    # LLM defaults to guessing "automatic" (and ignores the don't-guess rule), so
+    # a caller looking at a manual gets told the wrong thing, firmly. Resolve the
+    # car in focus, read its REAL transmission from the scraped spec block, and
+    # either state it or — if it genuinely isn't in the data — say we'll confirm.
+    # Never guess.
+    if re.search(r"\b(manual|automatic|stick\s*shift|stick|transmission|gearbox)\b", speech, re.I):
+        _th = " ".join((m.get("content") or "") for m in history[-6:])
+        _tc = _find_exact_year_make_match(speech, inventory_rows)
+        if not _tc and _body_mentions_car(speech, inventory_rows):
+            _tcm = find_inventory_matches(inventory_rows, f"{_th} {speech}".strip(),
+                                          top_k=1, current_msg=speech)
+            _tc = _tcm[0] if _tcm else None
+        if not _tc:
+            _tc = (_extract_car_from_last_bot_message(history, inventory_rows)
+                   or _best_history_vehicle_match(inventory_rows, _th))
+        if _tc:
+            _tt = _vehicle_title(_tc)
+            _tm = re.search(r"Transmission:\s*([^|]+?)(?:\s*\|\|\s*|\s*\|\s*|$)",
+                            str(_tc.get("Description", "") or ""), re.I)
+            _tval = _tm.group(1).strip() if _tm else ""
+            if _tval:
+                _art = "an" if _tval[:1].lower() in "aeiou" else "a"
+                raw_reply = f"The {_tt} has {_art} {_tval}. Anything else you'd like to know about it?"
+                app.logger.info("voice/handle: deterministic transmission answer for %s: %s", _tt, _tval)
+            else:
+                raw_reply = (f"Good question — I want to make sure I give you the right answer, so let me "
+                             f"double-check the transmission on the {_tt} and I'll confirm for you. "
+                             "Anything else in the meantime?")
+                app.logger.info("voice/handle: transmission not in data for %s — deferring instead of guessing", _tt)
+
     # CarFax send: when the caller asks for the CarFax, OR says yes after we
     # offered it, resolve the vehicle in focus and TEXT them its CarFax URL,
     # then confirm out loud. On voice we already have their number (caller ID),
@@ -14868,6 +14944,20 @@ def voice_handle():
     say_text = re.sub(r"\s+([.,!?])", r"\1", say_text)   # no space before punctuation
     say_text = re.sub(r"([.!?])\s*\.", r"\1", say_text)  # collapse "! ." -> "!"
     say_text = re.sub(r"\s{2,}", " ", say_text).strip()
+    # Kill the redundant appointment recap the model sprinkles on intake turns
+    # ("...I've got you down for 9 AM to check out the Audi A3. <next question>").
+    # The appointment should be recapped ONCE, at the final readback. Keyed on
+    # "got you DOWN" specifically, so it can NEVER touch the number confirmation
+    # ("got you AT 3-1-7…") or the final all-in-one readback ("got you AS Evan…
+    # coming in at…"). Only applied when real content remains, so it can't blank
+    # a reply. (Verified against the actual over-recap transcript.)
+    _derecap = re.sub(
+        r"(?i)\b(?:so,?\s*)?(?:i['’]?ve\s+|i\s+have\s+)?got you down\b[^.?!]*[.?!]\s*",
+        "", say_text)
+    _derecap = re.sub(r"\s{2,}", " ", _derecap).strip()
+    if _derecap != say_text and len(_derecap) >= 12:
+        say_text = _derecap
+        app.logger.info("voice/handle: stripped redundant appointment recap")
 
     # BOOKING JUST COMMITTED → force a SHORT closing so the bot can't recap the
     # whole appointment a SECOND time. The full readback already happened on the
