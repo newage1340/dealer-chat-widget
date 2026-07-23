@@ -14560,14 +14560,25 @@ def voice_handle():
     # Never guess.
     if re.search(r"\b(manual|automatic|stick\s*shift|stick|transmission|gearbox)\b", speech, re.I):
         _th = " ".join((m.get("content") or "") for m in history[-6:])
-        _tc = _find_exact_year_make_match(speech, inventory_rows)
-        if not _tc and _body_mentions_car(speech, inventory_rows):
-            _tcm = find_inventory_matches(inventory_rows, f"{_th} {speech}".strip(),
-                                          top_k=1, current_msg=speech)
+        # CRITICAL: strip the transmission words OUT of the text used to identify
+        # WHICH car they're asking about. The caller's question ("is this
+        # AUTOMATIC or manual") contains "automatic", and there can be a car whose
+        # MODEL literally contains that word (e.g. the 1957 Ford Ranchero
+        # Automatic) — _body_mentions_car / find_inventory_matches would then lock
+        # onto that unrelated car instead of the one in focus. A transmission
+        # question is ALWAYS about the car already being discussed, so resolve
+        # that from the surrounding context with the transmission words removed.
+        _txn_re = re.compile(r"\b(manual|automatic|stick\s*shift|stick|transmission|gearbox)\b", re.I)
+        _clean_speech = _txn_re.sub(" ", speech)
+        _clean_th = _txn_re.sub(" ", _th)
+        _tc = _find_exact_year_make_match(_clean_speech, inventory_rows)
+        if not _tc and _body_mentions_car(_clean_speech, inventory_rows):
+            _tcm = find_inventory_matches(inventory_rows, f"{_clean_th} {_clean_speech}".strip(),
+                                          top_k=1, current_msg=_clean_speech)
             _tc = _tcm[0] if _tcm else None
         if not _tc:
             _tc = (_extract_car_from_last_bot_message(history, inventory_rows)
-                   or _best_history_vehicle_match(inventory_rows, _th))
+                   or _best_history_vehicle_match(inventory_rows, _clean_th))
         if _tc:
             _tt = _vehicle_title(_tc)
             _tm = re.search(r"Transmission:\s*([^|]+?)(?:\s*\|\|\s*|\s*\|\s*|$)",
