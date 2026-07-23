@@ -6320,6 +6320,17 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
     inv_text     = format_inventory_rows(inventory_rows)
     history_text = " ".join((m.get("content") or "") for m in history[-2:])
     appt_car     = confirmed_appt["car_desc"] if confirmed_appt else ""
+    # Is the confirmed appointment in the PAST? The bot has the time and the
+    # current time but never compares them, so it says "look forward to seeing
+    # you at 9 AM" for a slot that already passed. Flag it so the reply is aware.
+    _appt_is_past = False
+    if confirmed_appt and confirmed_appt.get("visit_time_iso"):
+        try:
+            _avt = _parse_visit_time_iso_to_local_naive(str(confirmed_appt["visit_time_iso"]).strip())
+            if _avt and _avt < _now_local():
+                _appt_is_past = True
+        except Exception:
+            pass
 
     # Strip the customer's trade-in vehicle from the matching search context so
     # it can't be picked as the "car of interest" for booking/inventory display.
@@ -6578,7 +6589,7 @@ Note: measurements in inches (e.g. 144\", 148\") refer to wheelbase. AWD/RWD/FWD
 {match_details}
 
 === CONFIRMED APPOINTMENT ===
-{f"This customer has a confirmed appointment at {confirmed_appt['visit_time']} to see the {confirmed_appt['car_desc']}. Do NOT push for a visit - they are booked. Answer their questions naturally." if confirmed_appt else "No appointment confirmed yet."}
+{(f"This customer had an appointment at {confirmed_appt['visit_time']} to see the {confirmed_appt['car_desc']}, but that time has ALREADY PASSED (right now it is {_now_local().strftime('%A %B %d at %I:%M %p')}). Do NOT say 'we look forward to seeing you' or talk about it like it's still coming up — that sounds broken. Acknowledge it already passed and, if it fits, gently offer to reschedule or ask if they still want to come in." if (confirmed_appt and _appt_is_past) else (f"This customer has a confirmed appointment at {confirmed_appt['visit_time']} to see the {confirmed_appt['car_desc']}. Do NOT push for a visit - they are booked. Answer their questions naturally." if confirmed_appt else "No appointment confirmed yet."))}
 
 === CONVERSATION SO FAR ===
 {convo_text}
