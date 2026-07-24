@@ -12813,14 +12813,27 @@ _INV_CATEGORY_WORDS = {
     "hybrid":      ["hybrid", "hybrids"],
     "electric":    ["electric", "ev", "evs"],
     "convertible": ["convertible", "convertibles", "cabriolet", "drop top", "droptop", "roadster"],
+    # Commercial / family van & box-truck terms MUST come before the generic
+    # "truck"/"van" entries: "box truck" contains "truck", "work van"/"cargo van"
+    # /"minivan" contain "van", and the loop breaks on the FIRST category matched.
+    "boxtruck":    ["box truck", "box trucks", "box van", "box vans", "cube van",
+                    "cube truck", "cube trucks", "straight truck", "straight trucks"],
+    "cargovan":    ["cargo van", "cargo vans", "cargovan", "work van", "work vans",
+                    "commercial van", "commercial vans", "panel van", "panel vans"],
+    "minivan":     ["minivan", "minivans", "mini van", "mini vans"],
     "truck":       ["truck", "trucks", "pickup", "pickups"],
-    "van":         ["van", "vans", "minivan", "minivans"],
+    "van":         ["van", "vans"],
     "suv":         ["suv", "suvs", "crossover", "crossovers"],
     "sedan":       ["sedan", "sedans"],
     "coupe":       ["coupe", "coupes"],
     "wagon":       ["wagon", "wagons"],
     "hatchback":   ["hatchback", "hatchbacks", "hatch"],
 }
+# Spoken labels for the categories whose plural/singular isn't just "<cat>s"/"<cat>".
+_CAT_LABEL = {"suv": "SUVs", "cargovan": "cargo vans", "minivan": "minivans",
+              "boxtruck": "box trucks"}
+_CAT_LABEL_SING = {"suv": "SUV", "cargovan": "cargo van", "minivan": "minivan",
+                   "boxtruck": "box truck"}
 _INV_SUP_HI = re.compile(r"\b(most expensive|priciest|highest[- ]?pric\w*|dearest|top of the line)\b", re.I)
 _INV_SUP_LO = re.compile(r"\b(cheapest|least expensive|lowest[- ]?pric\w*|most affordable|"
                          r"most inexpensive|best deal|lowest cost|most cheap)\b", re.I)
@@ -12858,6 +12871,27 @@ def _inv_category(r: Dict[str, Any]) -> str:
         if kw in body:
             return cat
     return "other"
+
+def _row_in_inv_cat(r: Dict[str, Any], cat: str) -> bool:
+    """Whether a row belongs to a requested inventory category. Most categories
+    defer to _inv_category, but the commercial/family buckets are matched by known
+    model nameplates because _inv_category folds them into 'van'/'truck'/'other':
+      - cargovan  -> Transit / ProMaster / Express / Savana / Sprinter / NV / Metris
+      - minivan   -> Odyssey / Pacifica / Sienna / Caravan / ... (or 'minivan' body)
+      - boxtruck  -> a Model/Trim that actually reads as a box/cube/cutaway truck
+    This is what lets 'work van' surface the Transit and keeps a minivan out of a
+    'cargo van' answer."""
+    ml = _inv_field(r, "Model").lower()
+    body = f"{ml} {_inv_field(r, 'Trim')}".lower()
+    if cat == "cargovan":
+        return any(m in ml for m in _CARGO_VAN_MODELS)
+    if cat == "minivan":
+        return (any(m in ml for m in _PASSENGER_MINIVAN_MODELS)
+                or "minivan" in body or "mini van" in body)
+    if cat == "boxtruck":
+        return any(k in body for k in ("box truck", "box van", "cube van",
+                                       "cube truck", "cutaway", "straight truck"))
+    return _inv_category(r) == cat
 
 def _inv_spoken(r: Dict[str, Any]) -> str:
     money = _inv_price(r)
@@ -12908,13 +12942,13 @@ def _voice_inventory_query(speech: str, rows: List[Dict[str, Any]],
                             cat = _c
                             break
                     break
-        pool = [r for r in rows if _inv_category(r) == cat] if cat else list(rows)
+        pool = [r for r in rows if _row_in_inv_cat(r, cat)] if cat else list(rows)
         priced = [r for r in pool if _inv_price(r) is not None]
         if not priced:
             return ""
         pick = max(priced, key=_inv_price) if hi else min(priced, key=_inv_price)
         adj = "most expensive" if hi else "cheapest"
-        noun = cat if cat else "car"
+        noun = _CAT_LABEL_SING.get(cat, cat) if cat else "car"
         return (f"The {adj} {noun} we've got right now is {_inv_spoken(pick)}. "
                 "Want to hear more about it or come take a look?")
 
@@ -12923,14 +12957,14 @@ def _voice_inventory_query(speech: str, rows: List[Dict[str, Any]],
     # refinement. The plain availability answer here ignores price entirely and
     # would quote the total category count + the cheapest cars, which is wrong.
     if cat and _INV_AVAIL.search(s) and not _has_price_constraint(s):
-        matches = [r for r in rows if _inv_category(r) == cat]
-        label = {"suv": "SUVs"}.get(cat, cat + "s")
+        matches = [r for r in rows if _row_in_inv_cat(r, cat)]
+        label = _CAT_LABEL.get(cat, cat + "s")
         if not matches:
             return f"Hmm, we don't have any {label} on the lot right now. Anything else I can help you find?"
         ex = sorted([r for r in matches if _inv_price(r)], key=_inv_price)[:2]
         ex_txt = " and ".join(_inv_spoken(r) for r in ex) if ex else ""
         n = len(matches)
-        head = f"Yeah, we've got {n} {label if n != 1 else cat}"
+        head = f"Yeah, we've got {n} {label if n != 1 else _CAT_LABEL_SING.get(cat, cat)}"
         return head + (f" — like {ex_txt}. Want me to run through more of them?" if ex_txt
                        else ". Want me to run through them?")
     return ""
@@ -12948,6 +12982,12 @@ _PRICE_RANGE_RE = re.compile(r"\bbetween\b", re.I)  # "between $X and $Y"
 _PRICE_MIN_RE = re.compile(
     r"\b(at\s*least|over|above|more\s+than|minimum(?:\s+of)?|"
     r"starting\s+at|north\s+of|no\s+less\s+than)\b", re.I)
+# "around $12k", "closer to twelve thousand", "somewhere near 20 grand" — a TARGET
+# price (no hard cap), so we answer with the cars closest to that number.
+_PRICE_NEAR_RE = re.compile(
+    r"\b(around|about|near(?:er)?|close\s+to|closer\s+to|closest\s+to|"
+    r"roughly|approximately|right\s+around|somewhere\s+around|in\s+the\s+ballpark\s+of)\b",
+    re.I)
 
 
 def _has_price_constraint(s: str) -> bool:
@@ -13039,14 +13079,60 @@ def _reply_is_pure_denial(text: str) -> bool:
 
 def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
                                  history: Optional[List[Dict[str, Any]]] = None) -> str:
-    """Deterministic answer for 'do you have anything under $X' style questions,
-    or '' when the turn isn't one (leave it to the LLM)."""
+    """Deterministic answer for a PRICE-CONSTRAINED inventory question:
+        'anything under $X', 'between $X and $Y', 'trucks over $20k',
+        'a truck around $12k', 'any Audi under $20k', 'Ford SUVs under 15k'.
+    Filters the real inventory by price AND (optional) make + category so the LLM
+    can't deny stock we have, quote a car outside the band, or miscategorize one.
+    Returns '' (defer to the LLM) when there's no price constraint OR when a
+    SPECIFIC model is named ('is the F-150 under 10k?' — that's about one car)."""
     if not speech or not rows:
         return ""
     s = speech.lower()
-    # Parse the price band. "between $X and $Y" sets both ends; otherwise a
-    # "under $X" cap with an optional "at least $Y" floor.
-    min_amount = 0
+
+    # --- category (body style / commercial bucket) ---
+    cat = None
+    for c, words in _INV_CATEGORY_WORDS.items():
+        if any(re.search(rf"\b{re.escape(w)}\b", s) for w in words):
+            cat = c
+            break
+
+    # --- make vs model ---
+    # A bare MAKE ("any Audi under 20k") is a browse we can answer by filtering.
+    # A specific MODEL ("is the F-150 under 10k?") is about one car — defer.
+    # Strip category words out first so "mini van" can't be read as the make Mini.
+    s_for_make = s
+    for _c, _ws in _INV_CATEGORY_WORDS.items():
+        for _w in _ws:
+            s_for_make = re.sub(rf"\b{re.escape(_w)}\b", " ", s_for_make)
+    inv_makes = {_inv_field(r, "Make").lower() for r in rows if _inv_field(r, "Make")}
+    make_filter = None
+    # NOTE the trailing "s?" — callers say the make in the PLURAL constantly
+    # ("any BMWs?", "got any Hondas?"), and a bare \bbmw\b never matches "bmws".
+    for alias, canon in _MAKE_ALIASES.items():
+        if canon in inv_makes and re.search(rf"\b{re.escape(alias)}s?\b", s_for_make):
+            make_filter = canon
+            break
+    if not make_filter:
+        for mk in sorted(inv_makes, key=len, reverse=True):  # longest (e.g. multi-word) first
+            if mk and re.search(rf"\b{re.escape(mk)}s?\b", s_for_make):
+                make_filter = mk
+                break
+    inv_models = set()
+    for r in rows:
+        parts = _inv_field(r, "Model").split()
+        if parts:
+            inv_models.add(parts[0].lower())
+    inv_models = {m for m in inv_models
+                  if len(m) >= 3 and m not in _NON_MODEL_WORDS and m not in inv_makes}
+    s_collapsed = re.sub(r"[^a-z0-9]", "", s)
+    if any(re.sub(r"[^a-z0-9]", "", m) in s_collapsed for m in inv_models):
+        return ""  # a specific model was named — let the focused-car path handle it
+
+    # --- parse the price band / target ---
+    # min_amount / max_amount define an inclusive band (max_amount 0 == no cap);
+    # target != 0 means "closest to $target" (no cap).
+    min_amount = max_amount = target = 0
     _range_m = re.search(r"\bbetween\b(.+?)\b(?:and|to|through|[-–])\b(.+)", s)
     if _range_m:
         _left, _right = _range_m.group(1), _range_m.group(2)
@@ -13062,64 +13148,104 @@ def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
             _hi *= _unit
         if not (_lo and _hi):
             return ""
-        min_amount, amount = min(_lo, _hi), max(_lo, _hi)
+        min_amount, max_amount = min(_lo, _hi), max(_lo, _hi)
     else:
-        m = _PRICE_MAX_RE.search(s)
-        if not m:
+        _mmax = _PRICE_MAX_RE.search(s)
+        _mmin = _PRICE_MIN_RE.search(s)
+        _mnear = _PRICE_NEAR_RE.search(s)
+        if _mmax:
+            max_amount = _parse_price_amount(s[_mmax.end():])
+            if not max_amount:
+                return ""
+            if _mmin:
+                min_amount = _parse_price_amount(s[_mmin.end():])
+                if min_amount >= max_amount:
+                    min_amount = 0
+        elif _mmin:
+            min_amount = _parse_price_amount(s[_mmin.end():])
+            if not min_amount:
+                return ""
+        elif _mnear:
+            # Only a TARGET if there's a real money signal after it — otherwise
+            # "around 3 o'clock" (a booking time) would parse as $3,000.
+            _tail = s[_mnear.end():]
+            if not re.search(r"\$|\bk\b|\bgrand\b|\bthousand\b|\bhundred\b|\d,\d{3}\b", _tail):
+                return ""
+            target = _parse_price_amount(_tail)
+            if not target:
+                return ""
+        else:
             return ""
-        amount = _parse_price_amount(s[m.end():])
-        if not amount:
-            return ""
-        _min_m = _PRICE_MIN_RE.search(s)
-        min_amount = _parse_price_amount(s[_min_m.end():]) if _min_m else 0
-        if min_amount >= amount:
-            min_amount = 0
-    cat = None
-    for c, words in _INV_CATEGORY_WORDS.items():
-        if any(re.search(rf"\b{re.escape(w)}\b", s) for w in words):
-            cat = c
-            break
-    # If they named a specific make/model (and no broad category), this is a
-    # question about THAT car ("is the F-150 under 10k?") — let the LLM handle
-    # it instead of reciting the whole under-$X list.
-    if not cat:
-        named = set()
-        for r in rows:
-            for f in ("Make", "Model"):
-                parts = str(r.get(f) or r.get(f.lower()) or "").split()
-                if parts:
-                    named.add(parts[0].lower())
-        named = {m for m in named if len(m) >= 3 and m not in _NON_MODEL_WORDS}
-        # Hyphen/space-insensitive: STT renders "F-150" as "f 150"/"f150", so
-        # collapse both sides to alphanumerics before matching. Over-deferring
-        # (falling back to the LLM) is the safe direction here.
-        s_collapsed = re.sub(r"[^a-z0-9]", "", s)
-        if any(re.sub(r"[^a-z0-9]", "", m) in s_collapsed for m in named):
-            return ""
-    pool = [r for r in rows if _inv_category(r) == cat] if cat else list(rows)
+
+    # --- build the filtered, priced pool ---
+    pool = list(rows)
+    if make_filter:
+        pool = [r for r in pool if _inv_field(r, "Make").lower() == make_filter]
+    if cat:
+        pool = [r for r in pool if _row_in_inv_cat(r, cat)]
     priced = [r for r in pool if _inv_price(r) is not None]
+
+    # --- spoken labels (make + category) ---
+    make_disp = ""
+    if make_filter:
+        make_disp = next((_inv_field(r, "Make") for r in rows
+                          if _inv_field(r, "Make").lower() == make_filter), make_filter.title())
+    if cat:
+        _cpl, _csg = _CAT_LABEL.get(cat, cat + "s"), _CAT_LABEL_SING.get(cat, cat)
+        label = f"{make_disp} {_cpl}".strip() if make_disp else _cpl
+        label_sing = f"{make_disp} {_csg}".strip() if make_disp else _csg
+    elif make_filter:
+        label, label_sing = f"{make_disp}s", make_disp
+    else:
+        label, label_sing = "cars", "car"
+
     if not priced:
+        # We know the make/category exists in inventory but nothing PRICED matches
+        # the filters (e.g. "Audi trucks", or a make with only call-for-price rows).
+        # Be honest instead of quoting the wrong car — or, with no filter at all,
+        # defer to the LLM.
+        if make_filter or cat:
+            return (f"We don't have any {label} right now. "
+                    "Want me to pull up something similar?")
         return ""
-    label = ({"suv": "SUVs"}.get(cat, cat + "s") if cat else "cars")
-    band = (f"between ${min_amount:,.0f} and ${amount:,.0f}" if min_amount
-            else f"under ${amount:,.0f}")
-    # Default lists the cheapest; "closer to $X" lists the priciest in the band.
+
+    # --- TARGET: the cars closest to $target ---
+    if target:
+        nearest = sorted(priced, key=lambda r: abs(_inv_price(r) - target))
+        if len(nearest) == 1:
+            return (f"The closest {label_sing} to ${target:,.0f} we've got is "
+                    f"{_inv_spoken(nearest[0])}. Want to hear more about it?")
+        ex_txt = " and ".join(_inv_spoken(r) for r in nearest[:2])
+        return (f"Closest to ${target:,.0f}, we've got {ex_txt}. "
+                "Want to hear more about either?")
+
+    # --- BAND: under / over / between ---
+    hi_cap = max_amount if max_amount else 10 ** 12
+    if min_amount and max_amount:
+        band = f"between ${min_amount:,.0f} and ${max_amount:,.0f}"
+    elif max_amount:
+        band = f"under ${max_amount:,.0f}"
+    else:
+        band = f"over ${min_amount:,.0f}"
+    # Default lists the cheapest; "closer to the top / higher end" lists priciest.
     refine_high = bool(_PRICE_REFINE_HIGH_RE.search(s))
-    in_band = sorted([r for r in priced if min_amount <= _inv_price(r) <= amount],
+    in_band = sorted([r for r in priced if min_amount <= _inv_price(r) <= hi_cap],
                      key=_inv_price, reverse=refine_high)
     if in_band:
-        ex = in_band[:2]
-        ex_txt = " and ".join(_inv_spoken(r) for r in ex)
+        ex_txt = " and ".join(_inv_spoken(r) for r in in_band[:2])
         n = len(in_band)
         if n == 1:
-            return f"Yeah — we've got one {label.rstrip('s')} {band}: {ex_txt}. Want to come take a look?"
+            return f"Yeah — we've got one {label_sing} {band}: {ex_txt}. Want to come take a look?"
         lead = (f"Sure — toward the top of that, " if (refine_high and not min_amount)
                 else f"Yeah, we've got {n} {label} {band} — like ")
         return f"{lead}{ex_txt}. Want me to run through more of them?"
-    # Nothing in the band — offer the nearest priced car under the cap.
-    under_cap = sorted([r for r in priced if _inv_price(r) <= amount], key=_inv_price)
-    _closest = (under_cap[-1] if (under_cap and min_amount) else
-                under_cap[0] if under_cap else min(priced, key=_inv_price))
+    # Nothing in the band — offer the nearest priced match instead of denying flat.
+    if max_amount:
+        under_cap = sorted([r for r in priced if _inv_price(r) <= max_amount], key=_inv_price)
+        _closest = (under_cap[-1] if (under_cap and min_amount) else
+                    under_cap[0] if under_cap else min(priced, key=_inv_price))
+    else:
+        _closest = max(priced, key=_inv_price)  # min-only band, nothing above the floor
     return (f"We don't have any {label} {band} right now — the closest is "
             f"{_inv_spoken(_closest)}. Want to hear about that one?")
 
@@ -14438,22 +14564,23 @@ def voice_handle():
     # car a hybrid.
     _inv_q = ""
     if not _disambig_q:
-        _inv_q = _voice_inventory_query(speech, inventory_rows, history)
-        if _inv_q:
-            raw_reply = _inv_q
-            app.logger.info("voice/handle: deterministic inventory-query answer")
+        # PRICE-CONSTRAINED queries first ("under/over/between/around $X", with or
+        # without a make/category — "any Audi under 20k", "trucks around 12k").
+        # The deterministic price/inventory math is AUTHORITATIVE and WINS over the
+        # LLM: the model misfilters constantly — denies stock we have, quotes cars
+        # outside the band, lists a Juke as a truck. This computes the answer from
+        # the real rows, so those failure modes can't happen.
+        _price_q = _voice_price_threshold_query(speech, inventory_rows, history)
+        if _price_q:
+            raw_reply = _inv_q = _price_q
+            app.logger.info("voice/handle: deterministic price-query answer")
         else:
-            # "anything under $X": SAFETY NET, not a bulldozer. Only override the
-            # LLM when it FALSELY denied stock we actually have (a pure "we don't
-            # have anything under $X"). Otherwise keep the LLM's answer — it
-            # handles nuance the rigid list can't ("at least $7k", "more
-            # options", specific bodies), and blanket-overriding made the bot
-            # parrot the same two cheap cars every turn.
-            _price_q = _voice_price_threshold_query(speech, inventory_rows, history)
-            if (_price_q and _price_q.lower().startswith(("yeah", "sure"))
-                    and _reply_is_pure_denial(raw_reply)):
-                raw_reply = _inv_q = _price_q
-                app.logger.info("voice/handle: corrected a false 'nothing under $X' denial")
+            # No price cap — superlatives ("cheapest truck") and plain
+            # availability ("do you have any trucks/work vans?").
+            _inv_q = _voice_inventory_query(speech, inventory_rows, history)
+            if _inv_q:
+                raw_reply = _inv_q
+                app.logger.info("voice/handle: deterministic inventory-query answer")
 
     # Intake ordering: keep the sequence trade-in -> financing -> confirm. The
     # LLM often asks the trade-in question, then jumps STRAIGHT to confirming /
