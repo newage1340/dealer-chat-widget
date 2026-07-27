@@ -631,6 +631,18 @@ DEALER_HOURS_ALIASES = {
     "dealer hours", "dealership hours", "hours", "business hours",
     "hours of operation",
 }
+# Front-door call routing (after-hours + daytime-overflow). RING_FIRST = the
+# dealer's own line we ring during business hours before rolling to the bot.
+# FRONTDOOR = the Twilio business number customers call (maps a call to a dealer).
+DEALER_RING_FIRST_ALIASES = {
+    "ring first number", "ring first", "live answer number", "live answer",
+    "dealer cell", "dealer phone", "salesperson cell", "staff number",
+    "answer number", "forward to cell", "ring number",
+}
+DEALER_FRONTDOOR_ALIASES = {
+    "business number", "front door number", "front door", "public number",
+    "router number", "twilio business number", "main line",
+}
 DEALER_FINANCING_ALIASES = {
     "do you offer financing?", "do you offer financing",
     "financing", "financing available",
@@ -10688,6 +10700,107 @@ def widget_clear_session():
 @app.route("/health")
 def health():
     return jsonify({"ok": True, "default_dealer": WIDGET_DEALER_NAME})
+
+
+# =========================
+# FRONT-DOOR CALL ROUTER (after-hours + daytime-overflow)
+# A call to the dealer's Twilio BUSINESS number lands on /incoming. During
+# business hours we ring the dealer's own line first (~20s, with a keypad screen
+# so their carrier VOICEMAIL can't grab the call), and only roll to the bot if
+# they don't pick up / decline. After hours we go straight to the bot. WE own the
+# ring→rollover timing, so it works on any carrier and keeps the dealer's cell
+# private. Bot handoff = <Dial> the dealer's existing Vapi number.
+# =========================
+def _select_router_dealer(dealers: List[Dict[str, Any]], front_door_number: str) -> Dict[str, Any]:
+    """Map the inbound front-door (business) number to a dealer row. Prefer an
+    explicit 'business number' field; otherwise fall back to the first dealer that
+    has a ring-first number configured (the common single-dealer early case)."""
+    if not dealers:
+        return {}
+    fd = normalize_phone(front_door_number)
+    if fd:
+        for d in dealers:
+            if normalize_phone(get_row_field(d, DEALER_FRONTDOOR_ALIASES)) == fd:
+                return d
+    for d in dealers:
+        if get_row_field(d, DEALER_RING_FIRST_ALIASES):
+            return d
+    return dealers[0]
+
+
+@app.route("/incoming", methods=["GET", "POST"])
+@app.route("/incoming/", methods=["GET", "POST"])
+def incoming_router():
+    to_number   = normalize_phone(request.values.get("To", ""))
+    from_number = normalize_phone(request.values.get("From", ""))
+    base = request.url_root.rstrip("/")
+    try:
+        dealers = read_dealers()
+    except Exception as e:
+        app.logger.warning("router: read_dealers failed: %s", e)
+        dealers = []
+    dealer = _select_router_dealer(dealers, to_number)
+    vr = VoiceResponse()
+    if not dealer:
+        vr.say("Sorry, this line isn't set up yet. Goodbye.", voice="Polly.Joanna-Neural")
+        vr.hangup()
+        return str(vr)
+
+    bot_number = normalize_phone(get_row_field(dealer, TWILIO_NUMBER_ALIASES))
+    ring_first = normalize_phone(get_row_field(dealer, DEALER_RING_FIRST_ALIASES))
+    is_open, _ = _dealer_is_open_now(dealer)
+    # Ring the human first ONLY when we're not definitively closed, there's a real
+    # number to ring, and it won't loop (can't ring the front door or the bot).
+    loops       = bool(ring_first) and ring_first in (to_number, bot_number)
+    should_ring = bool(ring_first) and not loops and (is_open is not False)
+    app.logger.info("router: to=%s from=%s dealer=%s open=%s ring_first=%s -> %s",
+                    to_number, from_number, get_row_field(dealer, DEALER_NAME_ALIASES),
+                    is_open, ring_first, "ring-then-bot" if should_ring else "straight-to-bot")
+
+    if should_ring:
+        # Screened dial: the dealer must press a key to take the call, so their
+        # carrier voicemail (which can't press a key) never intercepts it. If they
+        # don't answer / decline / voicemail picks up, this <Dial> ends and the
+        # call falls through to the bot <Dial> below.
+        d = vr.dial(timeout=20, caller_id=(from_number or None), answer_on_bridge=True)
+        d.number(ring_first, url=f"{base}/incoming/screen")
+
+    # Fall-through = after-hours (no ring), OR the dealer didn't take it.
+    if bot_number:
+        bd = vr.dial(caller_id=(from_number or None))
+        bd.number(bot_number)
+    else:
+        vr.say("Sorry, we can't take your call right now. Please try again later.",
+               voice="Polly.Joanna-Neural")
+        vr.hangup()
+    return str(vr)
+
+
+@app.route("/incoming/screen", methods=["GET", "POST"])
+def incoming_screen():
+    """Runs on the DEALER's leg when their phone (or voicemail) answers. Requires
+    a keypress to accept — voicemail can't press one, so it falls through to the
+    bot instead of trapping the caller in the dealer's voicemail."""
+    base = request.url_root.rstrip("/")
+    vr = VoiceResponse()
+    g = Gather(num_digits=1, timeout=10, action=f"{base}/incoming/screen-accept", method="POST")
+    g.say("You have a customer call from your A-I line. Press any key to take it.",
+          voice="Polly.Joanna-Neural")
+    vr.append(g)
+    vr.hangup()  # no key pressed (e.g. voicemail) -> drop this leg -> caller rolls to the bot
+    return str(vr)
+
+
+@app.route("/incoming/screen-accept", methods=["GET", "POST"])
+def incoming_screen_accept():
+    """Dealer pressed a key -> connect them to the caller (falling off the end
+    bridges the two legs). No key -> hang up so the caller rolls to the bot."""
+    vr = VoiceResponse()
+    if request.values.get("Digits"):
+        vr.say("Connecting you now.", voice="Polly.Joanna-Neural")
+    else:
+        vr.hangup()
+    return str(vr)
 
 
 # Embed bubble loader served at top-level path so dealers paste a clean URL.
