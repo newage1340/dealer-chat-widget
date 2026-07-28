@@ -6977,6 +6977,7 @@ def send_cold_followups() -> None:
             # +web… session, and get_latest_appointment(customer_phone) can't see
             # a phone-booked appointment. Check the RESOLVED outbound phone too.
             if get_latest_appointment(outbound_phone, twilio_number):
+                app.logger.info("Cold follow-up: %s SKIP — already has an appointment", outbound_phone)
                 _safe_mark(customer_phone, twilio_number)
                 continue
 
@@ -6986,6 +6987,7 @@ def send_cold_followups() -> None:
             # the burst of identical SMSes after a restart when a customer
             # has multiple abandoned sessions.
             if outbound_phone in seen_outbound:
+                app.logger.info("Cold follow-up: %s SKIP — a sibling session already fired this cycle", outbound_phone)
                 _safe_mark(customer_phone, twilio_number)
                 continue
 
@@ -6995,6 +6997,7 @@ def send_cold_followups() -> None:
             # customer to hit "Clear Chat", which wipes follow-up history
             # for their real phone.
             if has_followup_for_real_phone(outbound_phone, twilio_number):
+                app.logger.info("Cold follow-up: %s SKIP — already got a follow-up (needs a Clear to reset)", outbound_phone)
                 _safe_mark(customer_phone, twilio_number)
                 continue
 
