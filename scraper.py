@@ -1023,6 +1023,20 @@ def scrape_dealer_inventory(url: str, max_pages: int = 10, max_vehicles: int = 0
                 if not first_html:
                     return []
 
+                # Diagnostic: if we were handed a Cloudflare / bot-challenge page
+                # instead of the real inventory, say so plainly. Otherwise a blocked
+                # scrape just looks like "0 vehicles" and we chase the wrong thing.
+                _lo = first_html.lower()
+                if any(m in _lo for m in (
+                        "just a moment", "cf-browser-verification", "_cf_chl", "cf_chl_opt",
+                        "challenge-platform", "checking your browser", "attention required",
+                        "cf-chl", "turnstile", "enable javascript and cookies to continue")):
+                    _t = re.search(r"<title[^>]*>(.*?)</title>", first_html, re.I | re.S)
+                    logger.warning("BOT WALL: %s served a Cloudflare/bot-challenge page "
+                                   "(title=%r, %d bytes) — inventory NOT accessible from this "
+                                   "(datacenter) IP. Needs a feed or a non-datacenter IP.",
+                                   url, (_t.group(1).strip()[:80] if _t else ""), len(first_html))
+
                 platform = _detect_platform(first_html, url)
                 logger.info("Platform detected: %s", platform)
 

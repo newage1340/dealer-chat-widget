@@ -29,6 +29,9 @@ import app as A  # noqa: E402
 
 RENDER = os.environ.get("RENDER_APP_URL", "").rstrip("/")
 TOKEN = os.environ.get("INVENTORY_UPLOAD_TOKEN", "")
+# Optional: scrape ONLY this dealer's Twilio number (e.g. when onboarding a new
+# dealer — run it alone instead of waiting through everyone else). Blank = all.
+ONLY = A.normalize_phone(os.environ.get("ONLY_TWILIO", "").strip())
 
 
 def main() -> int:
@@ -47,6 +50,8 @@ def main() -> int:
         url = A.get_row_field(dealer, A.WEBSITE_URL_ALIASES)
         name = A.get_row_field(dealer, A.DEALER_NAME_ALIASES) or tn
         if not (tn and url):
+            continue
+        if ONLY and tn != ONLY:
             continue
         print(f"[{name}] scraping {url} ...", flush=True)
         try:

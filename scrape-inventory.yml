@@ -1,0 +1,44 @@
+name: Scrape Inventory
+
+# Runs the inventory scraper OFF the Render web service (Chromium lives here, not
+# in the web build) and POSTs results to /admin/inventory-upload. This is what
+# keeps the Render deploy fast (~2 min instead of ~25).
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 minutes
+  workflow_dispatch:          # lets you run it on-demand from the Actions tab
+    inputs:
+      only_twilio:
+        description: "Scrape ONLY this dealer's Twilio number (e.g. +12187520698). Leave blank to scrape all dealers."
+        required: false
+        default: ""
+
+concurrency:
+  group: scrape-inventory
+  cancel-in-progress: false   # let an in-flight scrape finish rather than kill it
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55   # 25 was cut off mid-scrape once a 2nd dealer was added
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scraper-requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Scrape and upload inventory
+        env:
+          RENDER_APP_URL: ${{ secrets.RENDER_APP_URL }}
+          INVENTORY_UPLOAD_TOKEN: ${{ secrets.INVENTORY_UPLOAD_TOKEN }}
+          SERVICE_ACCOUNT_JSON_CONTENT: ${{ secrets.SERVICE_ACCOUNT_JSON_CONTENT }}
+          ONLY_TWILIO: ${{ github.event.inputs.only_twilio }}
+        run: python scrape_and_upload.py
