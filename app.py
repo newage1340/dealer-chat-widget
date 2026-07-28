@@ -2718,7 +2718,7 @@ def _extract_price_range(body: str) -> tuple:
 
 def _row_price_int(r: Dict[str, Any]) -> int:
     """Extract a row's price as int, or 0 if missing/unparseable."""
-    raw = re.sub(r"[^\d]", "", str(r.get("Price", "")))
+    raw = re.sub(r"[^\d]", "", re.sub(r"\.\d{1,2}\b", "", str(r.get("Price", ""))))  # drop cents first
     try:
         return int(raw) if raw else 0
     except ValueError:
@@ -11857,7 +11857,7 @@ _VOICE_RULES_INTELLIGENCE = (
     "\n\n=== SALES INTELLIGENCE (use these to be genuinely useful, not just polite) ===\n"
     "\n"
     "INTRO & NAME (the very start of the call):\n"
-    "You opened by asking who you're speaking with. When the caller gives their name, warmly acknowledge it by first name ONCE ('Awesome, nice to meet you, John!' / 'Hey John, thanks for calling in!'), then move right into helping — ask what they're looking for, or answer whatever they asked. You already have their name: NEVER ask for it again later in the call. If the caller skips the name and jumps straight to a question, just help them — do NOT badger them for a name.\n"
+    "You opened by asking who you're speaking with. When the caller gives their name, warmly acknowledge it by first name ONCE ('Awesome, nice to meet you, John!' / 'Hey John, thanks for calling in!'), then move right into helping — ask what they're looking for, or answer whatever they asked. You already have their name: NEVER ask for it again later in the call. If the caller SKIPS the name and jumps straight to a question, ANSWER their question first (fully and naturally), then in the SAME reply warmly ask for their name again ('…and who do I have the pleasure of speaking with?'). Keep doing that each turn until you've actually got a name — but NEVER hold their question hostage or refuse to help over it. Once you have the name, stop asking.\n"
     "IF THE NAME CAME THROUGH UNCLEAR (garbled, half-heard, or you're not sure you got it right): do NOT flounder with a vague 'what's your name?' again, and do NOT silently move on nameless. VERIFY your best guess of what you heard — 'Sorry, want to make sure I got it right — is it [name you think you heard]?' If they confirm, use that name and move forward. If they correct it, use the correction. One quick verify, then proceed — don't loop on it.\n"
     "\n"
     "DISCOVERY (when the caller is vague — 'I'm looking for a car' / 'do you have anything good?'):\n"
@@ -12997,7 +12997,8 @@ _INV_AVAIL = re.compile(r"\b(any|do you (?:have|got|carry|sell)|have you got|got
 
 
 def _inv_price(r: Dict[str, Any]):
-    p = re.sub(r"[^0-9]", "", str(r.get("Price") or r.get("price") or ""))
+    _raw = re.sub(r"\.\d{1,2}\b", "", str(r.get("Price") or r.get("price") or ""))  # drop cents first
+    p = re.sub(r"[^0-9]", "", _raw)
     val = int(p) if p else None
     # A '0' (or junk sub-$100) in the price column means "no price listed / call
     # for price", NOT a real $0 car. Treat as unpriced so these are never
@@ -14093,7 +14094,19 @@ def _summarize_voice_call_for_dealer(dealer, history, customer_name, caller_phon
     except Exception as e:
         app.logger.warning("voice call summary failed: %s", e)
         out = ""
-    return out or "New call (see voice history)."
+    out = out or "New call (see voice history)."
+    # GUARANTEE the callback number (and name, if known) leads every lead. The LLM
+    # sometimes drops it from its CALLER line, and staff can't follow up without it,
+    # so stamp it deterministically at the top no matter what the summary says.
+    _nm = ""
+    if isinstance(customer_name, dict):
+        _nm = " ".join(str(customer_name.get(k) or "").strip()
+                       for k in ("name", "last_name") if customer_name.get(k)).strip()
+    elif customer_name:
+        _nm = str(customer_name).strip()
+    _who = (f"{_nm} — {caller_phone}" if (_nm and caller_phone)
+            else (_nm or caller_phone or "number not captured"))
+    return f"Call back: {_who}\n\n{out}"
 
 
 # Tracks call_sids whose staff handoff / booking commit already fired, so after a
@@ -14638,7 +14651,13 @@ def voice_handle():
         _name_asks = sum(1 for m in history if isinstance(m, dict)
                          and m.get("role") == "assistant"
                          and "your name" in (m.get("content") or "").lower())
-        if _name_asks < 2:
+        # Only STONEWALL (deterministic re-ask, no answer) for empty/garbled
+        # pre-name chatter — that's what spawns phantom bookings. If the caller
+        # actually asked something real, DON'T hold it hostage: fall through so the
+        # bot answers it, and the prompt rule makes that reply re-ask for the name.
+        _said_real = (len(re.sub(r"[^a-z0-9]", "", (speech or "").lower())) >= 4
+                      and not _looks_like_name_answer(speech))
+        if _name_asks < 2 and not _said_real:
             _gate = random.choice([
                 "Sorry, I didn't quite catch your name — what's your name?",
                 "No worries — real quick, what's your name?",

@@ -24,6 +24,10 @@ def _clean(v: Any) -> str:
 
 
 def _parse_price(raw: str) -> str:
+    # Drop cents FIRST ("10900.00" / "$10,900.00" / "10,900.99") — otherwise
+    # stripping every non-digit glues the decimals on and turns 10,900.00 into
+    # 1,090,000. Then strip remaining non-digits ($ , spaces).
+    raw = re.sub(r"\.\d{1,2}\b", "", str(raw or ""))
     return re.sub(r"[^\d]", "", raw) or ""
 
 
