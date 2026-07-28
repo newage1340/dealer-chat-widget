@@ -15305,6 +15305,30 @@ def voice_handle():
         say_text = ("Perfect — you're all set"
                     + (f" for {_vt}" if _vt else "") + "! We'll see you then. Take it easy!")
 
+    # DETERMINISTIC name re-ask — the model keeps skipping it when the caller dives
+    # into questions without giving a name (the prompt rule alone doesn't hold it).
+    # If we STILL have no name and this is a normal continuing turn (not a booking
+    # close, handoff, or goodbye), tack the ask onto the reply. Capped at 3 so we
+    # don't badger a caller who won't give one (the lead still carries their phone).
+    if (not _booking_just_committed and not take_message and not transfer
+            and not (customer_profile.get("name") or "").strip() and say_text.strip()):
+        _asks_name_already = bool(re.search(
+            r"\b(your name|who (?:am i|do i have)|speaking with|have your name|"
+            r"get your name|who'?s (?:this|calling))\b", say_text, re.I))
+        _is_goodbye = bool(re.search(
+            r"\b(take it easy|good ?bye|have a (?:great|good)|talk soon|see you|take care)\b",
+            say_text, re.I))
+        _prior_name_asks = sum(1 for m in history if isinstance(m, dict)
+                               and m.get("role") == "assistant"
+                               and re.search(r"your name|speaking with|who do i have|what'?s your name",
+                                             (m.get("content") or ""), re.I))
+        if not _asks_name_already and not _is_goodbye and _prior_name_asks < 3:
+            say_text = say_text.rstrip()
+            if say_text[-1:] not in ".?!":
+                say_text += "."
+            say_text += " And who do I have the pleasure of speaking with?"
+            app.logger.info("voice/handle: appended deterministic name re-ask (prior=%d)", _prior_name_asks)
+
     save_message(from_number, to_number, "assistant", say_text, call_sid=call_sid)
 
     handoff_was_done = call_sid in _VOICE_HANDOFF_DONE
@@ -15794,28 +15818,6 @@ def vapi_chat_completions():
         say_text = "Sorry, could you say that again?"
     # Spell out prices / big numbers so ElevenLabs says "$7,500" as
     # "seven thousand five hundred dollars" instead of "seven dollars and five".
-    # DETERMINISTIC name re-ask — the model keeps skipping it when the caller dives
-    # into questions without giving a name (prompt rule alone doesn't hold). If we
-    # STILL have no name, this is a normal continuing turn (not a hangup/transfer/
-    # booking close), and the reply doesn't already ask, tack the ask on. Capped at
-    # 3 prior asks so we don't badger a caller who won't give one (the lead still
-    # carries their phone).
-    if (action == "continue" and not _booking_just_committed
-            and not (customer_profile.get("name") or "").strip() and say_text.strip()):
-        _asks_name_already = bool(re.search(
-            r"\b(your name|who (?:am i|do i have)|speaking with|have your name|"
-            r"get your name|who'?s (?:this|calling))\b", say_text, re.I))
-        _prior_name_asks = sum(1 for m in history if isinstance(m, dict)
-                               and m.get("role") == "assistant"
-                               and re.search(r"your name|speaking with|who do i have|what'?s your name",
-                                             (m.get("content") or ""), re.I))
-        if not _asks_name_already and _prior_name_asks < 3:
-            say_text = say_text.rstrip()
-            if say_text[-1:] not in ".?!":
-                say_text += "."
-            say_text += " And who do I have the pleasure of speaking with?"
-            app.logger.info("voice/handle: appended deterministic name re-ask (prior=%d)", _prior_name_asks)
-
     say_text = _speak_big_numbers(say_text)
     # Log the FINAL spoken text (post-overrides) so the log matches the call —
     # the earlier 'voice/handle LLM raw' line is only the pre-override draft.
