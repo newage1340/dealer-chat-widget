@@ -10803,6 +10803,48 @@ def incoming_screen_accept():
     return str(vr)
 
 
+@app.route("/admin/router-check", methods=["GET"])
+def router_check():
+    """Read-only diagnostic: given a front-door (business) number, show which
+    dealer the call router maps it to and whether it matched exactly or FELL BACK.
+    Ends the 'is it cache or the sheet' guessing for multi-dealer routing.
+        /admin/router-check?token=YOUR_TOKEN&to=%2B17654107989
+    Reuses INVENTORY_UPLOAD_TOKEN. Touches nothing — pure read."""
+    expected = os.getenv("INVENTORY_UPLOAD_TOKEN", "").strip()
+    provided = (request.values.get("token", "")
+                or request.headers.get("X-Upload-Token", "")).strip()
+    if not expected or provided != expected:
+        return jsonify({"error": "unauthorized"}), 401
+    to_number = normalize_phone(request.values.get("to", ""))
+    try:
+        dealers = read_dealers()
+    except Exception as e:
+        return jsonify({"error": f"read_dealers failed: {e}"}), 500
+    matched = _select_router_dealer(dealers, to_number) if to_number else {}
+    is_open, hours_today = (_dealer_is_open_now(matched) if matched else (None, ""))
+    exact = any(to_number and normalize_phone(get_row_field(d, DEALER_FRONTDOOR_ALIASES)) == to_number
+                for d in dealers)
+    return jsonify({
+        "queried_to": to_number,
+        "matched_dealer": get_row_field(matched, DEALER_NAME_ALIASES) if matched else None,
+        "matched_via": "exact business-number match" if exact else "FALLBACK — no business number matched",
+        "matched_bot_number": normalize_phone(get_row_field(matched, TWILIO_NUMBER_ALIASES)) if matched else None,
+        "matched_ring_first": normalize_phone(get_row_field(matched, DEALER_RING_FIRST_ALIASES)) if matched else None,
+        "is_open": is_open,
+        "hours_today": hours_today,
+        "dealer_count": len(dealers),
+        "all_dealers_as_router_sees_them": [
+            {
+                "name": get_row_field(d, DEALER_NAME_ALIASES),
+                "business_number": normalize_phone(get_row_field(d, DEALER_FRONTDOOR_ALIASES)),
+                "ring_first": normalize_phone(get_row_field(d, DEALER_RING_FIRST_ALIASES)),
+                "bot_number": normalize_phone(get_row_field(d, TWILIO_NUMBER_ALIASES)),
+            }
+            for d in dealers
+        ],
+    })
+
+
 # Embed bubble loader served at top-level path so dealers paste a clean URL.
 # Re-exposes static/embed.js without the /static/ prefix.
 @app.route("/embed.js")
