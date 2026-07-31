@@ -9283,13 +9283,15 @@ def _process_message(from_number: str, to_number: str, body: str):
         save_message(from_number, to_number, "assistant", reply_text)
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
-    # Explicit pre-approval / credit-application LINK request. Checked BEFORE the
-    # general financing question because phrasings like "send the pre-approval
-    # link", "credit application", or "prequalify" don't trip _is_financing_question
-    # but should still ship the link. Only short-circuits when we actually have a
-    # link on file AND there's no booking time in the same message; otherwise it
-    # falls through to the normal financing / booking flow.
-    if (_is_financing_link_question(body)
+    # Pre-approval / credit-application LINK request. Checked BEFORE the general
+    # financing question because phrasings like "send the pre-approval link",
+    # "credit application", or "prequalify" don't trip _is_financing_question but
+    # should still ship the link. History-aware (same as the voice path) so a bare
+    # "yes"/"please" AFTER the bot offers the link — or "didn't get it" — also
+    # fires. Only short-circuits when we actually have a link on file AND there's
+    # no booking time in the same message; otherwise it falls through to the
+    # normal financing / booking flow.
+    if (_wants_financing_link_sent(body, get_recent_messages(from_number, to_number, limit=6))
             and not parse_visit_time_from_text(body)[0]):
         _pre_url = _preapproval_link(dealer_row)
         if _pre_url:
@@ -13514,6 +13516,40 @@ def _wants_carfax_sent(msg: str, history: List[Dict[str, Any]]) -> bool:
     return False
 
 
+# Same shape as the CARFAX affirm, plus resend phrasings ("didn't get it",
+# "send again") — after the bot offers/promises the financing link, a bare "yes"
+# or "I didn't get the text" must still trigger the send.
+_FINANCING_LINK_AFFIRM_RE = re.compile(
+    r"\b(yes|yeah|yep|yup|sure|ok|okay|please|go ahead|do it|send it|send that|"
+    r"send me|text it|text me|that works|sounds good|absolutely|definitely|i do|"
+    r"didn'?t (?:get|receive|come|see)|did not (?:get|receive)|not (?:there|come|through)|"
+    r"never (?:got|came|received)|again|re-?send|resend)\b", re.I)
+
+
+def _bot_offered_financing_link(history: List[Dict[str, Any]]) -> bool:
+    """True if the bot's most recent turn offered OR promised to send the
+    financing / credit-application / pre-approval link (so a bare 'yes' or a
+    'didn't get it' from the caller routes to the link-send)."""
+    for m in reversed(history or []):
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            c = (m.get("content") or "").lower()
+            has_topic = any(k in c for k in
+                            ("financ", "credit", "pre-approv", "preapprov",
+                             "pre approv", "prequalif"))
+            has_send = any(w in c for w in
+                           ("send", "text", "want", "like me", "shoot", "the link"))
+            return has_topic and has_send
+    return False
+
+
+def _wants_financing_link_sent(msg: str, history: List[Dict[str, Any]]) -> bool:
+    if _is_financing_link_question(msg or ""):
+        return True
+    if _bot_offered_financing_link(history) and _FINANCING_LINK_AFFIRM_RE.search(msg or ""):
+        return True
+    return False
+
+
 def _row_is_fuel_type_smart(r: Dict[str, Any], fuel_type: str) -> bool:
     """Fuel match that also recognizes known hybrid/EV models by name, not just
     the literal word in the description."""
@@ -15086,7 +15122,9 @@ def voice_handle():
     # pre-approval link (dedicated Pre-Approval Link column, else a URL embedded in
     # the financing policy) and confirm out loud. Checked BEFORE the vehicle-link
     # block so "send me the financing link" ships the credit app, not a car listing.
-    elif _is_financing_link_question(speech):
+    # Uses history so a bare "yes"/"please" after the bot OFFERS the link (the most
+    # common path — the LLM tends to ask "want me to send it?" first) still fires.
+    elif _wants_financing_link_sent(speech, history):
         _pre_url = _preapproval_link(dealer_row)
         if _pre_url:
             ok, _info = _send_sms(from_number, to_number,
