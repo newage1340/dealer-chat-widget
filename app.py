@@ -647,6 +647,17 @@ DEALER_FINANCING_ALIASES = {
     "do you offer financing?", "do you offer financing",
     "financing", "financing available",
 }
+# Dedicated pre-approval / credit-application URL column. Simpler than digging a
+# URL out of the financing policy prose. The bot texts this when a caller asks to
+# get pre-approved / for the financing link.
+DEALER_PREAPPROVAL_ALIASES = {
+    "pre-approval link", "preapproval link", "pre approval link",
+    "pre-approval", "preapproval", "pre approval",
+    "financing link", "finance link", "credit application link",
+    "credit application", "application link", "apply link",
+    "prequalify link", "prequalification link", "get pre-approved link",
+    "financing application link", "financing application", "financing url",
+}
 DEALER_TRADEINS_ALIASES = {
     "do you accept trade-ins? (feel free to be as detailed as you like)",
     "do you accept trade-ins? feel free to be as detailed as you like",
@@ -5099,6 +5110,35 @@ def _is_vehicle_photo_question(msg):
         (msg or "").lower(),
     ))
 
+_FINANCING_LINK_RE = re.compile(
+    r"\b(pre[-\s]?approv\w*|preapprov\w*|prequalif\w*|"
+    r"get (?:approved|financed|pre[-\s]?approved)|"
+    r"(?:financing|finance|credit)\s+(?:link|application|app|form|url)|"
+    r"(?:link|application|apply|form)\s+(?:for|to)\s+(?:financ|credit)|"
+    r"apply\s+(?:for\s+)?(?:financ\w*|credit)|"
+    r"(?:send|text|shoot|get)\s+(?:me\s+)?(?:the\s+|that\s+)?"
+    r"(?:financ\w*|credit|pre[-\s]?approval)\s*(?:link|application|app|form))\b",
+    re.I)
+
+
+def _is_financing_link_question(msg) -> bool:
+    """Caller wants the financing / pre-approval link or to apply for credit —
+    'send me the pre-approval link', 'can I get pre-approved', 'apply for
+    financing'. NOT a bare 'do you offer financing?' (the LLM answers that)."""
+    return bool(_FINANCING_LINK_RE.search(msg or ""))
+
+
+def _preapproval_link(dealer_row: Dict[str, Any]) -> str:
+    """The dealer's financing pre-approval URL. Prefers the dedicated Pre-Approval
+    Link column; falls back to a URL embedded in the financing policy text.
+    Returns '' if neither has one."""
+    for _al in (DEALER_PREAPPROVAL_ALIASES, DEALER_FINANCING_ALIASES):
+        _v = (get_row_field(dealer_row, _al) or "").strip()
+        _m = re.search(r"https?://\S+", _v)
+        if _m:
+            return _m.group(0).rstrip(".,)")
+    return ""
+
 def _is_carfax_question(msg):
     """Customer asking for a CarFax / vehicle history report OR any history-
     related question that a CarFax report would answer: accidents, prior
@@ -6927,6 +6967,8 @@ def send_cold_followups() -> None:
         try:
             interval = _cold_interval_for_twilio(dealers, twilio_number)
             if interval is None:
+                app.logger.info("Cold follow-up: %s SKIP — cold follow-up DISABLED for this dealer "
+                                "(no follow-up interval set in the sheet)", twilio_number)
                 continue  # dealer has cold follow-up disabled
             try:
                 last_at = datetime.fromisoformat(str(convo["created_at"]).replace("Z", ""))
@@ -8240,7 +8282,21 @@ _NAME_FILLER_WORDS = {
 
 
 def _looks_like_real_name(word: str) -> bool:
-    return bool(word) and word.lower() not in _NAME_FILLER_WORDS and is_valid_name(word)
+    # A real name has letters and NO digits — blocks a number ("100", "3") or STT
+    # junk from ever being saved as the caller's name (the "name showed as 100" bug).
+    return (bool(word) and word.lower() not in _NAME_FILLER_WORDS
+            and bool(re.search(r"[A-Za-z]", word)) and not re.search(r"\d", word)
+            and is_valid_name(word))
+
+
+def _display_name(name: str) -> str:
+    """A name safe to show in a lead / cancellation text. Blanks out garbage that
+    got mis-saved (a number like '100', a phone fragment), so a message never reads
+    'Call back: 100'. Returns '' when the stored name isn't a plausible name."""
+    n = (name or "").strip()
+    if not n or not re.search(r"[A-Za-z]", n) or re.search(r"\d", n):
+        return ""
+    return n
 
 
 _NAME_ASK_RE = re.compile(
@@ -9227,6 +9283,21 @@ def _process_message(from_number: str, to_number: str, body: str):
         save_message(from_number, to_number, "assistant", reply_text)
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
+    # Explicit pre-approval / credit-application LINK request. Checked BEFORE the
+    # general financing question because phrasings like "send the pre-approval
+    # link", "credit application", or "prequalify" don't trip _is_financing_question
+    # but should still ship the link. Only short-circuits when we actually have a
+    # link on file AND there's no booking time in the same message; otherwise it
+    # falls through to the normal financing / booking flow.
+    if (_is_financing_link_question(body)
+            and not parse_visit_time_from_text(body)[0]):
+        _pre_url = _preapproval_link(dealer_row)
+        if _pre_url:
+            reply_text = (f"Here's the link to get pre-approved for financing — only takes a couple "
+                          f"minutes: {_pre_url}\n\nWant me to set up a time for you to come in too?")
+            save_message(from_number, to_number, "assistant", reply_text)
+            return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
+
     if _is_financing_question(body):
         # If the customer's message ALSO contains a clear booking time (e.g.
         # "i can be there today at 5:30, financing with 600 credit score"),
@@ -9235,7 +9306,14 @@ def _process_message(from_number: str, to_number: str, body: str):
         # and ignore the appointment intent.
         _has_booking_time = bool(parse_visit_time_from_text(body)[0])
         if not _has_booking_time:
+            _pre_url = _preapproval_link(dealer_row)
             financing = get_row_field(dealer_row, DEALER_FINANCING_ALIASES)
+            # If the link lives in the dedicated column (not in the financing text),
+            # fold it into the policy text so ai_policy_reply can hand it out when
+            # the customer asks for it.
+            if _pre_url and _pre_url not in (financing or ""):
+                financing = ((financing or "").strip()
+                             + f"\nPre-approval / financing application link: {_pre_url}").strip()
             if financing:
                 history = get_recent_messages(from_number, to_number, limit=6)
                 reply_text = ai_policy_reply(body, "financing", financing, dealer_phone, history, customer_name=customer_name) or f"Regarding financing: {financing}."
@@ -14107,6 +14185,7 @@ def _summarize_voice_call_for_dealer(dealer, history, customer_name, caller_phon
                        for k in ("name", "last_name") if customer_name.get(k)).strip()
     elif customer_name:
         _nm = str(customer_name).strip()
+    _nm = _display_name(_nm)  # never print a garbage/numeric name like "100"
     _who = (f"{_nm} — {caller_phone}" if (_nm and caller_phone)
             else (_nm or caller_phone or "number not captured"))
     return f"Call back: {_who}\n\n{out}"
@@ -14214,6 +14293,13 @@ def voice_webhook():
         clear_cold_followup(from_number, to_number)
         clear_followup_history_for_real_phone(from_number, to_number)
         clear_dealer_lead(from_number, to_number)
+        # Scope any pending appointment cancellation to the call it started in. A
+        # cancel the caller began but never confirmed (call dropped mid-"yes/no")
+        # must NOT resurface on the NEXT call — otherwise a returning caller gets
+        # ambushed with "do you want to cancel your 3 PM?" before they've said a
+        # word ("How'd you know?"). The greeting runs before any turn, so this only
+        # wipes a PRIOR call's leftover, never an in-progress confirm.
+        clear_pending_cancellation(from_number, to_number)
     except Exception as _e:
         app.logger.warning("voice: cold-followup reset failed for %s: %s", from_number, _e)
 
@@ -14534,12 +14620,12 @@ def voice_handle():
                 clear_pending_cancellation(from_number, to_number)
                 notify_all_staff(dealer_row, to_number, _dealer_cancellation_body(
                     customer_phone=resolve_outbound_customer_phone(from_number, to_number) or from_number,
-                    customer_name=customer_profile.get("name", ""),
+                    customer_name=_display_name(customer_profile.get("name", "")),
                     customer_last_name=customer_profile.get("last_name", ""),
                     customer_email=customer_profile.get("email", ""),
                     dealership_line=to_number, visit_time=_vt, car_desc=_cd))
                 notify_customer_appointment(dealer_row, customer_phone=from_number,
-                    twilio_number=to_number, customer_name=customer_profile.get("name", ""),
+                    twilio_number=to_number, customer_name=_display_name(customer_profile.get("name", "")),
                     visit_time=_vt, car_desc=_cd, action="cancelled")
             except Exception as _e:
                 app.logger.warning("voice cancel commit failed for %s: %s", from_number, _e)
@@ -14994,6 +15080,29 @@ def voice_handle():
                 raw_reply = (f"Honestly, I don't have a CARFAX report on file for the {_ct} to text over — "
                              "but I can send you the full listing, or have someone on the team pull the "
                              "history and reach out. Want me to do either of those?")
+
+    # Financing / pre-approval link send: caller wants to apply for credit or get
+    # the pre-approval link. Voice can't read a URL aloud, so we text the dealer's
+    # pre-approval link (dedicated Pre-Approval Link column, else a URL embedded in
+    # the financing policy) and confirm out loud. Checked BEFORE the vehicle-link
+    # block so "send me the financing link" ships the credit app, not a car listing.
+    elif _is_financing_link_question(speech):
+        _pre_url = _preapproval_link(dealer_row)
+        if _pre_url:
+            ok, _info = _send_sms(from_number, to_number,
+                                  f"Here's the link to get pre-approved for financing: {_pre_url}")
+            app.logger.info("voice/handle: preapproval link SMS to=%s url=%s ok=%s (%s)",
+                            from_number, _pre_url, ok, _info)
+            _tail = random.choice(["Anything else?", "Need anything else while I've got ya?",
+                                   "That everything for ya?", "Anything else I can grab for ya?"])
+            raw_reply = (f"Just texted you the pre-approval link — only takes a couple minutes to fill out. {_tail}"
+                         if ok else
+                         f"I'll get that pre-approval link texted right over. {_tail}")
+        else:
+            # No link on file — don't promise a text we can't send. Offer the
+            # real fallback: have the team send the application / book a visit.
+            raw_reply = ("I can absolutely help you get pre-approved — I'll have someone from the team send over "
+                         "the financing application. Want me to set up a time for you to come in too?")
 
     # Vehicle-link send: voice has no other way to deliver a URL (Polly can't read
     # one aloud and the prompt forbids speaking URLs), so when the caller asks for
