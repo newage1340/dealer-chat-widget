@@ -13372,6 +13372,43 @@ def _reply_is_pure_denial(text: str) -> bool:
     return not re.search(r"\$\s?\d|\b(?:19|20)\d\d\b", t)
 
 
+_EXACT_PRICE_TELL_RE = re.compile(
+    r"\b(exact(?:ly)?|actual|real|specific|precise)\b[^?.!]{0,25}\b(price|cost|how much)\b|"
+    r"\b(price|cost|how much)\b[^?.!]{0,25}\b(exact(?:ly)?|actual|real|specific|precise)\b",
+    re.I)
+_FOCUSED_PRICE_RE = re.compile(
+    r"\b(exact(?:ly)?|actual|real|specific|precise)\b[^?.!]{0,25}\b(price|cost|how much)\b|"
+    r"\b(price|cost|how much)\b[^?.!]{0,25}\b(exact(?:ly)?|actual|real|specific|precise)\b|"
+    r"\bhow much (?:is|are|does|would|for) (?:it|that|this|they|the (?:car|one|vehicle))\b|"
+    r"\bwhat'?s? (?:the|its|it'?s) price\b",
+    re.I)
+
+
+def _voice_exact_price_for_focused_car(speech: str, rows: List[Dict[str, Any]],
+                                       history: Optional[List[Dict[str, Any]]] = None) -> str:
+    """Deterministic exact price for the car already in focus. Fires when the
+    caller asks for the price of 'it' — 'what's the exact price', 'how much is it',
+    'the actual price' — so the LLM can't round it ('about ten grand') and the
+    price-threshold search can't hijack it into a 'closest to $X' multi-car list.
+    Resolves a car NAMED this turn first, else the last single car the bot
+    discussed. Returns '' when it's not a price-of-it question, no single car is in
+    focus, or that car has no price on file (call-for-price — let the LLM handle).
+    NOTE: reads the Price field, which already includes any flat dealer fee baked
+    in at scrape time — so for fee dealers this states the after-fee price."""
+    if not speech or not rows:
+        return ""
+    if not _FOCUSED_PRICE_RE.search(speech):
+        return ""
+    car = (_find_exact_year_make_match(speech, rows)
+           or _extract_car_from_last_bot_message(history or [], rows))
+    if not car:
+        return ""
+    price = _row_price_int(car)
+    if price <= 0:
+        return ""
+    return f"The {_vehicle_title(car)} is {_fmt_money(price)}."
+
+
 def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
                                  history: Optional[List[Dict[str, Any]]] = None) -> str:
     """Deterministic answer for a PRICE-CONSTRAINED inventory question:
@@ -13384,6 +13421,12 @@ def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
     if not speech or not rows:
         return ""
     s = speech.lower()
+
+    # An "exact/actual price" ask is about ONE car's precise number — never a
+    # "closest to $X" multi-car search. Defer so the focused-car / LLM path answers
+    # it. Stops "About ten grand? what's the exact price?" from listing random cars.
+    if _EXACT_PRICE_TELL_RE.search(s):
+        return ""
 
     # --- category (body style / commercial bucket) ---
     cat = None
@@ -14919,23 +14962,33 @@ def voice_handle():
     # car a hybrid.
     _inv_q = ""
     if not _disambig_q:
-        # PRICE-CONSTRAINED queries first ("under/over/between/around $X", with or
-        # without a make/category — "any Audi under 20k", "trucks around 12k").
-        # The deterministic price/inventory math is AUTHORITATIVE and WINS over the
-        # LLM: the model misfilters constantly — denies stock we have, quotes cars
-        # outside the band, lists a Juke as a truck. This computes the answer from
-        # the real rows, so those failure modes can't happen.
-        _price_q = _voice_price_threshold_query(speech, inventory_rows, history)
-        if _price_q:
-            raw_reply = _inv_q = _price_q
-            app.logger.info("voice/handle: deterministic price-query answer")
+        # EXACT price of the car in focus wins first: "what's the exact price / how
+        # much is it" about the car already being discussed must state THAT car's
+        # real number — not trigger a "closest to $X" search (which hijacked
+        # "About ten grand? what's the exact price?" into a random 2-car list) and
+        # not let the LLM round it ("about ten grand").
+        _exact_q = _voice_exact_price_for_focused_car(speech, inventory_rows, history)
+        if _exact_q:
+            raw_reply = _inv_q = _exact_q
+            app.logger.info("voice/handle: deterministic exact-price answer (focused car)")
         else:
-            # No price cap — superlatives ("cheapest truck") and plain
-            # availability ("do you have any trucks/work vans?").
-            _inv_q = _voice_inventory_query(speech, inventory_rows, history)
-            if _inv_q:
-                raw_reply = _inv_q
-                app.logger.info("voice/handle: deterministic inventory-query answer")
+            # PRICE-CONSTRAINED queries next ("under/over/between/around $X", with or
+            # without a make/category — "any Audi under 20k", "trucks around 12k").
+            # The deterministic price/inventory math is AUTHORITATIVE and WINS over the
+            # LLM: the model misfilters constantly — denies stock we have, quotes cars
+            # outside the band, lists a Juke as a truck. This computes the answer from
+            # the real rows, so those failure modes can't happen.
+            _price_q = _voice_price_threshold_query(speech, inventory_rows, history)
+            if _price_q:
+                raw_reply = _inv_q = _price_q
+                app.logger.info("voice/handle: deterministic price-query answer")
+            else:
+                # No price cap — superlatives ("cheapest truck") and plain
+                # availability ("do you have any trucks/work vans?").
+                _inv_q = _voice_inventory_query(speech, inventory_rows, history)
+                if _inv_q:
+                    raw_reply = _inv_q
+                    app.logger.info("voice/handle: deterministic inventory-query answer")
 
     # Intake ordering: keep the sequence trade-in -> financing -> confirm. The
     # LLM often asks the trade-in question, then jumps STRAIGHT to confirming /
