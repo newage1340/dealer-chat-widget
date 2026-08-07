@@ -12,6 +12,7 @@ Required env (set as GitHub Actions repo secrets):
   SERVICE_ACCOUNT_JSON_CONTENT  raw Google service-account JSON (to read dealers)
 """
 import os
+import re
 import sys
 
 # Import app.py for its dealer-reading + scraper wiring, but keep it inert:
@@ -64,6 +65,20 @@ def main() -> int:
             # skip so we don't even try to wipe a live dealer's inventory.
             print(f"[{name}] 0 vehicles scraped — skipping upload", flush=True)
             continue
+        # Flat dealer fee: some dealers (e.g. 465 Auto) DISPLAY base + a lot-wide
+        # fee but store only the base price in their page data. If the sheet has a
+        # 'Dealer Fee' set for this dealer, bake it into each priced vehicle so the
+        # bot quotes the after-fee price the dealer actually advertises. Cars with
+        # no price ("call for price") are left untouched.
+        _fee = A._flat_dealer_fee(dealer)
+        if _fee > 0:
+            _bumped = 0
+            for _v in vehicles:
+                _p = re.sub(r"[^\d]", "", str(_v.get("Price", "") or ""))
+                if _p and int(_p) > 0:
+                    _v["Price"] = str(int(_p) + _fee)
+                    _bumped += 1
+            print(f"[{name}] applied ${_fee} flat dealer fee to {_bumped} priced vehicle(s)", flush=True)
         doc_fee = next((v.get("DocFee", "") for v in vehicles if v.get("DocFee")), "")
         tt_fee = next((v.get("TitleTagFee", "") for v in vehicles if v.get("TitleTagFee")), "")
         payload = {

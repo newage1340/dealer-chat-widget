@@ -658,6 +658,34 @@ DEALER_PREAPPROVAL_ALIASES = {
     "prequalify link", "prequalification link", "get pre-approved link",
     "financing application link", "financing application", "financing url",
 }
+DEALER_PAYMENT_ALIASES = {
+    "payment link", "make a payment link", "make a payment", "pay online link",
+    "payment url", "pay link", "payment page", "make payment link",
+    "online payment link", "payment portal",
+}
+DEALER_FEE_ALIASES = {
+    "dealer fee", "dealer fee (flat)", "flat dealer fee", "flat fee",
+    "dealership fee", "dealer fees",
+}
+
+
+def _flat_dealer_fee(dealer_row: Dict[str, Any]) -> int:
+    """Flat, lot-wide dealer fee (whole dollars) from the sheet's 'Dealer Fee'
+    column. Added to each scraped vehicle's price at upload time so the bot quotes
+    the after-fee price the dealer actually advertises — some DealerCenter dealers
+    (e.g. 465 Auto) store a base price in their page data but DISPLAY base + a flat
+    fee. Returns 0 if the column is unset/blank/invalid (so other dealers are
+    unaffected)."""
+    raw = (get_row_field(dealer_row, DEALER_FEE_ALIASES) or "").strip()
+    m = re.search(r"\d[\d,]*", raw)
+    if not m:
+        return 0
+    try:
+        return int(m.group(0).replace(",", ""))
+    except ValueError:
+        return 0
+
+
 DEALER_TRADEINS_ALIASES = {
     "do you accept trade-ins? (feel free to be as detailed as you like)",
     "do you accept trade-ins? feel free to be as detailed as you like",
@@ -5138,6 +5166,34 @@ def _preapproval_link(dealer_row: Dict[str, Any]) -> str:
         if _m:
             return _m.group(0).rstrip(".,)")
     return ""
+
+
+_PAYMENT_LINK_RE = re.compile(
+    r"\b(make (?:a|my|the|another) (?:car |monthly )?payment|"
+    r"payment (?:link|page|portal|url|info|details)|"
+    r"pay (?:my|the|off) (?:car |monthly )?(?:payment|bill|note|loan|balance)|"
+    r"pay(?:ing)? online|online payment|"
+    r"where (?:can|could|do|would|should) i (?:go(?:ing)?(?: to)? )?(?:make a payment|pay)|"
+    r"how (?:can|could|do|would|should) i (?:make a payment|pay(?: my (?:bill|payment|note))?)|"
+    r"send (?:me )?(?:the )?payment (?:link|page|info|details))\b",
+    re.I)
+
+
+def _is_payment_link_question(msg) -> bool:
+    """Caller wants to make a loan/account payment or get the payment link —
+    'make a payment', 'send me the payment link', 'where do I pay'. Deliberately
+    does NOT match 'down payment' or a bare 'monthly payment' (those are
+    financing questions the LLM answers, not a bill-pay link)."""
+    return bool(_PAYMENT_LINK_RE.search(msg or ""))
+
+
+def _payment_link(dealer_row: Dict[str, Any]) -> str:
+    """The dealer's make-a-payment URL from the Payment Link column. Returns ''
+    if none is configured."""
+    _v = (get_row_field(dealer_row, DEALER_PAYMENT_ALIASES) or "").strip()
+    _m = re.search(r"https?://\S+", _v)
+    return _m.group(0).rstrip(".,)") if _m else ""
+
 
 def _is_carfax_question(msg):
     """Customer asking for a CarFax / vehicle history report OR any history-
@@ -15142,6 +15198,28 @@ def voice_handle():
             raw_reply = ("I can absolutely help you get pre-approved — I'll have someone from the team send over "
                          "the financing application. Want me to set up a time for you to come in too?")
 
+    # Payment-link send: caller wants to make a loan/account payment ("make a
+    # payment", "send me the payment link", "where do I pay"). Checked BEFORE the
+    # vehicle-link block on purpose — the bare word "link" in "payment link" trips
+    # _is_vehicle_link_question and would text a random car (the Honda-Civic bug).
+    # Texts the dealer's Payment Link column URL; if none is set, hands off
+    # honestly instead of sending a vehicle.
+    elif _is_payment_link_question(speech):
+        _pay_url = _payment_link(dealer_row)
+        if _pay_url:
+            ok, _info = _send_sms(from_number, to_number,
+                                  f"Here's the link to make a payment: {_pay_url}")
+            app.logger.info("voice/handle: payment link SMS to=%s url=%s ok=%s (%s)",
+                            from_number, _pay_url, ok, _info)
+            _tail = random.choice(["Anything else?", "Need anything else while I've got ya?",
+                                   "That everything for ya?", "Anything else I can grab for ya?"])
+            raw_reply = (f"Just texted you the payment link. {_tail}"
+                         if ok else
+                         f"I'll get that payment link texted right over. {_tail}")
+        else:
+            raw_reply = ("I can't pull up a payment link on my end, but I'll have someone from the team "
+                         "get you the payment details. Anything else I can help with?")
+
     # Vehicle-link send: voice has no other way to deliver a URL (Polly can't read
     # one aloud and the prompt forbids speaking URLs), so when the caller asks for
     # the link/listing/photos we resolve the vehicle the same way the chat path
@@ -15935,6 +16013,20 @@ def _vapi_tool_calls_for(action, dial_number, tool_names=None):
     return None
 
 
+def _dealer_says_465(twilio_number: str) -> bool:
+    """True if the dealer on this Twilio line is 465 Auto Sales. Used only to fix
+    the spoken '465' (ElevenLabs reads a bare '465' as 'four hundred sixty-five';
+    this dealer wants 'four sixty-five'). Scoped to this dealer so no other
+    dealer's numbers are touched."""
+    try:
+        row = select_dealer_for_twilio_number(read_dealers(), twilio_number)
+    except Exception:
+        return False
+    name = (get_row_field(row, DEALER_NAME_ALIASES) or "").lower()
+    slug = (get_row_field(row, SLUG_ALIASES) or "").lower()
+    return "465" in name or "465" in slug
+
+
 @app.route("/vapi", methods=["POST"])
 @app.route("/vapi/chat/completions", methods=["POST"])
 def vapi_chat_completions():
@@ -15969,6 +16061,13 @@ def vapi_chat_completions():
     # Spell out prices / big numbers so ElevenLabs says "$7,500" as
     # "seven thousand five hundred dollars" instead of "seven dollars and five".
     say_text = _speak_big_numbers(say_text)
+    # 465 Auto Sales pronunciation: ElevenLabs reads a bare "465" as "four hundred
+    # sixty-five." This dealer wants "four sixty-five." Scoped to 465 only.
+    try:
+        if "465" in say_text and _dealer_says_465(to_number):
+            say_text = re.sub(r"\b465\b", "four sixty-five", say_text)
+    except Exception:
+        pass
     # Log the FINAL spoken text (post-overrides) so the log matches the call —
     # the earlier 'voice/handle LLM raw' line is only the pre-override draft.
     app.logger.info("vapi/chat SAY=%r action=%s", say_text, action)
