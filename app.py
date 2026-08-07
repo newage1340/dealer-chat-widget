@@ -15581,6 +15581,23 @@ def voice_handle():
         say_text = _derecap
         app.logger.info("voice/handle: stripped redundant appointment recap")
 
+    # The OTHER redundant recap the model does at the trade-in / financing step:
+    # "So, just to confirm, you're coming in at 5 PM to check out the Passat, and
+    # you're trading in the Accord... — financing or cash?". The existing stripper
+    # only catches "got you DOWN"; this one is phrased "you're coming in at". Keyed
+    # on the present-tense "you're coming in at" — the FINAL readback says "got you
+    # coming in at" and always ends with the number confirm — and gated on the reply
+    # NOT containing the "best number" ask, so the single legit readback is never
+    # touched. Only applied when real content remains, so it can't blank a reply.
+    if not re.search(r"best number", say_text, re.I):
+        _derecap2 = re.sub(
+            r"(?i)\b(?:so,?\s*)?(?:just to confirm,?\s*)?you'?re coming in at\b[^.?!]*[.?!]\s*",
+            "", say_text)
+        _derecap2 = re.sub(r"\s{2,}", " ", _derecap2).strip()
+        if _derecap2 != say_text and len(_derecap2) >= 12:
+            say_text = _derecap2
+            app.logger.info("voice/handle: stripped redundant recap (intake-turn confirm)")
+
     # BOOKING JUST COMMITTED → force a SHORT closing so the bot can't recap the
     # whole appointment a SECOND time. The full readback already happened on the
     # prior turn ("...trading in the Mustang, financing — that the best number?");
