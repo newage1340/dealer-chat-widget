@@ -13507,6 +13507,13 @@ def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
             # Only a TARGET if there's a real money signal after it — otherwise
             # "around 3 o'clock" (a booking time) would parse as $3,000.
             _tail = s[_mnear.end():]
+            # A number attached to "miles" is MILEAGE (trade-in / condition chat),
+            # not a price target — "around two hundred and six thousand miles" must
+            # NOT become a $200 search. Bail unless a real money word sits alongside.
+            if re.search(r"\b(?:thousand|hundred)\s+miles?\b|\d[\d,]*\s*k?\s*miles?\b|"
+                         r"\bmiles?\s+on\s+(?:it|the)\b", _tail) \
+               and not re.search(r"\$|\bprice\b|\bcost\b|\bbudget\b", _tail):
+                return ""
             if not re.search(r"\$|\bk\b|\bgrand\b|\bthousand\b|\bhundred\b|\d,\d{3}\b", _tail):
                 return ""
             target = _parse_price_amount(_tail)
