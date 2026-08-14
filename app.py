@@ -10398,11 +10398,68 @@ def _process_message(from_number: str, to_number: str, body: str):
         except Exception:
             _has_appt = False
         if not _has_appt:
-            app.logger.warning(
-                "Phantom booking blocked for %s: reply claimed an appointment but none was "
-                "created and no pending was set. Suppressed reply=%r", from_number, reply_text)
-            reply_text = ("I'd be happy to get that on the schedule - what day and "
-                          "time works best for you?")
+            # RESCUE FIRST. Simply refusing turns a silent failure into a visible
+            # loop ("what time works?" -> "tomorrow at 10" -> "what time works?"),
+            # because the LLM keeps claiming the booking without ever emitting the
+            # meta. So recover the time from the claim itself — the reply carries a
+            # normalized clock time ("...at 10 AM") even when the customer wrote a
+            # bare hour ("right at 10"), which parse_visit_time_from_text can't
+            # read on its own. Same anti-hallucination rule as the meta path: the
+            # hour MUST appear in something the customer actually typed.
+            _fb_display, _fb_iso = parse_visit_time_from_text(reply_text)
+            if _fb_display:
+                _fb_m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", _fb_display, re.I)
+                _fb_hour = _fb_m.group(1) if _fb_m else ""
+                _fb_customer_text = " ".join(
+                    (m.get("content") or "").lower()
+                    for m in get_recent_messages(from_number, to_number, limit=30)
+                    if m.get("role") == "user"
+                ) + " " + (body or "").lower()
+                # "noon"/"midnight" are how customers write 12 — accept them as
+                # the hour digit, or a perfectly good booking gets rejected as a
+                # hallucination just because they never typed "12".
+                _fb_hour_ok = bool(_fb_hour and re.search(
+                    rf"(?<!\d){re.escape(_fb_hour)}(?!\d)", _fb_customer_text))
+                if _fb_hour == "12" and re.search(r"\b(noon|midnight)\b", _fb_customer_text):
+                    _fb_hour_ok = True
+                if not _fb_hour_ok:
+                    app.logger.warning(
+                        "Phantom booking rescue rejected for %s: hour %r never appeared in "
+                        "customer messages (LLM invented the time)", from_number, _fb_hour)
+                    _fb_display, _fb_iso = "", ""
+
+            if _fb_display and has_clock_time(_fb_display):
+                _fb_display = _augment_bare_time_with_day(_fb_display, from_number, to_number)
+                # Recover the vehicle from the last bot message, same approach the
+                # pending-recovery path already uses.
+                _fb_car = ""
+                for _m in reversed(history or []):
+                    if _m.get("role") == "assistant":
+                        _cm = re.search(r"\b(20\d{2}\s+\w[\w\s]{3,40}?)(?:\s+and|\.|,|$)",
+                                        _m.get("content") or "", re.I)
+                        if _cm:
+                            _fb_car = _cm.group(1).strip()
+                        break
+                set_pending(from_number, to_number, dealer_phone, _fb_display, _fb_iso,
+                            _fb_car or "a vehicle")
+                _fb_missing = missing_profile_field(customer_profile)
+                if _fb_missing:
+                    reply_text = (f"I have your appointment for {_fb_display} on hold. "
+                                  f"Could I please get your {_fb_missing} so I can lock it in?")
+                else:
+                    reply_text = (f"Just to confirm - {_fb_display}"
+                                  + (f" for the {_fb_car}" if _fb_car else "")
+                                  + "? Reply YES and I'll lock it in.")
+                app.logger.warning(
+                    "Phantom booking rescued for %s: no booking meta, held pending %r / %r",
+                    from_number, _fb_display, _fb_car or "a vehicle")
+            else:
+                app.logger.warning(
+                    "Phantom booking blocked for %s: reply claimed an appointment but none was "
+                    "created and no usable time could be recovered. Suppressed reply=%r",
+                    from_number, reply_text)
+                reply_text = ("I'd be happy to get that on the schedule - what day and "
+                              "time works best for you?")
 
     save_message(from_number, to_number, "assistant", reply_text)
     return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
