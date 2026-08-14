@@ -1660,28 +1660,57 @@ def is_valid_name(s: str) -> bool:
     return True
 
 
-# Lead-ins customers put in front of their name when answering "what's your
-# name?" — "its evan", "it's evan", "this is evan", "im evan", "name's evan".
-# The LLM's META name extraction misses these, and the flow then re-asks for the
-# name it was just given, forever.
-_NAME_LEADIN_RE = re.compile(
-    r"^\s*(?:it'?s|its|this\s+is|i'?m|im|i\s+am|my\s+name\s+is|my\s+name'?s|"
-    r"name\s+is|name'?s|call\s+me|the\s+name'?s)\s+",
-    re.I,
-)
+# Words customers put in FRONT of their name when answering "what's your name?".
+# Stripped token-by-token rather than with one anchored regex, because real
+# replies stack them: "yes its evan", "yeah this is evan", "ok im evan". A single
+# ^-anchored pattern only removed one layer, so "yes its evan" tokenized as
+# first="yes" and the flow re-asked for the name it had just been given.
+_NAME_LEADIN_WORDS = {
+    "yes", "yeah", "yep", "yup", "ya", "sure", "ok", "okay", "alright",
+    "hi", "hello", "hey", "well", "so", "uh", "um", "and", "its", "it's",
+    "it", "this", "that", "is", "im", "i'm", "i", "am", "my", "name",
+    "names", "name's", "the", "call", "me", "you", "can",
+}
+
+
+# Dealership vocabulary that survives lead-in stripping but is never a name.
+# Without this, "no trade" -> "Trade" and "can i pay cash" -> "Pay Cash" get
+# saved as the customer's name.
+_NON_NAME_WORDS = {
+    "trade", "trades", "cash", "financing", "finance", "loan", "credit",
+    "works", "work", "pay", "paying", "miles", "mileage", "title", "clean",
+    "salvage", "rebuilt", "condition", "car", "truck", "suv", "sedan", "van",
+    "vehicle", "appointment", "time", "tomorrow", "today", "morning",
+    "afternoon", "evening", "email", "phone", "number", "price", "payment",
+    "down", "warranty", "insurance", "none", "nothing", "all", "set",
+}
+
+
+def _strip_name_leadins(text: str) -> List[str]:
+    """Tokenize a reply and drop the leading filler/lead-in words, returning
+    whatever is left. "yes its evan" -> ["evan"]; "my name is evan smith" ->
+    ["evan", "smith"]. Reuses the same filler vocabulary the voice path uses so
+    there is one definition of "not a name word"."""
+    toks = [t for t in re.split(r"\s+", (text or "").strip()) if t]
+    i = 0
+    while i < len(toks) and re.sub(r"[^\w']", "", toks[i]).lower() in _NAME_FILLER_WORDS:
+        i += 1
+    return [t.strip(".,!?;:") for t in toks[i:] if t.strip(".,!?;:")]
 
 
 def name_from_direct_answer(text: str) -> str:
     """Pull a first name out of a short, direct answer to 'what's your name?'.
-    Deterministic backstop for the LLM extractor. Deliberately strict: only a
-    stripped lead-in plus one or two name-shaped words, so it can never grab a
-    name out of a sentence that happens to start with "I'm looking for a truck"
-    (is_valid_name rejects 'looking')."""
-    s = (text or "").strip().rstrip(".!,")
-    s = _NAME_LEADIN_RE.sub("", s).strip()
-    if not s or len(s.split()) > 2:
+    Deterministic backstop for the LLM extractor. Strict on purpose: after the
+    lead-ins are stripped at most two tokens may remain, every one of them has to
+    pass the shared real-name check, and none may be dealership vocabulary — so
+    "yes i have a trade in", "can i pay cash" and "no trade" all yield nothing."""
+    parts = _strip_name_leadins(text)
+    if not parts or len(parts) > 2:
         return ""
-    return s.title() if is_valid_name(s) else ""
+    for p in parts:
+        if p.lower() in _NON_NAME_WORDS or not _looks_like_real_name(p):
+            return ""
+    return " ".join(parts).title()
 
 
 def missing_profile_field(profile: Dict[str, str]) -> Optional[str]:
@@ -9081,11 +9110,11 @@ def _process_message(from_number: str, to_number: str, body: str):
         treat_as_name_reply = False
         save_kwargs: Dict[str, Any] = {}
         if is_likely_name:
-            # Strip the lead-in FIRST. "its evan" used to tokenize as
-            # first="its" (rejected as filler) + last="Evan", so the real name
-            # landed in last_name, first_name stayed empty, and the flow asked
-            # "could I get your first name?" forever.
-            tokens = [t for t in _NAME_LEADIN_RE.sub("", body.strip()).split() if t]
+            # Strip lead-ins FIRST, token by token. "yes its evan" used to
+            # tokenize as first="yes"/last="Its", so the real name never landed
+            # in first_name and the flow asked "could I get your first name?"
+            # forever.
+            tokens = _strip_name_leadins(body)
             new_first = tokens[0].title() if tokens else ""
             new_last = tokens[1].title() if len(tokens) >= 2 else None
             # Use the stricter _looks_like_real_name (filler-word check) so
