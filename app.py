@@ -2289,6 +2289,14 @@ _STEP_1_5_QUESTION = ("Got it - {when} for the {car}. Any other questions about 
 # we've already asked once — keep the two in sync.
 _FINANCING_ASK_MARK = "financing, or paying cash"
 _FINANCING_ASK = "And will you be financing, or paying cash?"
+# Mirror of the financing chase for the other half of STEP 1.5. Needed for the
+# customer who answers only the financing part ("yes, I'd like to finance") —
+# the trade-in chase never starts because it keys off the customer MENTIONING a
+# trade, so a trade-in would never be asked about at all on those threads.
+# The marker must NOT appear in _STEP_1_5_QUESTION, or the bundled ask would
+# count as the focused one and this chase would never fire.
+_TRADE_ASK_MARK = "vehicle you'd like to trade in"
+_TRADE_ASK = "And do you have a vehicle you'd like to trade in?"
 # What counts as the customer having ADDRESSED financing (either direction).
 _FINANCING_ANSWER_RE = re.compile(
     r"\b(financ\w*|finance|loan|lease|leasing|credit|pre-?approv\w*|"
@@ -8175,6 +8183,36 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
             app.logger.warning("financing followup rewrite (DB) failed: %s", e)
         g.captured_reply = new_reply
         app.logger.info("Injected financing follow-up for %s", from_number)
+        return True
+
+    # TRADE-IN PRESENCE FOLLOW-UP — the mirror of the financing chase. The
+    # trade-in detail chase above only starts once the customer MENTIONS a trade,
+    # so a customer who answered only the financing half of STEP 1.5 was never
+    # asked about a trade at all. Ask once, so both halves are always collected
+    # before we move on to name/email and the confirmation.
+    _trade_addressed = _trade_mentioned_by_customer or any(
+        _TRADE_ASK_MARK in (m.get("content") or "")
+        for m in history if m.get("role") == "assistant"
+    )
+    if ((_s15_asked_before or _booking_in_flight)
+            and not _trade_addressed and not _reconfirm_live):
+        new_reply = _TRADE_ASK
+        try:
+            conn = _db()
+            with conn:
+                row = conn.execute(
+                    "SELECT id FROM messages WHERE customer_phone=? AND twilio_number=? "
+                    "AND role='assistant' ORDER BY id DESC LIMIT 1",
+                    (from_number, to_number),
+                ).fetchone()
+                if row:
+                    conn.execute("UPDATE messages SET content=? WHERE id=?",
+                                 (new_reply, row["id"]))
+            conn.close()
+        except Exception as e:
+            app.logger.warning("trade-in presence followup rewrite (DB) failed: %s", e)
+        g.captured_reply = new_reply
+        app.logger.info("Injected trade-in presence follow-up for %s", from_number)
         return True
 
     # Already asked STEP 1.5? Look for the "trade-in" + "financing" combo in
