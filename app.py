@@ -85,9 +85,13 @@ DEV_CLEAR_DB      = os.getenv("DEV_CLEAR_DB", "0") == "1"
 DEV_MAX_VEHICLES  = int(os.getenv("DEV_MAX_VEHICLES", "0"))
 
 # SMS abuse filter: cap inbound SMS per (customer phone, twilio number) pair.
-# In-memory only — resets when the bot restarts. Counts messages 1..8 normally.
-# Message 9 returns a "call the dealer" notice. Messages 10+ get no reply.
-SMS_ABUSE_LIMIT              = 8
+# In-memory only — resets when the bot restarts. Counts messages 1..N normally.
+# Message N+1 returns a "call the dealer" notice. Messages N+2 and up get no reply.
+# Raised from 8: a real booking thread (browse a car -> ask questions -> pick a
+# time -> financing/trade-in -> name -> email) already runs 8+ inbound messages,
+# so the old cap could silence a genuine customer mid-booking. This is an abuse
+# backstop, not a conversation budget.
+SMS_ABUSE_LIMIT              = int(os.getenv("SMS_ABUSE_LIMIT", "60"))
 SMS_ABUSE_NOTICE             = (
     "You have reached the message limit for this number. "
     "Please call the dealer directly if you have any more questions."
@@ -2255,6 +2259,17 @@ def _step_1_5_asked(history: List[Dict[str, Any]]) -> bool:
 _STEP_1_5_QUESTION = ("Got it - {when} for the {car}. Any other questions about it, "
                       "are you interested in financing, or do you have a trade-in "
                       "you'd like us to take a look at?")
+
+# Focused financing chase, used when STEP 1.5 went out but the customer only
+# answered the trade-in half of it. The MARK is the phrase we look for to know
+# we've already asked once — keep the two in sync.
+_FINANCING_ASK_MARK = "financing, or paying cash"
+_FINANCING_ASK = "And will you be financing, or paying cash?"
+# What counts as the customer having ADDRESSED financing (either direction).
+_FINANCING_ANSWER_RE = re.compile(
+    r"\b(financ\w*|finance|loan|lease|leasing|credit|pre-?approv\w*|"
+    r"cash|paying\s+cash|pay\s+cash|out\s+of\s+pocket|my\s+own\s+bank|"
+    r"credit\s+union)\b", re.I)
 _GENERIC_CAR_DESCS = {"general visit", "general", "visit", "a vehicle", ""}
 
 
@@ -8082,6 +8097,52 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
             g.captured_reply = new_reply
             app.logger.info("Injected trade-in detail followup (overrode LLM email ask) for %s", from_number)
             return True
+
+    # FINANCING FOLLOW-UP. STEP 1.5 bundles "other questions / financing /
+    # trade-in" into one message, and customers answer only the part they care
+    # about — almost always the trade-in. Financing then never gets answered and
+    # the flow went straight to confirming the appointment without it, so the
+    # dealer lost the single most useful qualifier on the lead. Chase it once,
+    # after any trade-in detail collection has finished (that block returns
+    # above, so by here the trade-in is either complete or wasn't mentioned).
+    _s15_asked_before = any(
+        "trade-in" in (m.get("content") or "").lower()
+        and "financing" in (m.get("content") or "").lower()
+        for m in history if m.get("role") == "assistant"
+    )
+    _fin_answered = any(
+        _FINANCING_ANSWER_RE.search(m.get("content") or "")
+        for m in history if m.get("role") == "user"
+    )
+    _fin_asked = sum(
+        1 for m in history if m.get("role") == "assistant"
+        and _FINANCING_ASK_MARK in (m.get("content") or "")
+    )
+    # Never step on an in-flight yes/no confirmation — the customer is being
+    # asked to keep or change an appointment and needs to answer THAT.
+    try:
+        _reconfirm_live = bool(get_pending_reconfirmation(from_number, to_number))
+    except Exception:
+        _reconfirm_live = False
+    if _s15_asked_before and not _fin_answered and _fin_asked < 1 and not _reconfirm_live:
+        new_reply = _FINANCING_ASK
+        try:
+            conn = _db()
+            with conn:
+                row = conn.execute(
+                    "SELECT id FROM messages WHERE customer_phone=? AND twilio_number=? "
+                    "AND role='assistant' ORDER BY id DESC LIMIT 1",
+                    (from_number, to_number),
+                ).fetchone()
+                if row:
+                    conn.execute("UPDATE messages SET content=? WHERE id=?",
+                                 (new_reply, row["id"]))
+            conn.close()
+        except Exception as e:
+            app.logger.warning("financing followup rewrite (DB) failed: %s", e)
+        g.captured_reply = new_reply
+        app.logger.info("Injected financing follow-up for %s", from_number)
+        return True
 
     # Already asked STEP 1.5? Look for the "trade-in" + "financing" combo in
     # any recent assistant message.
