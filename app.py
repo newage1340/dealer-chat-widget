@@ -7896,8 +7896,16 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
         # Decide what step we need to back up to.
         _car_phrase = f"the {_cd}" if _cd else "the vehicle"
         _time_phrase = f"{_vt} " if _vt else ""
+        # Which half of STEP 1.5 is actually still missing? Re-sending the
+        # bundled question to someone who just answered "cash" asks them about
+        # financing a SECOND time — observed 2026-08-14 02:27.
+        _p3_trade_ok = _trade_addressed(_ri_history)
+        _p3_fin_ok = _financing_addressed(_ri_history)
+        _p3_focused = (_FINANCING_ASK if (_p3_trade_ok and not _p3_fin_ok)
+                       else _TRADE_ASK if (_p3_fin_ok and not _p3_trade_ok)
+                       else "")
         if not _step_1_5_already_asked:
-            new_reply = (
+            new_reply = _p3_focused or (
                 f"Got it - {_time_phrase}for {_car_phrase}. Any other questions about it, "
                 f"are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
             )
@@ -7921,7 +7929,7 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
                 # but doing it here keeps pending + reply consistent).
                 _time_phrase = f"{_vt} "
                 if not _step_1_5_already_asked:
-                    new_reply = (
+                    new_reply = _p3_focused or (
                         f"Got it - {_time_phrase}for {_car_phrase}. Any other questions about it, "
                         f"are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
                     )
@@ -9131,8 +9139,16 @@ def _process_message(from_number: str, to_number: str, body: str):
             # Use the stricter _looks_like_real_name (filler-word check) so
             # phrases like "its in immaculate condition" don't get saved as
             # name="Its" / last_name="Condition" during a pending-confirm flow.
-            valid_first = _looks_like_real_name(new_first) if new_first else False
-            valid_last  = _looks_like_real_name(new_last) if new_last else False
+            # _looks_like_real_name only knows generic filler, so a one-word
+            # answer to a REAL question sails through it: replying "cash" to
+            # "financing or paying cash?" was being saved as the customer's
+            # first name, and two hot leads went to the dealer named "Cash"
+            # (2026-08-14 02:27). Reject dealership vocabulary here too.
+            def _pending_name_ok(v):
+                return bool(v) and _looks_like_real_name(v) and v.lower() not in _NON_NAME_WORDS
+
+            valid_first = _pending_name_ok(new_first)
+            valid_last  = _pending_name_ok(new_last)
             # Never overwrite an already-populated profile field. The customer
             # provided their real name earlier (via the widget profile form or
             # an explicit intro); a casual message in the middle of a booking
@@ -11794,6 +11810,11 @@ def _voice_silence_reset(call_sid: str) -> None:
 # like 'okay' or 'alright' alone. Previously the safety net fired on every
 # casual acknowledgement which ended calls prematurely with half-baked
 # summaries to the owner.
+# Per-call count of 'claimed an appointment but emitted no META_JSON'
+# nudges, so the readback re-ask is bounded and can never loop a caller.
+_VOICE_BOOKING_NUDGES: Dict[str, int] = {}
+
+
 _VOICE_WRAPUP_RE = re.compile(
     r"\b("
     r"good\s*bye|goodbye|bye(?:\s+now)?|see\s+ya|see\s+you\s+later|"
@@ -15857,6 +15878,52 @@ def voice_handle():
                 ["Anything else?", "Anything else I can help with?",
                  "That everything for ya?", "Need anything else?"])).strip()
         app.logger.info("voice/handle: info-send (link/details), not a callback — keeping line open")
+
+    # BOOKING CLAIMED BUT NEVER RECORDED. Same shape as the info-send guard
+    # above: the model wraps the call with a take-message token while TELLING the
+    # caller an appointment is happening, but omits META_JSON, so nothing is
+    # saved. Observed 2026-08-14 05:35 UTC: "Awesome! I'll have someone set up
+    # your appointment for tomorrow at 10:30 AM ... [TABLE_MESSAGE]" - staff got
+    # a lead, no appointment row was written, and the caller hung up believing he
+    # was booked. The prompt calls META_JSON "the most important rule in the
+    # entire flow"; when it is missing the call must NOT end.
+    # Keep the line open and ask for the one readback the prompt wants, so the
+    # next turn can emit a real META_JSON. Bounded per call so a model that never
+    # emits it cannot trap the caller in a loop.
+    if _take_msg and "META_JSON" not in raw_reply:
+        _claims_appt = bool(re.search(
+            r"\b(appointment|got (?:you|ya) down|on the books|set (?:you|ya) up|"
+            r"see (?:you|ya) (?:then|tomorrow|today)|book(?:ed|ing)?\s+(?:you|ya))\b",
+            _reply_apos, re.I))
+        _nudges = _VOICE_BOOKING_NUDGES.get(call_sid, 0)
+        if _claims_appt and _nudges < 2:
+            _VOICE_BOOKING_NUDGES[call_sid] = _nudges + 1
+            _take_msg = False
+            raw_reply = re.sub(
+                r"\s*(take it easy|have a (?:great|good)[^.!?]*|talk soon|bye[^.!?]*|"
+                r"take care[^.!?]*)[.!]*\s*$", "", raw_reply, flags=re.I).rstrip()
+            # Ask for whatever intake the model actually skipped, rather than
+            # jumping to the readback. Steps 2-4 of the voice prompt (trade-in,
+            # financing, anything else) are exactly what it dropped on the
+            # 2026-08-14 calls, and they are the two fields the dealer acts on.
+            # Same helpers the text side uses, so there is one definition of
+            # "has this been covered".
+            _v_trade_ok = _trade_addressed(history)
+            _v_fin_ok = _financing_addressed(history)
+            if not _v_trade_ok and not _v_fin_ok:
+                _v_ask = ("Before I lock that in - do you have a trade-in, "
+                          "and are you looking to finance or pay cash?")
+            elif not _v_trade_ok:
+                _v_ask = "Before I lock that in - do you have a vehicle you'd like to trade in?"
+            elif not _v_fin_ok:
+                _v_ask = "Before I lock that in - will you be financing, or paying cash?"
+            else:
+                _v_ask = "Before I lock that in - that all sound right?"
+            raw_reply = raw_reply.rstrip(" .!") + ". " + _v_ask
+            app.logger.warning(
+                "voice/handle: claimed an appointment with NO META_JSON - keeping "
+                "the line open for the readback (nudge %d/2) call=%s",
+                _nudges + 1, call_sid)
 
     # Safety net: LLM sometimes forgets the token even after the caller clearly
     # wraps up. If they say bye/thanks 3+ turns in and no token was emitted,
