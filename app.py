@@ -5288,6 +5288,14 @@ _FINANCING_LINK_RE = re.compile(
     r"(?:financing|finance|credit)\s+(?:link|application|app|form|url)|"
     r"(?:link|application|apply|form)\s+(?:for|to)\s+(?:financ|credit)|"
     r"apply\s+(?:for\s+)?(?:financ\w*|credit)|"
+    # "a link you can send me to apply online" — observed on a real call. The
+    # caller never says the word "financing" in the sentence, so every branch
+    # above misses it and the VEHICLE-link matcher ("link" + "send me") wins,
+    # texting a car listing instead of the credit application.
+    r"appl(?:y|ication)\s+(?:on[-\s]?line|over\s+the\s+phone)|"
+    r"(?:on[-\s]?line|credit)\s+application|"
+    r"(?:link|url)\s+(?:to|for)\s+(?:me\s+)?to\s+appl(?:y|ication)|"
+    r"(?:link|url)[^.?!]{0,40}\bto\s+apply\b|"
     r"(?:send|text|shoot|get)\s+(?:me\s+)?(?:the\s+|that\s+)?"
     r"(?:financ\w*|credit|pre[-\s]?approval)\s*(?:link|application|app|form))\b",
     re.I)
@@ -15725,7 +15733,15 @@ def voice_handle():
         _lm = _find_exact_year_make_match(speech, inventory_rows)
         if not _lm:
             _lm = _find_exact_year_make_match(raw_reply, inventory_rows)
-        if not _lm:
+        if not _lm and _body_mentions_car(_strip_anaphora(raw_reply), inventory_rows):
+            # The _body_mentions_car guard matters: find_inventory_matches ALWAYS
+            # returns a top-1 row, so running it on a reply that names no vehicle
+            # returns whichever car scores highest on noise. Observed live — the
+            # reply was "I'll send over the link for the online financing
+            # application. Just to confirm, I've got you at 3-1-7..." and this
+            # matched a Golf Sportwagen, which then got texted to the caller
+            # instead of the Lincoln they were actually discussing. Step 4 below
+            # already guarded its fuzzy match this way; this one did not.
             _rm = find_inventory_matches(inventory_rows, _strip_anaphora(raw_reply),
                                          top_k=1, current_msg=raw_reply)
             _lm = _rm[0] if _rm else None
