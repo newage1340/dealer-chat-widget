@@ -1660,11 +1660,6 @@ def is_valid_name(s: str) -> bool:
     return True
 
 
-# Words customers put in FRONT of their name when answering "what's your name?".
-# Stripped token-by-token rather than with one anchored regex, because real
-# replies stack them: "yes its evan", "yeah this is evan", "ok im evan". A single
-# ^-anchored pattern only removed one layer, so "yes its evan" tokenized as
-# first="yes" and the flow re-asked for the name it had just been given.
 _NAME_LEADIN_WORDS = {
     "yes", "yeah", "yep", "yup", "ya", "sure", "ok", "okay", "alright",
     "hi", "hello", "hey", "well", "so", "uh", "um", "and", "its", "it's",
@@ -1673,9 +1668,6 @@ _NAME_LEADIN_WORDS = {
 }
 
 
-# Dealership vocabulary that survives lead-in stripping but is never a name.
-# Without this, "no trade" -> "Trade" and "can i pay cash" -> "Pay Cash" get
-# saved as the customer's name.
 _NON_NAME_WORDS = {
     "trade", "trades", "cash", "financing", "finance", "loan", "credit",
     "works", "work", "pay", "paying", "miles", "mileage", "title", "clean",
@@ -1689,47 +1681,24 @@ _NON_NAME_WORDS = {
 def _strip_name_leadins(text: str) -> List[str]:
     """Tokenize a reply and drop the leading filler/lead-in words, returning
     whatever is left. "yes its evan" -> ["evan"]; "my name is evan smith" ->
-    ["evan", "smith"]. Reuses the same filler vocabulary the voice path uses so
-    there is one definition of "not a name word"."""
+    ["evan", "smith"]."""
     toks = [t for t in re.split(r"\s+", (text or "").strip()) if t]
     i = 0
-    # Shared voice-path vocabulary PLUS the few chat-only lead-ins it doesn't
-    # carry ("call", "name's"). Kept as a separate set rather than added to
-    # _NAME_FILLER_WORDS so the voice name capture is untouched.
-    _lead = _NAME_FILLER_WORDS | _NAME_LEADIN_WORDS
-    while i < len(toks) and re.sub(r"[^\w']", "", toks[i]).lower() in _lead:
+    while i < len(toks) and re.sub(r"[^\w']", "", toks[i]).lower() in _NAME_FILLER_WORDS:
         i += 1
     return [t.strip(".,!?;:") for t in toks[i:] if t.strip(".,!?;:")]
 
 
-# A message that opens with a question word, or ends in a question mark, is the
-# customer asking something — never them answering "what's your name?". Without
-# this, "does it have heated seats" survived lead-in stripping as "heated seats"
-# and would have been saved as the customer's name.
-_QUESTION_OPENER_RE = re.compile(
-    r"^\s*(?:do|does|did|is|are|was|were|can|could|will|would|should|may|might|"
-    r"what|whats|what's|when|where|why|how|which|who|whos|who's|any|got|have|has)\b",
-    re.I,
-)
-
-
 def name_from_direct_answer(text: str) -> str:
     """Pull a first name out of a short, direct answer to 'what's your name?'.
-    Deterministic backstop for the LLM extractor. Strict on purpose: the message
-    must not be a question, after lead-in stripping at most two tokens may remain,
-    every one has to pass the shared real-name check, none may be dealership
-    vocabulary, and none may be a vehicle make (so "the lincoln" is not a name)."""
-    raw = (text or "").strip()
-    if not raw or "?" in raw or _QUESTION_OPENER_RE.match(raw):
-        return ""
-    parts = _strip_name_leadins(raw)
+    Deterministic backstop for the LLM extractor. Strict on purpose: after the
+    lead-ins are stripped at most two tokens may remain, every one of them has to
+    pass the shared real-name check, and none may be dealership vocabulary."""
+    parts = _strip_name_leadins(text)
     if not parts or len(parts) > 2:
         return ""
     for p in parts:
-        low = p.lower()
-        if low in _NON_NAME_WORDS or low in _KNOWN_TRADE_IN_MAKES:
-            return ""
-        if not _looks_like_real_name(p):
+        if p.lower() in _NON_NAME_WORDS or not _looks_like_real_name(p):
             return ""
     return " ".join(parts).title()
 
@@ -8088,8 +8057,19 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
             app.logger.info("Overrode LLM STEP 1.5 re-ask with email/confirm prompt for %s", from_number)
             return True
 
-    # Is this an email-request reply?
-    asks_email = bool(re.search(r"\bemail\b", captured, re.I)) and "?" in captured
+    # Is this a reply that asks the customer for a PROFILE field?
+    # This gate used to match ONLY the email ask, because the widget collects the
+    # customer's name from its welcome form — so by booking time email is the one
+    # field left, and an email ask was the only thing worth intercepting. SMS has
+    # no form: the NAME is asked in conversation too, and a name ask fell straight
+    # through this gate. That is why the flow asked "could I get your first name?"
+    # BEFORE financing/trade-in had been covered, then circled back to financing
+    # afterwards. Treating a name ask the same way means STEP 1.5 finishes first
+    # and the name is collected last, right before the booking is locked in.
+    asks_email = (
+        bool(re.search(r"\bemail\b", captured, re.I))
+        or bool(re.search(r"\b(?:first\s+name|last\s+name|your\s+name)\b", captured, re.I))
+    ) and "?" in captured
     if not asks_email:
         # Even when we don't override, if the LLM just did STEP 1.5 naturally
         # we want a pending appointment record so downstream handlers
@@ -8742,7 +8722,7 @@ def _extract_name_parts(text: str) -> Tuple[str, str]:
     if not words or not _looks_like_real_name(words[0]):
         return "", ""
     first = words[0]
-    last  = words[1] if len(words) > 1 and _looks_like_real_name(words[1]) else ""
+    last = words[1] if len(words) > 1 and _looks_like_real_name(words[1]) else ""
     return first, last
 
 
@@ -10519,10 +10499,23 @@ def _process_message(from_number: str, to_number: str, body: str):
 
     if meta:
         save_kwargs: Dict[str, Any] = {}
-        if meta.get("_extracted_name") and is_valid_name(meta["_extracted_name"]) and not customer_profile["name"]:
+        # is_valid_name() only checks name SHAPE, so an answer to a non-name
+        # question passes it: "I'm paying cash" came back from the LLM as
+        # _extracted_last_name="Cash" and the customer became "Evan Cash".
+        # Reject dealership vocabulary before saving.
+        def _meta_name_ok(v: str) -> bool:
+            return bool(v) and is_valid_name(v) and v.strip().lower() not in _NON_NAME_WORDS
+
+        if meta.get("_extracted_name") and _meta_name_ok(meta["_extracted_name"]) and not customer_profile["name"]:
             save_kwargs["name"] = meta["_extracted_name"]
-        if meta.get("_extracted_last_name") and is_valid_name(meta["_extracted_last_name"]) and not customer_profile["last_name"]:
+        elif meta.get("_extracted_name") and not _meta_name_ok(meta["_extracted_name"]):
+            app.logger.warning("Rejected META name %r for %s (not a name)",
+                               meta.get("_extracted_name"), from_number)
+        if meta.get("_extracted_last_name") and _meta_name_ok(meta["_extracted_last_name"]) and not customer_profile["last_name"]:
             save_kwargs["last_name"] = meta["_extracted_last_name"]
+        elif meta.get("_extracted_last_name") and not _meta_name_ok(meta["_extracted_last_name"]):
+            app.logger.warning("Rejected META last name %r for %s (not a name)",
+                               meta.get("_extracted_last_name"), from_number)
         if meta.get("_extracted_email") and is_valid_email(meta["_extracted_email"]) and not customer_profile["email"]:
             save_kwargs["email"] = meta["_extracted_email"]
         if meta.get("_extracted_phone") and not customer_profile.get("real_phone"):
