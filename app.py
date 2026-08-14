@@ -2239,6 +2239,25 @@ _CLAIMS_BOOKING_RE = re.compile(
 )
 
 
+def _step_1_5_asked(history: List[Dict[str, Any]]) -> bool:
+    """Has the STEP 1.5 ask (other questions / financing / trade-in) already gone
+    out in this thread? Booking without it loses the two pieces of lead detail a
+    dealer actually acts on, which is why the voice flow always asks."""
+    for m in history or []:
+        if m.get("role") != "assistant":
+            continue
+        c = m.get("content") or ""
+        if "trade-in" in c.lower() and "financing" in c.lower() and "?" in c:
+            return True
+    return False
+
+
+_STEP_1_5_QUESTION = ("Got it - {when} for the {car}. Any other questions about it, "
+                      "are you interested in financing, or do you have a trade-in "
+                      "you'd like us to take a look at?")
+_GENERIC_CAR_DESCS = {"general visit", "general", "visit", "a vehicle", ""}
+
+
 def _reply_claims_booking(text: str) -> bool:
     """True if this reply TELLS the customer they already have an appointment.
     Used to catch the 'phantom booking': the LLM writes "You're all set, see you
@@ -8293,7 +8312,43 @@ def sms_webhook():
     if widget_session:
         app.logger.info("SMS from %s bridged to widget session %s", from_number, widget_session)
         from_number = widget_session
-    return _process_message(from_number, to_number, body)
+
+    _twiml_out = _process_message(from_number, to_number, body)
+
+    # STEP 1.5 parity with the widget. The LLM skips the questions/financing/
+    # trade-in ask on SMS exactly like it does on the web, but this enforcement
+    # was only ever wired into /chat — so texting collected NO financing or
+    # trade-in signal, while calls and the widget both did. Run the same guard
+    # here and rebuild the TwiML when it rewrites the reply. (_maybe_inject_step_1_5
+    # also updates the stored assistant message and sets the pending row, so the
+    # DB and the SMS stay in agreement.)
+    try:
+        _s15_before = (g.get("captured_reply") or "")
+        _s15_dealer_phone = ""
+        try:
+            _s15_dealer_phone = normalize_phone(get_row_field(
+                select_dealer_for_twilio_number(read_dealers(), to_number),
+                DEALER_NOTIFY_PHONE_ALIASES))
+        except Exception:
+            pass
+        if _maybe_inject_step_1_5(from_number, to_number, dealer_phone=_s15_dealer_phone):
+            _s15_after = (g.get("captured_reply") or "")
+            if _s15_after and _s15_after != _s15_before:
+                _rebuilt = MessagingResponse()
+                for _chunk in _split_for_sms(_s15_after):
+                    _rebuilt.message(_chunk)
+                # Re-attach the primer if this turn was supposed to send one —
+                # _reply_twiml already marked it sent, so dropping it here would
+                # mean the customer never receives the terms/capability notice.
+                _s15_primer = g.get("captured_primer")
+                if _s15_primer:
+                    _rebuilt.message(_s15_primer)
+                app.logger.info("SMS STEP 1.5 injected for %s", from_number)
+                return str(_rebuilt)
+    except Exception as e:
+        app.logger.warning("SMS step 1.5 injection failed: %s", e)
+
+    return _twiml_out
 
 
 _PHONE_RE = re.compile(
@@ -10316,6 +10371,27 @@ def _process_message(from_number: str, to_number: str, body: str):
                     )
                     visit_time = ""  # short-circuit auto-book
 
+        # STEP 1.5 GATE. Never auto-book before asking about other questions,
+        # financing, and a trade-in — that ask is where the dealer's lead value
+        # is, and a returning customer with a complete profile used to sail
+        # straight past it into a confirmed appointment. Downgrade the confirm
+        # into a held pending + the STEP 1.5 question; the existing pending flow
+        # finishes the booking once they answer. Service appointments are exempt
+        # (financing/trade-in is sales-only), as are general visits with no car.
+        if visit_time and meta.get("confirmed"):
+            _s15_hist = get_recent_messages(from_number, to_number, limit=30)
+            _s15_specific = (car_desc or "").strip().lower() not in _GENERIC_CAR_DESCS
+            if (_s15_specific and not _step_1_5_asked(_s15_hist)
+                    and not _is_service_appointment_context(_s15_hist)):
+                set_pending(from_number, to_number, dealer_phone, visit_time,
+                            visit_time_iso, car_desc)
+                reply_text = _STEP_1_5_QUESTION.format(when=visit_time, car=car_desc)
+                app.logger.info(
+                    "Held auto-book for STEP 1.5 (financing/trade-in): %s / %r",
+                    from_number, car_desc)
+                _appt_committed = True
+                visit_time = ""  # short-circuit the booking block below
+
         if visit_time:
             missing = missing_profile_field(customer_profile)
             if missing:
@@ -10432,18 +10508,31 @@ def _process_message(from_number: str, to_number: str, body: str):
                 _fb_display = _augment_bare_time_with_day(_fb_display, from_number, to_number)
                 # Recover the vehicle from the last bot message, same approach the
                 # pending-recovery path already uses.
+                # Scan BACK through the thread until a vehicle turns up — not just
+                # the most recent bot message. The turn right before a booking is
+                # usually an answer about hours or directions with no car in it
+                # ("we're open tomorrow 10 to 7"), and stopping there is what put
+                # the literal words "the a vehicle" in front of a customer.
                 _fb_car = ""
                 for _m in reversed(history or []):
-                    if _m.get("role") == "assistant":
-                        _cm = re.search(r"\b(20\d{2}\s+\w[\w\s]{3,40}?)(?:\s+and|\.|,|$)",
-                                        _m.get("content") or "", re.I)
-                        if _cm:
-                            _fb_car = _cm.group(1).strip()
+                    _cm = re.search(r"\b(20\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,5}?)"
+                                    r"(?=\s+(?:is|has|and|at|for|priced)\b|[.,!?]|$)",
+                                    _m.get("content") or "", re.I)
+                    if _cm:
+                        _fb_car = re.sub(r"\s+", " ", _cm.group(1)).strip()
                         break
                 set_pending(from_number, to_number, dealer_phone, _fb_display, _fb_iso,
                             _fb_car or "a vehicle")
                 _fb_missing = missing_profile_field(customer_profile)
-                if _fb_missing:
+                _fb_hist = get_recent_messages(from_number, to_number, limit=30)
+                _fb_needs_15 = (_fb_car.strip().lower() not in _GENERIC_CAR_DESCS
+                                and not _step_1_5_asked(_fb_hist)
+                                and not _is_service_appointment_context(_fb_hist))
+                if _fb_needs_15:
+                    # Same gate as the meta path: financing/trade-in comes before
+                    # we start collecting profile fields or confirming.
+                    reply_text = _STEP_1_5_QUESTION.format(when=_fb_display, car=_fb_car)
+                elif _fb_missing:
                     reply_text = (f"I have your appointment for {_fb_display} on hold. "
                                   f"Could I please get your {_fb_missing} so I can lock it in?")
                 else:
