@@ -2222,6 +2222,33 @@ def has_clock_time(s: str) -> bool:
     return bool(_HAS_CLOCK_TIME_RE.search(s or ""))
 
 
+# Phrases that assert a booking is DONE. Deliberately narrow: only wording that
+# tells the customer an appointment already exists. Invitations to book ("would
+# you like to schedule a time?", "let me know if you'd like to come see it")
+# must NOT match, or this would clobber normal sales replies.
+_CLAIMS_BOOKING_RE = re.compile(
+    r"(you(?:'re| are)\s+all\s+set"
+    r"|look(?:ing)?\s+forward\s+to\s+seeing\s+you"
+    r"|you(?:'re| are)\s+(?:booked|scheduled|confirmed)"
+    r"|(?:we|i)(?:'ve| have)\s+(?:got\s+)?you\s+(?:booked|scheduled|down|penciled)"
+    r"|(?:we|i)(?:'ve| have)\s+scheduled\s+(?:you|your)"
+    r"|your\s+(?:appointment|visit)\s+(?:is|has\s+been)\s+(?:set|booked|confirmed|scheduled)"
+    r"|appointment\s+is\s+confirmed"
+    r"|see\s+you\s+(?:tomorrow|today|this|next|on|at)\b)",
+    re.I,
+)
+
+
+def _reply_claims_booking(text: str) -> bool:
+    """True if this reply TELLS the customer they already have an appointment.
+    Used to catch the 'phantom booking': the LLM writes "You're all set, see you
+    tomorrow at noon" WITHOUT emitting the booking meta, so no appointment row is
+    created and the dealer is never alerted — the customer then shows up to a
+    dealership that has no record of them. Worst failure mode in the system,
+    because both sides believe everything is fine until nobody is there."""
+    return bool(_CLAIMS_BOOKING_RE.search(text or ""))
+
+
 def parse_visit_time_from_text(text: str, now: Optional[datetime] = None) -> Tuple[str, str]:
     raw = (text or "").strip()
     if not raw:
@@ -10234,6 +10261,10 @@ def _process_message(from_number: str, to_number: str, body: str):
             customer_profile = get_customer_profile(from_number, to_number)
             customer_name = customer_profile["name"]
 
+    # Did THIS turn actually commit something schedule-shaped (a booked
+    # appointment or a held/pending one)? Drives the phantom-booking guard below.
+    _appt_committed = False
+
     if meta and (meta.get("confirmed") or meta.get("need_confirmation")):
         visit_time     = str(meta.get("visit_time",     "")).strip()
         visit_time     = _augment_bare_time_with_day(visit_time, from_number, to_number)
@@ -10313,6 +10344,7 @@ def _process_message(from_number: str, to_number: str, body: str):
                     reply_text = (f"I have your appointment for {visit_time} on hold. "
                                   f"Could I please get your {missing} so I can lock it in?")
                 app.logger.info("Held auto-book for missing profile field: %s", missing)
+                _appt_committed = True  # pending row set; reply already overridden
             elif meta.get("confirmed"):
                 # Auto-book immediately - no pending confirmation needed
                 appt_id, is_reschedule = log_appointment(
@@ -10343,9 +10375,34 @@ def _process_message(from_number: str, to_number: str, body: str):
                     visit_time=visit_time, car_desc=car_desc,
                     action=("rescheduled" if is_reschedule else "confirmed"))
                 app.logger.info("Auto-booked appt #%d", appt_id)
+                _appt_committed = True
             else:
                 # Legacy need_confirmation flow - keep for fallback
                 set_pending(from_number, to_number, dealer_phone, visit_time, visit_time_iso, car_desc or "a vehicle")
+                _appt_committed = True
+
+    # PHANTOM-BOOKING GUARD. The LLM has been observed to answer "I can come buy
+    # it tomorrow at noon" with "Certainly! You're all set, we look forward to
+    # seeing you tomorrow at 12 PM" while emitting NO booking meta — so the block
+    # above never runs, no appointment row exists, and the dealer is never
+    # alerted. The customer then drives to a dealership that has no idea they are
+    # coming. Never let a reply CLAIM a booking we did not actually make: swap it
+    # for a real scheduling ask so the normal flow runs on the next turn.
+    #
+    # Skipped when the customer genuinely HAS an appointment on file — an
+    # existing booking makes "you're all set / see you tomorrow" a correct and
+    # useful thing to say (reminders, re-confirmations, "when am I coming in?").
+    if not _appt_committed and _reply_claims_booking(reply_text):
+        try:
+            _has_appt = bool(get_latest_appointment(from_number, to_number))
+        except Exception:
+            _has_appt = False
+        if not _has_appt:
+            app.logger.warning(
+                "Phantom booking blocked for %s: reply claimed an appointment but none was "
+                "created and no pending was set. Suppressed reply=%r", from_number, reply_text)
+            reply_text = ("I'd be happy to get that on the schedule - what day and "
+                          "time works best for you?")
 
     save_message(from_number, to_number, "assistant", reply_text)
     return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
