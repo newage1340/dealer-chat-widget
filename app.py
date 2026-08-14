@@ -1693,22 +1693,43 @@ def _strip_name_leadins(text: str) -> List[str]:
     there is one definition of "not a name word"."""
     toks = [t for t in re.split(r"\s+", (text or "").strip()) if t]
     i = 0
-    while i < len(toks) and re.sub(r"[^\w']", "", toks[i]).lower() in _NAME_FILLER_WORDS:
+    # Shared voice-path vocabulary PLUS the few chat-only lead-ins it doesn't
+    # carry ("call", "name's"). Kept as a separate set rather than added to
+    # _NAME_FILLER_WORDS so the voice name capture is untouched.
+    _lead = _NAME_FILLER_WORDS | _NAME_LEADIN_WORDS
+    while i < len(toks) and re.sub(r"[^\w']", "", toks[i]).lower() in _lead:
         i += 1
     return [t.strip(".,!?;:") for t in toks[i:] if t.strip(".,!?;:")]
 
 
+# A message that opens with a question word, or ends in a question mark, is the
+# customer asking something — never them answering "what's your name?". Without
+# this, "does it have heated seats" survived lead-in stripping as "heated seats"
+# and would have been saved as the customer's name.
+_QUESTION_OPENER_RE = re.compile(
+    r"^\s*(?:do|does|did|is|are|was|were|can|could|will|would|should|may|might|"
+    r"what|whats|what's|when|where|why|how|which|who|whos|who's|any|got|have|has)\b",
+    re.I,
+)
+
+
 def name_from_direct_answer(text: str) -> str:
     """Pull a first name out of a short, direct answer to 'what's your name?'.
-    Deterministic backstop for the LLM extractor. Strict on purpose: after the
-    lead-ins are stripped at most two tokens may remain, every one of them has to
-    pass the shared real-name check, and none may be dealership vocabulary — so
-    "yes i have a trade in", "can i pay cash" and "no trade" all yield nothing."""
-    parts = _strip_name_leadins(text)
+    Deterministic backstop for the LLM extractor. Strict on purpose: the message
+    must not be a question, after lead-in stripping at most two tokens may remain,
+    every one has to pass the shared real-name check, none may be dealership
+    vocabulary, and none may be a vehicle make (so "the lincoln" is not a name)."""
+    raw = (text or "").strip()
+    if not raw or "?" in raw or _QUESTION_OPENER_RE.match(raw):
+        return ""
+    parts = _strip_name_leadins(raw)
     if not parts or len(parts) > 2:
         return ""
     for p in parts:
-        if p.lower() in _NON_NAME_WORDS or not _looks_like_real_name(p):
+        low = p.lower()
+        if low in _NON_NAME_WORDS or low in _KNOWN_TRADE_IN_MAKES:
+            return ""
+        if not _looks_like_real_name(p):
             return ""
     return " ".join(parts).title()
 
@@ -7866,11 +7887,17 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
         _email = (_profile.get("email") or "").strip()
         _name_for_reply = (_profile.get("name") or "").strip() or "and welcome"
         _ri_history = get_recent_messages(from_number, to_number, limit=30)
-        _step_1_5_already_asked = any(
-            "trade-in" in (m.get("content") or "").lower()
-            and "financing" in (m.get("content") or "").lower()
-            and "?" in (m.get("content") or "")
-            for m in _ri_history if m.get("role") == "assistant"
+        # "Already asked" means BOTH halves are covered — by the original bundled
+        # question, OR by the two focused follow-ups (financing / trade-in) that
+        # can replace it, OR by the customer simply having answered. Matching only
+        # the bundled wording reported "never asked" after the customer had
+        # answered both focused questions, and re-fired the whole bundle at them.
+        _step_1_5_already_asked = (
+            any("trade-in" in (m.get("content") or "").lower()
+                and "financing" in (m.get("content") or "").lower()
+                and "?" in (m.get("content") or "")
+                for m in _ri_history if m.get("role") == "assistant")
+            or (_trade_addressed(_ri_history) and _financing_addressed(_ri_history))
         )
         # Recover visit_time + car_desc from pending or recent assistant turns.
         _pending = get_pending(from_number, to_number)
@@ -8281,6 +8308,10 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
 
     # Already asked STEP 1.5? Look for the "trade-in" + "financing" combo in
     # any recent assistant message.
+    # Both halves covered — by the bundled ask, by the focused follow-ups, or by
+    # the customer answering. Nothing left to inject.
+    if _trade_addressed(history) and _financing_addressed(history):
+        return False
     for m in history:
         if m.get("role") == "assistant":
             c = (m.get("content") or "").lower()
