@@ -1660,6 +1660,30 @@ def is_valid_name(s: str) -> bool:
     return True
 
 
+# Lead-ins customers put in front of their name when answering "what's your
+# name?" — "its evan", "it's evan", "this is evan", "im evan", "name's evan".
+# The LLM's META name extraction misses these, and the flow then re-asks for the
+# name it was just given, forever.
+_NAME_LEADIN_RE = re.compile(
+    r"^\s*(?:it'?s|its|this\s+is|i'?m|im|i\s+am|my\s+name\s+is|my\s+name'?s|"
+    r"name\s+is|name'?s|call\s+me|the\s+name'?s)\s+",
+    re.I,
+)
+
+
+def name_from_direct_answer(text: str) -> str:
+    """Pull a first name out of a short, direct answer to 'what's your name?'.
+    Deterministic backstop for the LLM extractor. Deliberately strict: only a
+    stripped lead-in plus one or two name-shaped words, so it can never grab a
+    name out of a sentence that happens to start with "I'm looking for a truck"
+    (is_valid_name rejects 'looking')."""
+    s = (text or "").strip().rstrip(".!,")
+    s = _NAME_LEADIN_RE.sub("", s).strip()
+    if not s or len(s.split()) > 2:
+        return ""
+    return s.title() if is_valid_name(s) else ""
+
+
 def missing_profile_field(profile: Dict[str, str]) -> Optional[str]:
     """Return a human-readable label for the next missing/invalid field, or None if profile is complete.
     Last name is intentionally NOT required - it's optional metadata that should
@@ -8124,7 +8148,16 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
         _reconfirm_live = bool(get_pending_reconfirmation(from_number, to_number))
     except Exception:
         _reconfirm_live = False
-    if _s15_asked_before and not _fin_answered and _fin_asked < 1 and not _reconfirm_live:
+    # A booking in flight counts as well as an explicit STEP 1.5 ask: a customer
+    # who leads with "I have a trade-in" goes straight into the trade-in chase
+    # and the bundled STEP 1.5 question never goes out, so requiring it meant
+    # financing was never asked at all on exactly the threads that need it most.
+    try:
+        _booking_in_flight = bool(get_pending(from_number, to_number))
+    except Exception:
+        _booking_in_flight = False
+    if ((_s15_asked_before or _booking_in_flight)
+            and not _fin_answered and _fin_asked < 1 and not _reconfirm_live):
         new_reply = _FINANCING_ASK
         try:
             conn = _db()
@@ -8970,7 +9003,11 @@ def _process_message(from_number: str, to_number: str, body: str):
         treat_as_name_reply = False
         save_kwargs: Dict[str, Any] = {}
         if is_likely_name:
-            tokens = [t for t in body.strip().split() if t]
+            # Strip the lead-in FIRST. "its evan" used to tokenize as
+            # first="its" (rejected as filler) + last="Evan", so the real name
+            # landed in last_name, first_name stayed empty, and the flow asked
+            # "could I get your first name?" forever.
+            tokens = [t for t in _NAME_LEADIN_RE.sub("", body.strip()).split() if t]
             new_first = tokens[0].title() if tokens else ""
             new_last = tokens[1].title() if len(tokens) >= 2 else None
             # Use the stricter _looks_like_real_name (filler-word check) so
@@ -10376,6 +10413,25 @@ def _process_message(from_number: str, to_number: str, body: str):
             save_customer_profile(from_number, to_number, **save_kwargs)
             customer_profile = get_customer_profile(from_number, to_number)
             customer_name = customer_profile["name"]
+
+    # Deterministic name backstop for the non-pending path. Same failure as
+    # above: the LLM's META extractor misses "its evan" / "this is evan", and the
+    # flow re-asks for the name it was just given. Only runs when we have no name
+    # AND the bot's last message actually asked for one.
+    if not (customer_profile.get("name") or "").strip():
+        _last_bot_msg = ""
+        for _m in reversed(history or []):
+            if _m.get("role") == "assistant":
+                _last_bot_msg = (_m.get("content") or "").lower()
+                break
+        if "name" in _last_bot_msg and "?" in _last_bot_msg:
+            _recovered_name = name_from_direct_answer(body)
+            if _recovered_name:
+                save_customer_profile(from_number, to_number, name=_recovered_name)
+                customer_profile = get_customer_profile(from_number, to_number)
+                customer_name = customer_profile["name"]
+                app.logger.info("Name recovered from direct answer for %s: %r",
+                                from_number, _recovered_name)
 
     # Did THIS turn actually commit something schedule-shaped (a booked
     # appointment or a held/pending one)? Drives the phantom-booking guard below.
