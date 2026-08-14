@@ -2280,6 +2280,38 @@ def _step_1_5_asked(history: List[Dict[str, Any]]) -> bool:
     return False
 
 
+# Whether each half of STEP 1.5 has actually been ADDRESSED — by the customer
+# answering, or by us having asked the focused question. Deliberately content-
+# based rather than matching our own bundled wording: the LLM paraphrases the
+# question ("...or is there a trade-in you'd like us to take a look at?" with no
+# mention of financing), and a wording match then reported "never asked" and
+# re-fired the whole bundled question at a customer who had just handed over
+# full trade-in details. That loop is what this replaces.
+_TRADE_MENTION_RE = re.compile(
+    r"\b(?:trade|trading)[\s\-]?in\b|\bhave\s+a\s+trade\b|\btrade\s+something\b|"
+    r"\bgot\s+a\s+trade\b|\bno\s+trade\b", re.I)
+
+
+def _trade_addressed(history: List[Dict[str, Any]]) -> bool:
+    for m in history or []:
+        c = m.get("content") or ""
+        if m.get("role") == "user" and _TRADE_MENTION_RE.search(c):
+            return True
+        if m.get("role") == "assistant" and _TRADE_ASK_MARK in c:
+            return True
+    return False
+
+
+def _financing_addressed(history: List[Dict[str, Any]]) -> bool:
+    for m in history or []:
+        c = m.get("content") or ""
+        if m.get("role") == "user" and _FINANCING_ANSWER_RE.search(c):
+            return True
+        if m.get("role") == "assistant" and _FINANCING_ASK_MARK in c:
+            return True
+    return False
+
+
 _STEP_1_5_QUESTION = ("Got it - {when} for the {car}. Any other questions about it, "
                       "are you interested in financing, or do you have a trade-in "
                       "you'd like us to take a look at?")
@@ -8190,12 +8222,15 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
     # so a customer who answered only the financing half of STEP 1.5 was never
     # asked about a trade at all. Ask once, so both halves are always collected
     # before we move on to name/email and the confirmation.
-    _trade_addressed = _trade_mentioned_by_customer or any(
+    # NB: local name deliberately differs from the module-level _trade_addressed
+    # helper — assigning that name here would shadow the function for this whole
+    # function body.
+    _trade_ok_now = _trade_mentioned_by_customer or any(
         _TRADE_ASK_MARK in (m.get("content") or "")
         for m in history if m.get("role") == "assistant"
     )
     if ((_s15_asked_before or _booking_in_flight)
-            and not _trade_addressed and not _reconfirm_live):
+            and not _trade_ok_now and not _reconfirm_live):
         new_reply = _TRADE_ASK
         try:
             conn = _db()
@@ -8447,38 +8482,43 @@ def sms_webhook():
 
     _twiml_out = _process_message(from_number, to_number, body)
 
-    # STEP 1.5 parity with the widget. The LLM skips the questions/financing/
-    # trade-in ask on SMS exactly like it does on the web, but this enforcement
-    # was only ever wired into /chat — so texting collected NO financing or
-    # trade-in signal, while calls and the widget both did. Run the same guard
-    # here and rebuild the TwiML when it rewrites the reply. (_maybe_inject_step_1_5
-    # also updates the stored assistant message and sets the pending row, so the
-    # DB and the SMS stay in agreement.)
+    # Run the SAME post-processing chain the widget runs. /chat has always
+    # applied these three injectors after _process_message; /sms applied none of
+    # them, which is why texting behaved differently from the widget on booking
+    # flow, day references, and names. One chain, both channels — rather than a
+    # second set of rules bolted into _process_message.
+    _post_before = (g.get("captured_reply") or "")
+    _post_dealer_phone = ""
     try:
-        _s15_before = (g.get("captured_reply") or "")
-        _s15_dealer_phone = ""
+        _post_dealer_phone = normalize_phone(get_row_field(
+            select_dealer_for_twilio_number(read_dealers(), to_number),
+            DEALER_NOTIFY_PHONE_ALIASES))
+    except Exception:
+        pass
+    for _inject_name, _inject in (
+        ("step 1.5", lambda: _maybe_inject_step_1_5(
+            from_number, to_number, dealer_phone=_post_dealer_phone)),
+        ("day-in-time", lambda: _maybe_inject_day_in_time(from_number, to_number)),
+        ("customer-name", lambda: _maybe_fix_customer_name_in_reply(from_number, to_number)),
+    ):
         try:
-            _s15_dealer_phone = normalize_phone(get_row_field(
-                select_dealer_for_twilio_number(read_dealers(), to_number),
-                DEALER_NOTIFY_PHONE_ALIASES))
-        except Exception:
-            pass
-        if _maybe_inject_step_1_5(from_number, to_number, dealer_phone=_s15_dealer_phone):
-            _s15_after = (g.get("captured_reply") or "")
-            if _s15_after and _s15_after != _s15_before:
-                _rebuilt = MessagingResponse()
-                for _chunk in _split_for_sms(_s15_after):
-                    _rebuilt.message(_chunk)
-                # Re-attach the primer if this turn was supposed to send one —
-                # _reply_twiml already marked it sent, so dropping it here would
-                # mean the customer never receives the terms/capability notice.
-                _s15_primer = g.get("captured_primer")
-                if _s15_primer:
-                    _rebuilt.message(_s15_primer)
-                app.logger.info("SMS STEP 1.5 injected for %s", from_number)
-                return str(_rebuilt)
-    except Exception as e:
-        app.logger.warning("SMS step 1.5 injection failed: %s", e)
+            _inject()
+        except Exception as e:
+            app.logger.warning("SMS %s injection failed: %s", _inject_name, e)
+
+    _post_after = (g.get("captured_reply") or "")
+    if _post_after and _post_after != _post_before:
+        _rebuilt = MessagingResponse()
+        for _chunk in _split_for_sms(_post_after):
+            _rebuilt.message(_chunk)
+        # Re-attach the primer if this turn was supposed to send one —
+        # _reply_twiml already marked it sent, so dropping it here would mean
+        # the customer never receives the terms/capability notice.
+        _post_primer = g.get("captured_primer")
+        if _post_primer:
+            _rebuilt.message(_post_primer)
+        app.logger.info("SMS reply rewritten by widget injector chain for %s", from_number)
+        return str(_rebuilt)
 
     return _twiml_out
 
@@ -10526,27 +10566,11 @@ def _process_message(from_number: str, to_number: str, body: str):
                     )
                     visit_time = ""  # short-circuit auto-book
 
-        # STEP 1.5 GATE. Never auto-book before asking about other questions,
-        # financing, and a trade-in — that ask is where the dealer's lead value
-        # is, and a returning customer with a complete profile used to sail
-        # straight past it into a confirmed appointment. Downgrade the confirm
-        # into a held pending + the STEP 1.5 question; the existing pending flow
-        # finishes the booking once they answer. Service appointments are exempt
-        # (financing/trade-in is sales-only), as are general visits with no car.
-        if visit_time and meta.get("confirmed"):
-            _s15_hist = get_recent_messages(from_number, to_number, limit=30)
-            _s15_specific = (car_desc or "").strip().lower() not in _GENERIC_CAR_DESCS
-            if (_s15_specific and not _step_1_5_asked(_s15_hist)
-                    and not _is_service_appointment_context(_s15_hist)):
-                set_pending(from_number, to_number, dealer_phone, visit_time,
-                            visit_time_iso, car_desc)
-                reply_text = _STEP_1_5_QUESTION.format(when=visit_time, car=car_desc)
-                app.logger.info(
-                    "Held auto-book for STEP 1.5 (financing/trade-in): %s / %r",
-                    from_number, car_desc)
-                _appt_committed = True
-                visit_time = ""  # short-circuit the booking block below
-
+        # NOTE: STEP 1.5 (questions / financing / trade-in) is NOT gated here.
+        # It is enforced by _maybe_inject_step_1_5, which runs AFTER this function
+        # on both /chat and /sms. A second gate inside this function competed with
+        # that injector and re-asked questions the customer had already answered.
+        # One enforcement point, shared by both channels.
         if visit_time:
             missing = missing_profile_field(customer_profile)
             if missing:
@@ -10678,16 +10702,10 @@ def _process_message(from_number: str, to_number: str, body: str):
                         break
                 set_pending(from_number, to_number, dealer_phone, _fb_display, _fb_iso,
                             _fb_car or "a vehicle")
+                # STEP 1.5 is left to _maybe_inject_step_1_5 (see note above) so
+                # there is exactly one place that decides it.
                 _fb_missing = missing_profile_field(customer_profile)
-                _fb_hist = get_recent_messages(from_number, to_number, limit=30)
-                _fb_needs_15 = (_fb_car.strip().lower() not in _GENERIC_CAR_DESCS
-                                and not _step_1_5_asked(_fb_hist)
-                                and not _is_service_appointment_context(_fb_hist))
-                if _fb_needs_15:
-                    # Same gate as the meta path: financing/trade-in comes before
-                    # we start collecting profile fields or confirming.
-                    reply_text = _STEP_1_5_QUESTION.format(when=_fb_display, car=_fb_car)
-                elif _fb_missing:
+                if _fb_missing:
                     reply_text = (f"I have your appointment for {_fb_display} on hold. "
                                   f"Could I please get your {_fb_missing} so I can lock it in?")
                 else:
