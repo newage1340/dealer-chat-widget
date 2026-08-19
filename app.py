@@ -15864,6 +15864,17 @@ def voice_handle():
         r"(link|listing|detail|info|photo|pic|picture|carfax)", _reply_apos, re.I))
     _human_cb = bool(re.search(
         r"\b(call|reach out|ring|buzz|phone|get back to you)\b", _reply_apos, re.I))
+    # A STAFF handoff is not a bot info-send. The voice prompt's own approved
+    # wrap-up line is "someone will text you the details" — which matches the
+    # _info_send pattern above (text ... details), so the wrap-up got cancelled
+    # and the appointment was never committed. Observed 2026-08-19 22:39: the
+    # caller said "yes" to confirm and the bot just kept talking instead of
+    # booking. "someone / the team ... text|send|reach" is a handoff, not the
+    # bot promising to text a link itself.
+    if re.search(r"\b(someone|somebody|one of (?:us|our)|our team|the team|a rep|"
+                 r"the guys|sales team)\b[^.?!]{0,40}\b(text|send|shoot|email|reach|contact)\b",
+                 _reply_apos, re.I):
+        _human_cb = True
     # Don't keep the line open if the CALLER clearly wrapped up ("that's all,
     # bye") — leftover "I'll text you the details" chatter must not block a real
     # goodbye hang-up.
@@ -15905,9 +15916,12 @@ def voice_handle():
         if _claims_appt and _nudges < 2:
             _VOICE_BOOKING_NUDGES[call_sid] = _nudges + 1
             _take_msg = False
+            # Same bracket tolerance as the info-send stripper: the goodbye is
+            # followed by the control token, so a plain $ anchor never matched
+            # and the caller heard "Take it easy! Before I lock that in - ...".
             raw_reply = re.sub(
                 r"\s*(take it easy|have a (?:great|good)[^.!?]*|talk soon|bye[^.!?]*|"
-                r"take care[^.!?]*)[.!]*\s*$", "", raw_reply, flags=re.I).rstrip()
+                r"take care[^.!?]*)[.!]*\s*(?:\[[^\]]*\]\s*)*$", "", raw_reply, flags=re.I).rstrip()
             # Ask for whatever intake the model actually skipped, rather than
             # jumping to the readback. Steps 2-4 of the voice prompt (trade-in,
             # financing, anything else) are exactly what it dropped on the
