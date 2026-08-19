@@ -2356,6 +2356,21 @@ _FINANCING_ANSWER_RE = re.compile(
 _GENERIC_CAR_DESCS = {"general visit", "general", "visit", "a vehicle", ""}
 
 
+# Voice equivalent of _CLAIMS_BOOKING_RE, widened from real call transcripts.
+# The model invents new phrasings constantly ("I'll have someone ready for you
+# tomorrow at 10 AM", "thanks for booking!"), and each one that slips through is
+# a lost appointment, so this is deliberately generous — it only ever causes the
+# server to COMMIT a booking the transcript already supports.
+_VOICE_CLAIMS_VISIT_RE = re.compile(
+    r"(appointment|got (?:you|ya) down|on the books|set (?:you|ya) up|"
+    r"(?:you'?re|your) all set|thanks for booking|see (?:you|ya)|"
+    r"we'?ll see (?:you|ya)|have (?:someone|somebody) ready|ready for (?:you|ya)|"
+    r"look(?:ing)? forward to seeing (?:you|ya)|book(?:ed|ing)?\s+(?:you|ya)|"
+    r"(?:you'?re|your) (?:booked|scheduled|confirmed))",
+    re.I,
+)
+
+
 def _reply_claims_booking(text: str) -> bool:
     """True if this reply TELLS the customer they already have an appointment.
     Used to catch the 'phantom booking': the LLM writes "You're all set, see you
@@ -5288,6 +5303,13 @@ _FINANCING_LINK_RE = re.compile(
     r"(?:financing|finance|credit)\s+(?:link|application|app|form|url)|"
     r"(?:link|application|apply|form)\s+(?:for|to)\s+(?:financ|credit)|"
     r"apply\s+(?:for\s+)?(?:financ\w*|credit)|"
+    # "a link you can send me to apply online" — the caller never says the word
+    # "financing" in the sentence, so every branch above misses it and the
+    # VEHICLE-link matcher ("link" + "send me") wins, texting a car listing
+    # instead of the credit application. Reproduced live 2026-08-19.
+    r"appl(?:y|ication)\s+(?:on[-\s]?line|over\s+the\s+phone)|"
+    r"(?:on[-\s]?line|credit)\s+application|"
+    r"(?:link|url)[^.?!]{0,40}\bto\s+apply\b|"
     r"(?:send|text|shoot|get)\s+(?:me\s+)?(?:the\s+|that\s+)?"
     r"(?:financ\w*|credit|pre[-\s]?approval)\s*(?:link|application|app|form))\b",
     re.I)
@@ -16192,6 +16214,21 @@ def voice_handle():
 
     save_message(from_number, to_number, "assistant", say_text, call_sid=call_sid)
 
+    # Did this reply tell the caller a visit is happening? Drives the booking
+    # rescue inside the handoff thread below.
+    _voice_booking_claimed = bool(_VOICE_CLAIMS_VISIT_RE.search(say_text or ""))
+    if not _voice_booking_claimed and has_clock_time(say_text or ""):
+        # Novel phrasing: the bot restated a clock time while wrapping up AND the
+        # caller had proposed a time earlier. That is a booking in everything but
+        # wording ("I'll have someone ready for you tomorrow at 10 AM").
+        try:
+            _voice_booking_claimed = any(
+                has_clock_time(_m.get("content") or "")
+                for _m in (history or [])
+                if isinstance(_m, dict) and _m.get("role") == "user")
+        except Exception:
+            _voice_booking_claimed = False
+
     handoff_was_done = call_sid in _VOICE_HANDOFF_DONE
     if (take_message or transfer) and not handoff_was_done:
         if len(_VOICE_HANDOFF_DONE) > 2000:
@@ -16305,6 +16342,57 @@ def voice_handle():
                             )
                         except Exception as e:
                             app.logger.warning("voice customer confirmation SMS failed: %s", e)
+
+                # DETERMINISTIC BOOKING RESCUE. The model does not always emit
+                # META_JSON — on a "send me the CarFax, then I'll come see it"
+                # call it stays in take-message mode and wraps with "thanks for
+                # booking! We'll see you tomorrow at 10 AM" while committing
+                # nothing. The caller believes they have an appointment and the
+                # dealer has no record. Nudging the model to do it (the readback
+                # prompt above) works sometimes and is bounded at two tries, so
+                # when the transcript already contains everything a booking
+                # needs, commit it here instead of losing it.
+                # Gated on the bot's own reply CLAIMING a visit, so a caller who
+                # merely said a time ("call me back at 3pm") is never booked.
+                elif _voice_booking_claimed:
+                    _r_time = _r_iso = ""
+                    for _m in reversed(full_history):
+                        if isinstance(_m, dict) and _m.get("role") == "user":
+                            _d, _i = parse_visit_time_from_text(_m.get("content") or "")
+                            if _d:
+                                _r_time, _r_iso = _d, _i
+                                break
+                    _r_car = ""
+                    for _m in reversed(full_history):
+                        _cm = re.search(r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,5})",
+                                        (_m.get("content") or "") if isinstance(_m, dict) else "")
+                        if _cm:
+                            _r_car = _cm.group(1).strip().rstrip(".,!?")
+                            break
+                    if _r_time and not get_latest_appointment(from_number, to_number):
+                        _r_name = (customer_profile or {}).get("name", "") or "there"
+                        try:
+                            log_appointment(from_number, to_number,
+                                            normalize_phone(get_row_field(
+                                                dealer_row, DEALER_NOTIFY_PHONE_ALIASES)),
+                                            _r_time, _r_iso, _r_car or "general visit")
+                            app.logger.warning(
+                                "voice/handle: RESCUED booking with no META_JSON — %r / %r (call %s)",
+                                _r_time, _r_car or "general visit", call_sid)
+                        except Exception as e:
+                            app.logger.warning("voice booking rescue commit failed: %s", e)
+                        try:
+                            notify_customer_appointment(
+                                dealer_row, customer_phone=from_number,
+                                twilio_number=to_number, customer_name=_r_name,
+                                visit_time=_r_time, car_desc=_r_car or "general visit",
+                                action="confirmed")
+                        except Exception as e:
+                            app.logger.warning("voice rescue confirmation SMS failed: %s", e)
+                        try:
+                            mark_cold_followup_sent(from_number, to_number)
+                        except Exception:
+                            pass
             except Exception as e:
                 app.logger.warning("voice handoff notify failed: %s", e)
             finally:
