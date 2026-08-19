@@ -15870,9 +15870,15 @@ def voice_handle():
     _caller_wrapped = _looks_like_voice_wrapup(speech) and not _has_scheduling_intent(speech)
     if _info_send and not _human_cb and not _caller_wrapped:
         _take_msg = False
+        # The goodbye is often followed by the control token, e.g. the reply
+        # ends with a newline then [TAKE_MESSAGE], so a plain $ anchor never
+        # matched. The caller then heard "Take it easy! That everything for
+        # ya?" (observed 2026-08-19 22:17). Allow trailing bracket tokens.
+        # Safe to drop the token here: _take_msg is already False above, and
+        # [TRANSFER]/[HANGUP] are matched separately.
         raw_reply = re.sub(
             r"\s*(take it easy|have a (?:great|good)[^.!?]*|talk soon|bye[^.!?]*|"
-            r"take care[^.!?]*)[.!]*\s*$", "", raw_reply, flags=re.I).rstrip()
+            r"take care[^.!?]*)[.!]*\s*(?:\[[^\]]*\]\s*)*$", "", raw_reply, flags=re.I).rstrip()
         if not raw_reply.rstrip().endswith("?"):
             raw_reply = (raw_reply.rstrip(" .!") + ". " + random.choice(
                 ["Anything else?", "Anything else I can help with?",
