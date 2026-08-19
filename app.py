@@ -15413,12 +15413,42 @@ def voice_handle():
         raw_reply = _disambig_q
         app.logger.info("voice/handle: deterministic disambiguation override")
 
+    # TRADE-IN CONTEXT. When the caller is naming the car they want to TRADE IN,
+    # that vehicle must never be run through inventory search. Observed
+    # 2026-08-19: caller answered the trade-in question with "it's a 2006 Honda
+    # Accord, 209k miles, clean title" and the deterministic alternatives block
+    # replied "we don't have that exact one on the lot, but for sedans we've
+    # got..." — trying to SELL them a replacement for their own car, which
+    # derailed the booking entirely. SMS never had this bug because it saves the
+    # trade-in to the profile and injects a "this is NOT an inventory car"
+    # warning; the voice prompt has no such awareness, so suppress the
+    # inventory paths for the turn instead.
+    _trade_ctx = False
+    try:
+        _last_bot_msg = ""
+        for _m in reversed(history or []):
+            if isinstance(_m, dict) and _m.get("role") == "assistant":
+                _last_bot_msg = (_m.get("content") or "").lower()
+                break
+        _trade_ctx = (
+            bool(re.search(r"\btrad(?:e|ing)[\s-]?in\b", _last_bot_msg))
+            or bool(_TRADE_MENTION_RE.search(speech or ""))
+            or any(_TRADE_MENTION_RE.search(_m.get("content") or "")
+                   for _m in (history or [])
+                   if isinstance(_m, dict) and _m.get("role") == "user")
+        )
+    except Exception as _e:
+        app.logger.warning("voice trade-in context check failed: %s", _e)
+        _trade_ctx = False
+    if _trade_ctx:
+        app.logger.info("voice/handle: trade-in context — inventory search suppressed")
+
     # Deterministic inventory Q&A: "cheapest/most expensive [category]" and
     # "do you have any trucks/hybrids/etc." — computed from the real inventory so
     # the LLM can't misquote the cheapest car, deny stock we have, or call a gas
     # car a hybrid.
     _inv_q = ""
-    if not _disambig_q:
+    if not _disambig_q and not _trade_ctx:
         # EXACT price of the car in focus wins first: "what's the exact price / how
         # much is it" about the car already being discussed must state THAT car's
         # real number — not trigger a "closest to $X" search (which hijacked
@@ -15548,7 +15578,9 @@ def voice_handle():
     # model we DON'T carry (e.g. an F-150). The LLM kept offering wrong-category
     # vehicles (cargo vans for a truck), so we build the alternatives reply from
     # the REAL in-category list ourselves — it physically cannot substitute a van.
-    _alt_cat = _model_implies_category(speech, inventory_rows)
+    # Skipped in trade-in context — this is the block that offered a Kia Forte as
+    # an "alternative" to the caller's own 2006 Accord trade-in.
+    _alt_cat = None if _trade_ctx else _model_implies_category(speech, inventory_rows)
     if _alt_cat:
         _alt_reply = _build_similar_reply(_alt_cat, inventory_rows)
         if _alt_reply:
