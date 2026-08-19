@@ -16354,7 +16354,13 @@ def voice_handle():
                 # needs, commit it here instead of losing it.
                 # Gated on the bot's own reply CLAIMING a visit, so a caller who
                 # merely said a time ("call me back at 3pm") is never booked.
-                elif _voice_booking_claimed:
+                # Authorized either by the FINAL reply claiming a visit, or by the
+                # readback backstop having already fired earlier in this call —
+                # that nudge only happens when the code detected a booking claim,
+                # so it is proof the caller was told a visit was happening even if
+                # the last thing said was a bland "someone will text you the
+                # details" (exactly how the CarFax→book call lost its booking).
+                elif _voice_booking_claimed or _VOICE_BOOKING_NUDGES.get(call_sid, 0) > 0:
                     _r_time = _r_iso = ""
                     for _m in reversed(full_history):
                         if isinstance(_m, dict) and _m.get("role") == "user":
