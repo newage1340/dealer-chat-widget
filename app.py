@@ -2392,7 +2392,7 @@ _VOICE_CLAIMS_VISIT_RE = re.compile(
     r"look(?:ing)? forward to seeing (?:you|ya)|book(?:ed|ing)?\s+(?:you|ya)|"
     r"(?:you'?re|your) (?:booked|scheduled|confirmed)|"
     r"(?:for|about) your visit|your visit\b|"
-    r"works for the\b|coming in at\b|get (?:you|ya) in\b|"
+    r"works for the\b|coming in\b|get (?:you|ya) in\b|"
     r"(?:see|have) (?:you|ya) (?:then|tomorrow|today))",
     re.I,
 )
@@ -6458,10 +6458,19 @@ def _trade_in_from_text(history: List[Dict[str, Any]]) -> str:
         if _has_trade_in(text):
             candidates.append(text)
             continue
-        # the turn right after the bot asked about a trade-in
+        # The turn right AFTER the bot asked about a trade-in...
         prev = msgs[idx - 1] if idx else None
         if prev and prev.get("role") == "assistant" and re.search(
                 r"\btrad(?:e|ing)[\s-]?in\b", (prev.get("content") or ""), re.I):
+            candidates.append(text)
+            continue
+        # ...and the turn the bot ANSWERED as a trade-in. Callers volunteer the
+        # car before being asked ("yeah I have a Honda Accord") and the bot picks
+        # it up ("do you have anything to trade in, like your Honda Accord?").
+        # Without this the vehicle was never captured on that ordering.
+        nxt = msgs[idx + 1] if idx + 1 < len(msgs) else None
+        if nxt and nxt.get("role") == "assistant" and re.search(
+                r"\btrad(?:e|ing)[\s-]?in\b", (nxt.get("content") or ""), re.I):
             candidates.append(text)
     if not candidates:
         return ""
@@ -15729,9 +15738,14 @@ def voice_handle():
         # NO anchor fallback: on a pure scheduling turn ("I can be there at noon")
         # the car is already established, and pulling it from the anchor here made
         # the confirm re-fire = the double-confirm bug.
+        # Strip pronouns AND clock times before matching. "I can be there at ONE
+        # thirty" fuzzy-matched the model literally named "Mullen One" and the bot
+        # read back "the 2024 Mullen One, the White one, about 0 miles - that the
+        # one you're after?" in the middle of booking a Camry (2026-08-20 16:55).
+        _cc_speech = _strip_anaphora(speech or "")
         _cc = _find_exact_year_make_match(speech, inventory_rows)
-        if not _cc and _body_mentions_car(speech, inventory_rows):
-            _ccm = find_inventory_matches(inventory_rows, speech, top_k=1, current_msg=speech)
+        if not _cc and _body_mentions_car(_cc_speech, inventory_rows):
+            _ccm = find_inventory_matches(inventory_rows, _cc_speech, top_k=1, current_msg=_cc_speech)
             _cc = _ccm[0] if _ccm else None
         # YEAR GUARD: if the caller named a year, the read-back car MUST be that
         # year. The fuzzy find_inventory_matches fallback otherwise mismatched
@@ -15943,11 +15957,30 @@ def voice_handle():
     # common path — the LLM tends to ask "want me to send it?" first) still fires.
     elif _wants_financing_link_sent(speech, history):
         _pre_url = _preapproval_link(dealer_row)
-        if _pre_url:
+        # Did we already text the pre-approval link earlier in THIS call? The
+        # bot offers it, the caller says "yes please", we send. Then every later
+        # "yes" (confirming the readback, saying "yes I got it") re-triggered the
+        # affirm branch and sent it AGAIN — three copies in ninety seconds on
+        # 2026-08-20. Same once-per-call guard the CarFax path already uses, with
+        # the same explicit-resend override.
+        _pre_already = bool(_pre_url) and any(
+            "pre-approval link" in (m.get("content") or "").lower()
+            or (_pre_url and _pre_url in (m.get("content") or ""))
+            for m in history if isinstance(m, dict) and m.get("role") == "assistant")
+        _pre_resend = bool(re.search(
+            r"\b(again|re-?send|resend|one more time|another (?:one|copy|time)|"
+            r"didn'?t (?:get|receive|come|see)|did not (?:get|receive)|"
+            r"not (?:there|come|showing|through)|never (?:got|came|received)|"
+            r"can'?t find)\b", speech, re.I))
+        if _pre_already and not _pre_resend:
+            # Already sent. Leave the LLM's reply alone so the call keeps moving
+            # instead of looping "just texted you the link" every turn.
+            app.logger.info("voice/handle: pre-approval link already sent this call - not resending")
+        elif _pre_url:
             ok, _info = _send_sms(from_number, to_number,
                                   f"Here's the link to get pre-approved for financing: {_pre_url}")
-            app.logger.info("voice/handle: preapproval link SMS to=%s url=%s ok=%s (%s)",
-                            from_number, _pre_url, ok, _info)
+            app.logger.info("voice/handle: preapproval link SMS to=%s url=%s ok=%s resend=%s (%s)",
+                            from_number, _pre_url, ok, _pre_resend, _info)
             _tail = random.choice(["Anything else?", "Need anything else while I've got ya?",
                                    "That everything for ya?", "Anything else I can grab for ya?"])
             raw_reply = (f"Just texted you the pre-approval link — only takes a couple minutes to fill out. {_tail}"
@@ -16354,20 +16387,28 @@ def voice_handle():
 
     # The OTHER redundant recap the model does at the trade-in / financing step:
     # "So, just to confirm, you're coming in at 5 PM to check out the Passat, and
-    # you're trading in the Accord... — financing or cash?". The existing stripper
-    # only catches "got you DOWN"; this one is phrased "you're coming in at". Keyed
-    # on the present-tense "you're coming in at" — the FINAL readback says "got you
-    # coming in at" and always ends with the number confirm — and gated on the reply
-    # NOT containing the "best number" ask, so the single legit readback is never
-    # touched. Only applied when real content remains, so it can't blank a reply.
-    if not re.search(r"best number", say_text, re.I):
-        _derecap2 = re.sub(
-            r"(?i)\b(?:so,?\s*)?(?:just to confirm,?\s*)?you'?re coming in at\b[^.?!]*[.?!]\s*",
-            "", say_text)
-        _derecap2 = re.sub(r"\s{2,}", " ", _derecap2).strip()
-        if _derecap2 != say_text and len(_derecap2) >= 12:
-            say_text = _derecap2
-            app.logger.info("voice/handle: stripped redundant recap (intake-turn confirm)")
+    # you're trading in the Accord... - financing or cash?".
+    #
+    # This used to be gated on the reply NOT containing "best number", because
+    # the single legitimate final readback always ended with the number confirm.
+    # That confirm has since been removed from the prompt, so the gate stopped
+    # protecting anything and the REAL readback got gutted down to a bare
+    # "Got it! That all sound right?" - which is what confused the caller on
+    # 2026-08-20 16:57.
+    #
+    # Correct gate: only strip when the recap is followed by MORE INTAKE (a
+    # trade-in / financing / anything-else question). If nothing but a
+    # confirmation question remains, this IS the final readback - leave it alone.
+    _derecap2 = re.sub(
+        r"(?i)\b(?:so,?\s*)?(?:just to confirm,?\s*)?you'?re coming in at\b[^.?!]*[.?!]\s*",
+        "", say_text)
+    _derecap2 = re.sub(r"\s{2,}", " ", _derecap2).strip()
+    _still_asks_intake = bool(re.search(
+        r"trad(?:e|ing)|financ|paying cash|pass along|any other questions",
+        _derecap2, re.I))
+    if _derecap2 != say_text and len(_derecap2) >= 12 and _still_asks_intake:
+        say_text = _derecap2
+        app.logger.info("voice/handle: stripped redundant recap (intake-turn confirm)")
 
     # BOOKING JUST COMMITTED → force a SHORT closing so the bot can't recap the
     # whole appointment a SECOND time. The full readback already happened on the
@@ -16434,6 +16475,68 @@ def voice_handle():
             _voice_booking_claimed = False
 
     handoff_was_done = call_sid in _VOICE_HANDOFF_DONE
+    # LATE BOOKING RESCUE. The full handoff (summary + staff alert + booking
+    # commit) only runs the FIRST time a call hands off. If something earlier in
+    # the call already triggered one - a CarFax send that came back with a
+    # callback-shaped reply, say - then the caller settles on a time two turns
+    # later, that booking could never be committed: the whole block is behind
+    # `not handoff_was_done`. Observed 2026-08-20, caller said "tomorrow at 10 am
+    # works" and the call ended with no appointment.
+    #
+    # This runs ONLY the booking commit, never a second staff alert, and only
+    # when the caller has no appointment on file yet.
+    if (take_message or transfer or hangup) and handoff_was_done and _voice_booking_claimed:
+        def _do_late_booking_rescue():
+            ctx = app.app_context()
+            ctx.push()
+            try:
+                if get_latest_appointment(from_number, to_number):
+                    return
+                _lh = get_call_messages(from_number, to_number, call_sid,
+                                        limit=MAX_MESSAGES_PER_CHAT) or []
+                _lt = _li = ""
+                for _m in reversed(_lh):
+                    if isinstance(_m, dict) and _m.get("role") == "user":
+                        _d, _iso = parse_visit_time_from_text(_m.get("content") or "")
+                        if _d:
+                            _lt, _li = _d, _iso
+                            break
+                if not _lt:
+                    return
+                _lc = ""
+                for _m in reversed(_lh):
+                    _cm = re.search(
+                        r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,7}?)"
+                        r"(?=\s+(?:to|at|for|is|are|was|has|have|and|in|on|with|"
+                        r"priced|about|that|the|it|you|your|we|i)\b|[.,!?;:]|$)",
+                        (_m.get("content") or "") if isinstance(_m, dict) else "", re.I)
+                    if _cm:
+                        _lc = _cm.group(1).strip().rstrip(".,!?")
+                        break
+                try:
+                    _dr = select_dealer_for_twilio_number(read_dealers(), to_number)
+                except Exception:
+                    _dr = {}
+                log_appointment(from_number, to_number,
+                                normalize_phone(get_row_field(_dr, DEALER_NOTIFY_PHONE_ALIASES)),
+                                _lt, _li, _lc or "general visit")
+                app.logger.warning(
+                    "voice/handle: LATE-RESCUED booking after an earlier handoff - %r / %r (call %s)",
+                    _lt, _lc or "general visit", call_sid)
+                try:
+                    notify_customer_appointment(
+                        _dr, customer_phone=from_number, twilio_number=to_number,
+                        customer_name=(customer_profile or {}).get("name", "") or "there",
+                        visit_time=_lt, car_desc=_lc or "general visit", action="confirmed")
+                except Exception as e:
+                    app.logger.warning("late-rescue confirmation SMS failed: %s", e)
+            except Exception as e:
+                app.logger.warning("late booking rescue failed: %s", e)
+            finally:
+                ctx.pop()
+
+        threading.Thread(target=_do_late_booking_rescue, daemon=True).start()
+
     if (take_message or transfer) and not handoff_was_done:
         if len(_VOICE_HANDOFF_DONE) > 2000:
             _VOICE_HANDOFF_DONE.clear()
@@ -16486,18 +16589,28 @@ def voice_handle():
                 # TRADE-IN CAPTURE. SMS saves the caller's trade-in vehicle to
                 # their profile so the dealer alert carries it as a real field and
                 # the bot never re-asks; voice never did, so the detail only ever
-                # survived inside the summary prose. Runs in this background
-                # thread, so the extra model call costs the caller no latency.
+                # survived inside the summary prose.
+                #
+                # The gate deliberately does NOT require a trade keyword in the
+                # caller's own words. The bot asks "anything you're thinking of
+                # trading in?" and people just answer "yeah I have a Honda Accord"
+                # - no keyword at all - which meant nothing was ever captured on
+                # the most natural phrasing there is (2026-08-20). _trade_in_from_text
+                # already scopes itself to trade-in turns, so a non-empty result
+                # from it IS the signal.
                 try:
-                    if any(_has_trade_in(_m.get("content") or "")
-                           for _m in full_history
-                           if isinstance(_m, dict) and _m.get("role") == "user"):
+                    _tiv_fb = _trade_in_from_text(full_history)
+                    _trade_turn = _tiv_fb or any(
+                        _has_trade_in(_m.get("content") or "")
+                        for _m in full_history
+                        if isinstance(_m, dict) and _m.get("role") == "user")
+                    if _trade_turn:
                         _tiv = extract_trade_in_vehicle(full_history)
                         if not _tiv:
                             # Model call came back empty (~1 in 5). Rebuild it
                             # from what the caller actually said instead of
                             # losing the trade-in from the dealer's alert.
-                            _tiv = _trade_in_from_text(full_history)
+                            _tiv = _tiv_fb
                             if _tiv:
                                 app.logger.info(
                                     "voice/handle: trade-in recovered deterministically: %s", _tiv)
