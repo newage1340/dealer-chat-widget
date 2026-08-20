@@ -1675,6 +1675,12 @@ _NON_NAME_WORDS = {
     "vehicle", "appointment", "time", "tomorrow", "today", "morning",
     "afternoon", "evening", "email", "phone", "number", "price", "payment",
     "down", "warranty", "insurance", "none", "nothing", "all", "set",
+    # Generic stand-ins the model invents when it never actually learned a name.
+    # It emitted customer_name "Customer" and the dealer alert then read
+    # "You're all set, Customer!" (seen 2026-08-19).
+    "customer", "client", "guest", "there", "friend", "buddy", "sir",
+    "maam", "ma'am", "unknown", "caller", "user", "someone", "anybody",
+    "everyone", "team", "staff", "dealer", "dealership", "sales",
 }
 
 
@@ -2369,6 +2375,21 @@ _VOICE_CLAIMS_VISIT_RE = re.compile(
     r"(?:you'?re|your) (?:booked|scheduled|confirmed))",
     re.I,
 )
+
+
+_SIGNOFF_RE = re.compile(
+    r"\s*(take it easy|have a (?:great|good)[^.!?]*|talk soon|bye[^.!?]*|"
+    r"take care[^.!?]*|see (?:you|ya) (?:soon|later)[^.!?]*)[.!]*\s*"
+    r"(?:\[[^\]]*\]\s*)*$", re.I)
+
+
+def _strip_signoff(text: str) -> str:
+    """Remove a trailing goodbye (and any control token after it) so the caller
+    never hears "Take it easy! Anything else?" — a sign-off immediately followed
+    by a question, which is the most obvious bot tell there is. The bracket
+    tolerance matters: the model emits the goodbye and THEN the control token, so
+    an end-anchored pattern without it silently fails to match."""
+    return _SIGNOFF_RE.sub("", text or "").rstrip()
 
 
 def _reply_claims_booking(text: str) -> bool:
@@ -6395,6 +6416,57 @@ _KNOWN_TRADE_IN_MAKES = {
 }
 
 
+def _trade_in_from_text(history: List[Dict[str, Any]]) -> str:
+    """Deterministic trade-in summary built from what the caller actually said.
+
+    Fallback for extract_trade_in_vehicle, which is a model call and comes back
+    empty on roughly one call in five — the conversation goes fine, the dealer
+    alert just loses the trade-in as a structured field.
+
+    Scoped on purpose: only the caller turns that MENTION the trade, or that
+    answer the bot's trade-in question, are searched. A blind scan of the whole
+    transcript would happily return the car they want to BUY ("I'm looking at
+    the 2023 Ford Escape") as their trade-in.
+    """
+    msgs = [m for m in (history or []) if isinstance(m, dict)]
+    candidates = []
+    for idx, m in enumerate(msgs):
+        if m.get("role") != "user":
+            continue
+        text = m.get("content") or ""
+        if _TRADE_MENTION_RE.search(text):
+            candidates.append(text)
+            continue
+        # the turn right after the bot asked about a trade-in
+        prev = msgs[idx - 1] if idx else None
+        if prev and prev.get("role") == "assistant" and re.search(
+                r"\btrad(?:e|ing)[\s-]?in\b", (prev.get("content") or ""), re.I):
+            candidates.append(text)
+    if not candidates:
+        return ""
+
+    blob = " ".join(candidates)
+    low = blob.lower()
+    # longest make first so "mercedes-benz" wins over "mercedes"; sorted keeps
+    # this deterministic (the source is a set).
+    make = ""
+    for cand in sorted(_KNOWN_TRADE_IN_MAKES, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(cand)}\b", low):
+            make = cand
+            break
+    if not make:
+        return ""
+    ym = (re.search(rf"\b(19[5-9]\d|20[0-2]\d)\s+{re.escape(make)}\b", low)
+          or re.search(r"\b(19[5-9]\d|20[0-2]\d)\b", low))
+    year = ym.group(1) if ym else ""
+    mm = re.search(rf"\b{re.escape(make)}\s+([A-Za-z][\w\-]{{1,14}})", low)
+    model = mm.group(1) if mm else ""
+    if model in ("i", "it", "and", "with", "that", "to", "for", "is",
+                 "has", "the", "in", "im", "want", "wanna"):
+        model = ""
+    parts = [p for p in (year, make.title(), model.title()) if p]
+    return " ".join(parts) if parts else ""
+
 def _trade_in_missing_parts(history: List[Dict[str, Any]]) -> List[str]:
     """Return list of trade-in details the customer hasn't shared yet.
     Possible values: 'year', 'make and model', 'mileage',
@@ -7931,6 +8003,15 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
                 f"Got it - {_time_phrase}for {_car_phrase}. Any other questions about it, "
                 f"are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
             )
+        elif not (_profile.get("name") or "").strip():
+            # Name BEFORE email. This branch used to jump straight to the email
+            # ask even with no name on file, so the customer answered "evan",
+            # got the identical email question again, and the booking ended up
+            # under the invented name "Customer" (seen 2026-08-19).
+            new_reply = (
+                f"Almost set! Before I lock in {_time_phrase}for {_car_phrase}, "
+                f"could I please get your first name?"
+            )
         elif not _email:
             new_reply = (
                 f"Almost set! Before I lock in {_time_phrase}for {_car_phrase}, "
@@ -7954,6 +8035,11 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
                     new_reply = _p3_focused or (
                         f"Got it - {_time_phrase}for {_car_phrase}. Any other questions about it, "
                         f"are you interested in financing, or do you have a trade-in you'd like us to take a look at?"
+                    )
+                elif not (_profile.get("name") or "").strip():
+                    new_reply = (
+                        f"Almost set! Before I lock in {_time_phrase}for {_car_phrase}, "
+                        f"could I please get your first name?"
                     )
                 elif not _email:
                     new_reply = (
@@ -8661,10 +8747,20 @@ _NAME_FILLER_WORDS = {
 }
 
 
+# A contraction is never a first name. Catches the whole family in one rule
+# instead of enumerating it: "i'll think about it" was being saved as the
+# customer name "I'll", and "don't"/"can't"/"we'll"/"let's" the same way, which
+# then went to the dealer as the lead's name (seen 2026-08-19). Names like
+# O'Brien and D'Angelo are unaffected — their apostrophe is a PREFIX, not one of
+# these verb suffixes.
+_CONTRACTION_RE = re.compile(r"^[A-Za-z]+['\u2019](?:ll|d|t|s|re|ve|m)$", re.I)
+
+
 def _looks_like_real_name(word: str) -> bool:
     # A real name has letters and NO digits — blocks a number ("100", "3") or STT
     # junk from ever being saved as the caller's name (the "name showed as 100" bug).
     return (bool(word) and word.lower() not in _NAME_FILLER_WORDS
+            and not _CONTRACTION_RE.match(word)
             and bool(re.search(r"[A-Za-z]", word)) and not re.search(r"\d", word)
             and is_valid_name(word))
 
@@ -9840,6 +9936,20 @@ def _process_message(from_number: str, to_number: str, body: str):
                         "visit_time": _pending_for_trade["visit_time"],
                         "car_desc": _pending_for_trade.get("car_desc", ""),
                     }
+            # Third fallback: the customer may have STATED a time that never got
+            # committed (the model replied with the STEP 1.5 question instead of
+            # emitting booking meta, so neither confirmed nor pending exists).
+            # Without this the trade-in followup asks "what day works to bring it
+            # in for the appraisal?", which throws away the visit they already
+            # picked and re-frames the whole booking around their trade-in — it
+            # then tried to book the caller's own 2006 Accord (seen 2026-08-19).
+            if not _appt_for_trade:
+                for _m in reversed(history or []):
+                    if isinstance(_m, dict) and _m.get("role") == "user":
+                        _vt_said, _ = parse_visit_time_from_text(_m.get("content") or "")
+                        if _vt_said:
+                            _appt_for_trade = {"visit_time": _vt_said, "car_desc": ""}
+                            break
             reply_text = deterministic_trade_in_followup(candidate_trade_in, history, confirmed_appt=_appt_for_trade)
             if not reply_text:
                 reply_text = ai_policy_reply(body, "trade-ins", tradeins, dealer_phone, history[-6:], customer_name=customer_name) or f"Regarding trade-ins: {tradeins}."
@@ -14552,6 +14662,37 @@ def _voice_bodystyle_grounding_directive(customer_msg: str,
     )
 
 
+def _voice_trade_in_directive(customer_msg: str, history) -> str:
+    """Tell the model the caller's own car is a TRADE-IN, not a shopping target.
+
+    Without this the voice bot reads "I have a 2006 Honda Accord I want to trade
+    in" as a request to BUY a Honda and starts pitching Honda Pilots (observed
+    2026-08-19 across several runs). The SMS path has carried an equivalent
+    warning for a long time; voice never did. Suppressing the deterministic
+    inventory blocks is not enough on its own, because the MODEL makes the same
+    mistake unprompted.
+    """
+    blob = " ".join(
+        (m.get("content") or "") for m in (history or [])
+        if isinstance(m, dict) and m.get("role") == "user"
+    ) + " " + (customer_msg or "")
+    if not _TRADE_MENTION_RE.search(blob):
+        return ""
+    return (
+        "\n\n=== THE CALLER HAS A TRADE-IN ===\n"
+        "A vehicle the caller describes as THEIRS is the car they want to TRADE "
+        "IN. It is NOT something they want to buy and it is NOT in our "
+        "inventory.\n"
+        "- NEVER search inventory for it, never say whether we have one, and "
+        "never offer similar vehicles as alternatives to it.\n"
+        "- NEVER use the trade-in vehicle as the car being booked.\n"
+        "- Acknowledge it in one short sentence (\"got it, the 2006 Accord\"), "
+        "collect year/make/model, mileage, title status and condition if they "
+        "have not been given, then get back to the car they actually want to "
+        "SEE.\n"
+    )
+
+
 def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
                               dealer_phone, customer_name="",
                               caller_phone: str = "",
@@ -14645,6 +14786,7 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
     bodystyle_block = _voice_bodystyle_grounding_directive(customer_msg, inventory_rows)
     absence_block = _voice_absence_directive(customer_msg, inventory_rows)
     handoff_block = _voice_handoff_directive(customer_msg, history, caller_phone, customer_name)
+    trade_in_block = _voice_trade_in_directive(customer_msg, history)
 
     # Caller's number is known from caller ID on every inbound call, so the bot
     # should CONFIRM it (read it back) rather than ask for it cold when booking /
@@ -14687,6 +14829,7 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
         + bodystyle_block # ground-truth body-style/category stock so it can't under-list minivans/SUVs/trucks
         + absence_block   # ground-truth "we don't carry that" so it can't confirm phantom models
         + caller_number_block  # confirm caller-ID number instead of asking for it
+        + trade_in_block  # caller's own car is a TRADE-IN, never an inventory search
         + handoff_block   # LAST: forces [TAKE_MESSAGE] when caller asked for a text/callback so the dealer actually gets notified
     )
 
@@ -15941,9 +16084,7 @@ def voice_handle():
         # ya?" (observed 2026-08-19 22:17). Allow trailing bracket tokens.
         # Safe to drop the token here: _take_msg is already False above, and
         # [TRANSFER]/[HANGUP] are matched separately.
-        raw_reply = re.sub(
-            r"\s*(take it easy|have a (?:great|good)[^.!?]*|talk soon|bye[^.!?]*|"
-            r"take care[^.!?]*)[.!]*\s*(?:\[[^\]]*\]\s*)*$", "", raw_reply, flags=re.I).rstrip()
+        raw_reply = _strip_signoff(raw_reply)
         if not raw_reply.rstrip().endswith("?"):
             raw_reply = (raw_reply.rstrip(" .!") + ". " + random.choice(
                 ["Anything else?", "Anything else I can help with?",
@@ -15973,9 +16114,7 @@ def voice_handle():
             # Same bracket tolerance as the info-send stripper: the goodbye is
             # followed by the control token, so a plain $ anchor never matched
             # and the caller heard "Take it easy! Before I lock that in - ...".
-            raw_reply = re.sub(
-                r"\s*(take it easy|have a (?:great|good)[^.!?]*|talk soon|bye[^.!?]*|"
-                r"take care[^.!?]*)[.!]*\s*(?:\[[^\]]*\]\s*)*$", "", raw_reply, flags=re.I).rstrip()
+            raw_reply = _strip_signoff(raw_reply)
             # Ask for whatever intake the model actually skipped, rather than
             # jumping to the readback. Steps 2-4 of the voice prompt (trade-in,
             # financing, anything else) are exactly what it dropped on the
@@ -16276,6 +16415,39 @@ def voice_handle():
                     # Safety net for legacy/untagged rows: a blended recap beats
                     # none. New calls always have tagged turns, so this is rare.
                     full_history = get_recent_messages(from_number, to_number, limit=MAX_MESSAGES_PER_CHAT)
+                # Runs BEFORE the summary: the summary is a slow model call, and
+                # burying the capture behind it delayed the trade-in landing in the
+                # profile (and lost it entirely if the summary threw).
+                # TRADE-IN CAPTURE. SMS saves the caller's trade-in vehicle to
+                # their profile so the dealer alert carries it as a real field and
+                # the bot never re-asks; voice never did, so the detail only ever
+                # survived inside the summary prose. Runs in this background
+                # thread, so the extra model call costs the caller no latency.
+                try:
+                    if any(_TRADE_MENTION_RE.search(_m.get("content") or "")
+                           for _m in full_history
+                           if isinstance(_m, dict) and _m.get("role") == "user"):
+                        _tiv = extract_trade_in_vehicle(full_history)
+                        if not _tiv:
+                            # Model call came back empty (~1 in 5). Rebuild it
+                            # from what the caller actually said instead of
+                            # losing the trade-in from the dealer's alert.
+                            _tiv = _trade_in_from_text(full_history)
+                            if _tiv:
+                                app.logger.info(
+                                    "voice/handle: trade-in recovered deterministically: %s", _tiv)
+                        if _tiv:
+                            _tiv = _augment_trade_in_with_condition(_tiv, full_history)
+                            _prev = ((customer_profile or {}).get("trade_in_vehicle") or "").strip()
+                            if _tiv != _prev:
+                                save_customer_profile(from_number, to_number,
+                                                      trade_in_vehicle=_tiv)
+                                app.logger.info(
+                                    "voice/handle: captured trade-in for %s: %s",
+                                    from_number, _tiv)
+                except Exception as e:
+                    app.logger.warning("voice trade-in capture failed: %s", e)
+
                 summary = _summarize_voice_call_for_dealer(
                     dealer_row, full_history, customer_profile, from_number,
                 )
@@ -16370,8 +16542,15 @@ def voice_handle():
                                 break
                     _r_car = ""
                     for _m in reversed(full_history):
-                        _cm = re.search(r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,5})",
-                                        (_m.get("content") or "") if isinstance(_m, dict) else "")
+                        # Non-greedy, stopping at a preposition/verb/punctuation.
+                        # A plain {0,5}-word grab swallowed the phone number out of
+                        # "...the 2023 Ford Escape Platinum to 3-1-7, 5-5-5..." and
+                        # the dealer saw that as the vehicle.
+                        _cm = re.search(
+                            r"\b((?:19|20)\d{2}\s+[A-Za-z][\w\-]*(?:\s+[\w\-]+){0,7}?)"
+                            r"(?=\s+(?:to|at|for|is|are|was|has|have|and|in|on|with|"
+                            r"priced|about|that|the|it|you|your|we|i)\b|[.,!?;:]|$)",
+                            (_m.get("content") or "") if isinstance(_m, dict) else "", re.I)
                         if _cm:
                             _r_car = _cm.group(1).strip().rstrip(".,!?")
                             break
@@ -16479,7 +16658,10 @@ def voice_handle():
             vr.say(_voice_say_text(goodbye), voice="Polly.Joanna-Neural")
             vr.hangup()
             return str(vr)
-        closing = (say_text or "Cool, you're all set.").rstrip()
+        # Strip any sign-off BEFORE we tack a question on: "I'll have someone
+        # call you back. Take it easy!" + "Anything else I can grab for ya?"
+        # reads as a bot glitching (seen on every callback-scenario run).
+        closing = _strip_signoff(say_text or "") or "Cool, you're all set."
         # Don't tack on our "anything else?" if the LLM's reply already asks it —
         # double-asking is an obvious bot tell. Keep the line open either way.
         if re.search(r"anything else|pass along|anything i can (?:help|do)|before you go",
