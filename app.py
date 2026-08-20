@@ -7999,6 +7999,16 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
                     )
                     if _cm:
                         _cd = _cm.group(1).strip().rstrip(".,!?")
+                        # Strip trailing prose so the car name can't absorb the visit
+                        # time: "the 2023 Ford Escape tomorrow at 2pm" was being saved
+                        # as car_desc "2023 ford escape tomorrow".
+                        _cd = re.sub(
+                            r"\s+(?:currently|is|are|was|were|will|would|could|should|"
+                            r"can|may|might|must|now|available|here|today|tomorrow|tonight|"
+                            r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+                            r"only|also|just|still|comes|features|includes|runs|drives|"
+                            r"looks|seems|gets)\b.*$",
+                            "", _cd, flags=re.I).strip()
                 if not _vt:
                     _tm = re.search(
                         r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))(?:\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday))?\b",
@@ -8148,6 +8158,16 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
                         )
                         if _cm:
                             _cd = _cm.group(1).strip().rstrip(".,!?")
+                            # Strip trailing prose so the car name can't absorb the visit
+                            # time: "the 2023 Ford Escape tomorrow at 2pm" was being saved
+                            # as car_desc "2023 ford escape tomorrow".
+                            _cd = re.sub(
+                                r"\s+(?:currently|is|are|was|were|will|would|could|should|"
+                                r"can|may|might|must|now|available|here|today|tomorrow|tonight|"
+                                r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+                                r"only|also|just|still|comes|features|includes|runs|drives|"
+                                r"looks|seems|gets)\b.*$",
+                                "", _cd, flags=re.I).strip()
                     if not _vt:
                         _tm = re.search(
                             r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))(?:\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday))?\b",
@@ -8277,11 +8297,21 @@ def _maybe_inject_step_1_5(from_number: str, to_number: str, *, dealer_phone: st
         r"\b(trade|trading)[\s\-]?in\b|\bhave\s+a\s+trade\b|\btrade\s+something|\bgot\s+a\s+trade\b",
         re.I,
     )
+    # TWO different questions, and conflating them is what made the bot chase
+    # appraisal details after a decline:
+    #   _trade_mentioned_by_customer - was the TOPIC raised at all? "no trade in"
+    #     counts, because it means the trade-in question has been answered.
+    #   _trade_affirmed - do they ACTUALLY have one? Only this may start the
+    #     mileage/title/condition chase.
     _trade_mentioned_by_customer = any(
         _trade_keywords_re.search(m.get("content") or "")
         for m in history if m.get("role") == "user"
     )
-    if _trade_mentioned_by_customer:
+    _trade_affirmed = any(
+        _has_trade_in(m.get("content") or "")
+        for m in history if m.get("role") == "user"
+    )
+    if _trade_affirmed:
         # Count how many trade-in detail follow-ups we've already asked so we
         # vary phrasing and stop after 3 rounds (avoids a regex-mismatch loop
         # while still pursuing the missing piece across a couple of turns).
@@ -9356,7 +9386,10 @@ def _process_message(from_number: str, to_number: str, body: str):
             r"polestar|rivian|lucid|aston[\s-]*martin|ferrari|lamborghini|mclaren)\b",
             re.I,
         )
-        mentions_trade = bool(_trade_keywords_re.search(body))
+        # _has_trade_in, not the raw keyword match: "no trade in" contains the
+        # words "trade in", so a DECLINE was pulling the customer into the
+        # appraisal flow and the bot asked for mileage/title three times.
+        mentions_trade = _has_trade_in(body)
         has_vehicle_specifier = bool(_vehicle_year_re.search(body)) or bool(_vehicle_make_re.search(body))
         already_has_trade_on_file = bool((customer_profile.get("trade_in_vehicle") or "").strip())
 
