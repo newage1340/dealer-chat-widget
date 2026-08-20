@@ -2317,6 +2317,24 @@ _TRADE_MENTION_RE = re.compile(
     r"\bgot\s+a\s+trade\b|\bno\s+trade\b", re.I)
 
 
+# _TRADE_MENTION_RE deliberately matches DECLINES too ("no trade") because
+# _trade_addressed only needs to know the topic was covered. Anything that acts
+# on the caller actually HAVING a trade-in must use _has_trade_in instead —
+# otherwise "no trade" told the model the caller had one, and the bot started
+# assuming a trade-in that was never offered.
+_TRADE_NEGATED_RE = re.compile(
+    r"\b(?:no|not|none|don'?t|dont|doesn'?t|won'?t|nope|nah|without|zero|"
+    r"nothing)\b[^.?!]{0,24}\btrad(?:e|ing)", re.I)
+
+
+def _has_trade_in(text: str) -> bool:
+    """True only when the text AFFIRMS a trade-in. A decline returns False."""
+    t = text or ""
+    if not _TRADE_MENTION_RE.search(t):
+        return False
+    return not _TRADE_NEGATED_RE.search(t)
+
+
 def _trade_addressed(history: List[Dict[str, Any]]) -> bool:
     for m in history or []:
         c = m.get("content") or ""
@@ -2369,10 +2387,13 @@ _GENERIC_CAR_DESCS = {"general visit", "general", "visit", "a vehicle", ""}
 # server to COMMIT a booking the transcript already supports.
 _VOICE_CLAIMS_VISIT_RE = re.compile(
     r"(appointment|got (?:you|ya) down|on the books|set (?:you|ya) up|"
-    r"(?:you'?re|your) all set|thanks for booking|see (?:you|ya)|"
+    r"(?:you'?re|your) all set|thanks for booking|see (?:you|ya)\b|"
     r"we'?ll see (?:you|ya)|have (?:someone|somebody) ready|ready for (?:you|ya)|"
     r"look(?:ing)? forward to seeing (?:you|ya)|book(?:ed|ing)?\s+(?:you|ya)|"
-    r"(?:you'?re|your) (?:booked|scheduled|confirmed))",
+    r"(?:you'?re|your) (?:booked|scheduled|confirmed)|"
+    r"(?:for|about) your visit|your visit\b|"
+    r"works for the\b|coming in at\b|get (?:you|ya) in\b|"
+    r"(?:see|have) (?:you|ya) (?:then|tomorrow|today))",
     re.I,
 )
 
@@ -6434,7 +6455,7 @@ def _trade_in_from_text(history: List[Dict[str, Any]]) -> str:
         if m.get("role") != "user":
             continue
         text = m.get("content") or ""
-        if _TRADE_MENTION_RE.search(text):
+        if _has_trade_in(text):
             candidates.append(text)
             continue
         # the turn right after the bot asked about a trade-in
@@ -12489,7 +12510,7 @@ _VOICE_RULES_APPEND = (
     "\n"
     "If you DO need their info: ONE FIELD PER TURN. Never bundle. Never justify with 'so we can...':\n"
     "  Turn A: 'Real quick, what's your name?' (just first name, then ask for last separately if you need it for the booking)\n"
-    "  Turn B: You ALREADY have their number from caller ID (see CALLER'S NUMBER block below) — do NOT ask for it. CONFIRM it: 'Got it — and I've got you at [read the caller-ID number digit-by-digit], that the best number for ya?' Only ask for a different number if they say that one's wrong.\n"
+    "  Turn B: You ALREADY have their number from caller ID. Do NOT ask for it and do NOT read it back to confirm it - just use it. Only use a different number if the caller volunteers one.\n"
     "\n"
     "=== NEVER SAY THE CALLER'S NAME OUT LOUD ===\n"
     "Ask for their name and REMEMBER it (the system saves it for the team) — the call still needs a name. But do NOT speak their name back in ANY reply. Phone speech-to-text mis-hears names constantly, and calling someone by the WRONG name sounds worse than not using it at all.\n"
@@ -12500,9 +12521,9 @@ _VOICE_RULES_APPEND = (
     "Never use formal phrasings:\n"
     "  ❌ 'Could you please provide your full name and phone number?'\n"
     "  ❌ 'May I have your name to schedule that for you?'\n"
-    "  ❌ 'What's a good number to reach you at?' (you already have it from caller ID — confirm it instead)\n"
+    "  BAD: 'What's a good number to reach you at?' (you already have it from caller ID - never ask, never read it back)\n"
     "  ✅ 'What's your name?'\n"
-    "  ✅ 'Okay, and I've got you at [caller-ID number] — that still the best one?'\n"
+    "  GOOD: say nothing about their number at all - it is already on file\n"
     "If caller asks WHY you need info, be casual: 'just so I can put you on the callback list' or 'so we know who to expect.' Never 'for our records' or 'so we can dispatch a salesperson.'\n"
     "\n"
     "=== DEALER-SPECIFIC HANDLING ===\n"
@@ -12537,7 +12558,7 @@ _VOICE_RULES_APPEND = (
     "=== WRAP-UP STRUCTURE (when you have what you need) ===\n"
     "Three pieces, in this order:\n"
     "  1. Booking confirmation: 'cool, you're on the books' / 'alright, you're all set' / 'okay, got you down'\n"
-    "  2. Specific callback line with the caller's phone read back digit-by-digit\n"
+    "  2. Specific callback line - do NOT read their phone number back, we already have it\n"
     "  3. Callback purpose: 'we'll call you back at [phone] to confirm the time' OR 'someone will text you the details' OR 'someone'll give you a buzz to lock in the time'\n"
     "Then ask 'anything else I should pass along?' BEFORE emitting the token. Wait for caller's yes/no.\n"
     "  If they share more: capture it ('got it, I'll let them know') and ask once more 'anything else?'\n"
@@ -12758,7 +12779,7 @@ _VOICE_RULES_INTELLIGENCE = (
     "  4. ANY OTHER QUESTIONS check (ask ONCE): 'Cool, anything else you want me to pass along to the sales team before you come in?' Capture anything they share. Do NOT recap the appointment here either.\n"
     "  RECAP EXACTLY ONCE: the single final readback in step 5 is the ONLY place you restate the appointment (time + car + trade + financing). Do NOT summarize or say 'just to summarize / to recap' at the financing step, the questions step, or anywhere before step 5 — recapping twice at the end is repetitive and callers hate it.\n"
     "\n"
-    "  5. ONE FINAL READBACK — this is the ONLY place you confirm the name, the number, AND the whole deal, all in a SINGLE line. Use the name + caller-ID number (confirm, don't ask). Example: 'Alright — I've got you as Evan at 3-1-7, 9-9-9, 7-9-0-7, coming in at 3 PM today for the Outback, trading in the 2005 Mustang, paying cash. That all sound right?' Do this EXACTLY ONCE. Do NOT confirm the name or number in a separate earlier turn — it ALL happens here, one time.\n"
+    "  5. ONE FINAL READBACK - the ONLY place you restate the deal, in a SINGLE line. NEVER include their phone number: we already have it from caller ID and reading it back sounds robotic. Example: 'Alright - coming in at 3 PM today for the Outback, trading in the 2005 Mustang, paying cash. That all sound right?' Do this EXACTLY ONCE.\n"
     "\n"
     "  6. The MOMENT they say yes to that readback, emit a SINGLE-LINE casual booking confirmation + META_JSON + [TAKE_MESSAGE]. Do NOT do a second readback, do NOT re-confirm the number, do NOT ask 'sound right?' again. One readback → one yes → book. Confirming the number twice or recapping twice is what makes callers ask 'why do you keep confirming?' — never do it.\n"
     "\n"
@@ -12816,13 +12837,13 @@ _VOICE_RULES_INTELLIGENCE = (
     "TEXT-HANDOFF OFFER (huge for capturing leads who won't book yet):\n"
     "  When caller is interested but not ready to commit on the call: 'Want me to text you the details and a couple pics? That way you've got it in front of you.'\n"
     "  When caller mentions multiple cars: 'I'll text you a link to each — easier than me trying to read everything off.'\n"
-    "  If they say yes → ask for the best number, treat as soft commitment → emit [TAKE_MESSAGE] with text-followup flagged in the conversation.\n"
+    "  If they say yes -> just send it to their caller-ID number (never ask for a number), treat as soft commitment -> emit [TAKE_MESSAGE] with text-followup flagged in the conversation.\n"
     "\n"
     "VIN / DETAILS / SPECS / PHOTOS REQUESTS — ALWAYS OFFER TO TEXT, never recite:\n"
     "  When caller asks for the VIN, full specs, photos, the listing link, the carfax, or any data-heavy detail:\n"
     "    1. NEVER read a VIN or long detail string out loud. It's 17 characters and impossible to absorb verbally.\n"
-    "    2. Offer to text it instead — and CONFIRM the caller-ID number, don't ask for one cold: 'Yeah, lemme send that over — I've got you at [caller-ID number digit-by-digit], that good?'\n"
-    "    3. Only collect a different number if they say that one's wrong (digit-by-digit readback for confirmation).\n"
+    "    2. Offer to text it instead and just send it - do NOT ask for their number and do NOT read it back: 'Yeah, lemme send that over.'\n"
+    "    3. Only use a different number if the caller volunteers one.\n"
     "    4. If they're done after that: wrap up with 'Cool, I'll get that texted over to you in a sec' and emit [TAKE_MESSAGE]. Include in your spoken reply explicit mention of what's being texted (VIN / link / photos) so the summary captures the action item.\n"
     "    5. If they want to keep talking (e.g. 'and can I also come look at it?'): REUSE the phone they just gave. Don't re-ask. Move directly to booking the visit.\n"
     "  In your spoken reply leading into [TAKE_MESSAGE] for VIN/text requests, make the action item explicit: 'Cool, I'll have the VIN texted to 3-1-7-9-9-9-7-9-0-7 in a sec.' This way the SUMMARY captures TEXT_VIN as a task for the team.\n"
@@ -14676,7 +14697,7 @@ def _voice_trade_in_directive(customer_msg: str, history) -> str:
         (m.get("content") or "") for m in (history or [])
         if isinstance(m, dict) and m.get("role") == "user"
     ) + " " + (customer_msg or "")
-    if not _TRADE_MENTION_RE.search(blob):
+    if not _has_trade_in(blob):
         return ""
     return (
         "\n\n=== THE CALLER HAS A TRADE-IN ===\n"
@@ -14797,11 +14818,11 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
         caller_number_block = (
             "\n\n=== CALLER'S NUMBER (from caller ID — already on file) ===\n"
             f"You already have this caller's number from caller ID: {_cp_speech}.\n"
-            "For ANY booking, callback, or text, do NOT ask for their number as if you don't have it. "
-            "CONFIRM this one instead — read it back digit-by-digit and check it's the best number, e.g. "
-            f"\"I've got you at {_cp_speech} — that the best number for ya?\" Only if they say it's wrong, "
-            "or give you a different one, should you use a new number. "
-            "Never open with \"what's a good number to reach you at?\" — you already have it.\n"
+            "NEVER ask for it and NEVER read it back to confirm it. It is already "
+            "attached to their record, so confirming it wastes a turn and — because "
+            "the model kept re-confirming — sounded broken to callers. Just use it "
+            "silently for any booking, callback, or text.\n"
+            "Only use a different number if the caller VOLUNTEERS one.\n"
         )
     else:
         caller_number_block = ""
@@ -15597,8 +15618,8 @@ def voice_handle():
                 break
         _trade_ctx = (
             bool(re.search(r"\btrad(?:e|ing)[\s-]?in\b", _last_bot_msg))
-            or bool(_TRADE_MENTION_RE.search(speech or ""))
-            or any(_TRADE_MENTION_RE.search(_m.get("content") or "")
+            or bool(_has_trade_in(speech or ""))
+            or any(_has_trade_in(_m.get("content") or "")
                    for _m in (history or [])
                    if isinstance(_m, dict) and _m.get("role") == "user")
         )
@@ -16353,13 +16374,24 @@ def voice_handle():
 
     save_message(from_number, to_number, "assistant", say_text, call_sid=call_sid)
 
-    # Did this reply tell the caller a visit is happening? Drives the booking
-    # rescue inside the handoff thread below.
+    # Did THIS CALL ever tell the caller a visit is happening? Scans every bot
+    # turn, not just the last one: the claim is usually made mid-call ("10 AM
+    # tomorrow works for the Escape") and the wrap-up can be a bland "I'll have
+    # someone follow up for your visit", which on its own reads as no claim at
+    # all and silently lost the booking.
     _voice_booking_claimed = bool(_VOICE_CLAIMS_VISIT_RE.search(say_text or ""))
-    if not _voice_booking_claimed and has_clock_time(say_text or ""):
-        # Novel phrasing: the bot restated a clock time while wrapping up AND the
-        # caller had proposed a time earlier. That is a booking in everything but
-        # wording ("I'll have someone ready for you tomorrow at 10 AM").
+    if not _voice_booking_claimed:
+        try:
+            _voice_booking_claimed = any(
+                _VOICE_CLAIMS_VISIT_RE.search(_m.get("content") or "")
+                for _m in (history or [])
+                if isinstance(_m, dict) and _m.get("role") == "assistant")
+        except Exception:
+            _voice_booking_claimed = False
+    # A claim alone is not enough — the CALLER must also have named a real clock
+    # time. That keeps "can someone call me back tomorrow" and "what time do you
+    # close" from ever producing an appointment.
+    if _voice_booking_claimed:
         try:
             _voice_booking_claimed = any(
                 has_clock_time(_m.get("content") or "")
@@ -16424,7 +16456,7 @@ def voice_handle():
                 # survived inside the summary prose. Runs in this background
                 # thread, so the extra model call costs the caller no latency.
                 try:
-                    if any(_TRADE_MENTION_RE.search(_m.get("content") or "")
+                    if any(_has_trade_in(_m.get("content") or "")
                            for _m in full_history
                            if isinstance(_m, dict) and _m.get("role") == "user"):
                         _tiv = extract_trade_in_vehicle(full_history)
