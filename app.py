@@ -153,6 +153,13 @@ DEMO_DEALER_TWILIO  = "+18882810403"
 # demo texts go to this line instead of the prospect's phone.
 DEMO_DEALER_FRONT_DOOR = "+12173028504"
 
+# Demo fees. MUST match the fee table on demo-dealership.html (#fees) and the
+# "+ $199 doc fee & $85 title/tag" line on every vehicle page - a prospect who
+# reads one number on the site and hears another on the phone has just watched
+# the product fail.
+DEMO_DOC_FEE       = 199.0
+DEMO_TITLE_TAG_FEE = 85.0
+
 # Only Auto District Indy uses the "every car on our lot is thoroughly
 # inspected before being listed" reassurance clause. Other dealers haven't
 # committed to that intake promise, so we don't put those words in their
@@ -177,19 +184,29 @@ _DEMO_DEALER_ROW: Dict[str, Any] = {
     "do you offer financing?": (
         "Yes, we offer financing through multiple lenders and work with all credit types - "
         "good credit, bad credit, bankruptcy, repossession, or no credit history yet. "
-        "There is an online application at https://inventiq.net/demo-finance.html that takes "
-        "about three minutes. If a customer asks about financing, offer to text them that "
-        "link. It asks for their contact info, address, employer, and monthly income - no "
-        "Social Security number or date of birth, because we collect those in person. "
-        "Submitting it does not run a credit check by itself. Once we have it we send it to "
-        "our lenders and call or text back with what they are approved for. They can also "
-        "apply over the phone in a few minutes if they would rather not fill out a form."
+        "REQUIRED: whenever financing comes up, END your reply by asking "
+        "\"Would you like me to send you the pre-approval form?\" - always offer it, do "
+        "not wait for them to ask. If they say yes, text them "
+        "https://inventiq.net/demo-finance.html and tell them it's on the way; never read "
+        "the URL out loud. "
+        "The form takes about three minutes and asks for their contact info, address, "
+        "employer, and monthly income - no Social Security number or date of birth, "
+        "because we collect those in person. Submitting it does not run a credit check by "
+        "itself. Once we have it we send it to our lenders and call or text back with what "
+        "they are approved for. They can also apply over the phone in a few minutes if "
+        "they would rather not fill out a form."
     ),
     "do you accept trade-ins? (feel free to be as detailed as you like)": "Yes, we accept trade-ins. A firm offer requires an in-person inspection.",
     'any dealership policies the ai should know? (ex: "no deposits" or "prices are firm")': (
         "Prices are firm - we don't haggle, the listed price is the price. "
         "Every sale has a $199 documentation fee plus $85 title and tag processing, "
-        "added on top of the listed price. We do not take deposits to hold a vehicle. "
+        "added on top of the listed price. "
+        "REQUIRED: any time you quote the price of a vehicle, say the fees in the same "
+        "breath - for example \"it's thirty-six thousand nine hundred ninety-five, plus a "
+        "one hundred ninety-nine dollar doc fee and eighty-five for title and tag.\" Never "
+        "give a bare price and wait to be asked; a customer who hears the number on the "
+        "phone and a different total at the desk feels misled. "
+        "We do not take deposits to hold a vehicle. "
         "Walk-ins are welcome and appointments are recommended but not required. "
         "A test drive requires a valid driver's license and proof of insurance. "
         "Vehicles are sold as-is unless factory warranty remains; extended service "
@@ -1413,6 +1430,11 @@ def get_dealer_fees(twilio_number: str) -> Dict[str, float]:
     out = {"doc_fee": 0.0, "title_tag_fee": 0.0}
     if not tn:
         return out
+    # Demo line: fees are hardcoded next to the demo inventory rather than
+    # stored in dealer_fees, so the spoken price breakdown matches the fee table
+    # printed on the demo site without needing a DB row.
+    if tn == DEMO_DEALER_TWILIO:
+        return {"doc_fee": DEMO_DOC_FEE, "title_tag_fee": DEMO_TITLE_TAG_FEE}
     conn = _db()
     row = conn.execute(
         "SELECT doc_fee, title_tag_fee FROM dealer_fees WHERE twilio_number=?", (tn,)
@@ -10426,13 +10448,15 @@ def _process_message(from_number: str, to_number: str, body: str):
         return _reply_twiml(reply_text, from_number, to_number, send_primer=new_customer)
 
     if _is_price_breakdown_question(body):
-        # ADI is the only dealer with confirmed, accurate per-vehicle fee data
-        # (doc fee + title/tag) wired through the scraper. Other dealers may
-        # share ADI's twilio number locally for testing OR have placeholder
-        # fees — either way, we don't want to surface inaccurate fee numbers
-        # to a customer. For non-ADI dealers, skip the breakdown and let the
-        # message fall through to the LLM for a simpler price answer.
-        fees = get_dealer_fees(to_number) if _dealer_uses_inspection_clause(dealer_row=dealer_row) else {"doc_fee": 0.0, "title_tag_fee": 0.0}
+        # Only surface a fee breakdown where the numbers are known to be right:
+        # ADI (confirmed per-vehicle fees wired through the scraper) and the demo
+        # line (fees hardcoded to match the demo site). Other dealers may share a
+        # twilio number locally for testing OR carry placeholder fees, and quoting
+        # a wrong fee to a customer is worse than not quoting one — they fall
+        # through to the LLM for a simpler price answer.
+        _fees_are_trustworthy = (_dealer_uses_inspection_clause(dealer_row=dealer_row)
+                                 or _is_demo_twilio(to_number))
+        fees = get_dealer_fees(to_number) if _fees_are_trustworthy else {"doc_fee": 0.0, "title_tag_fee": 0.0}
         if fees["doc_fee"] > 0:
             history      = get_recent_messages(from_number, to_number, limit=14)
             exact_match  = _find_exact_year_make_match(body, inventory_rows)
