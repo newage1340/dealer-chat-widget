@@ -15727,7 +15727,7 @@ def _maybe_send_call_end_lead(call_sid, from_number, to_number, dealer_row, cust
         summary = _summarize_voice_call_for_dealer(dealer_row, history, customer_profile or {}, from_number)
         _disp = get_row_field(dealer_row, DEALER_NAME_ALIASES) or "Dealership"
         body = f"[{_disp} AI · Possible lead — called, didn't book]\n\n{summary}"
-        notify_all_staff(dealer_row, to_number, body)
+        notify_all_staff(dealer_row, to_number, body, customer_phone=from_number)
         app.logger.info("voice/handle: call-end lead sent for %s (call %s)", from_number, call_sid)
     except Exception as e:
         app.logger.warning("call-end lead failed for %s: %s", from_number, e)
@@ -15810,7 +15810,7 @@ def voice_handle():
                 )
                 body = (f"[{get_row_field(dealer_row, DEALER_NAME_ALIASES) or 'Dealership'} "
                         f"AI · Call ended at turn limit - please follow up]\n\n{summary}")
-                notify_all_staff(dealer_row, to_number, body)
+                notify_all_staff(dealer_row, to_number, body, customer_phone=from_number)
         except Exception as e:
             app.logger.warning("turn-limit handoff failed: %s", e)
         vr = VoiceResponse()
@@ -15872,7 +15872,8 @@ def voice_handle():
                     customer_name=_display_name(customer_profile.get("name", "")),
                     customer_last_name=customer_profile.get("last_name", ""),
                     customer_email=customer_profile.get("email", ""),
-                    dealership_line=to_number, visit_time=_vt, car_desc=_cd))
+                    dealership_line=to_number, visit_time=_vt, car_desc=_cd),
+                    customer_phone=from_number)
                 notify_customer_appointment(dealer_row, customer_phone=from_number,
                     twilio_number=to_number, customer_name=_display_name(customer_profile.get("name", "")),
                     visit_time=_vt, car_desc=_cd, action="cancelled")
@@ -16999,7 +17000,8 @@ def voice_handle():
                             dealer_row, to_number,
                             f"[{dealer_label} AI · URGENT - LIVE TRANSFER NOW]\n\n"
                             f"Caller {from_number} is being connected to you right now. "
-                            f"Call briefing to follow.")
+                            f"Call briefing to follow.",
+                            customer_phone=from_number)
                     except Exception as e:
                         app.logger.warning("voice transfer heads-up failed: %s", e)
 
@@ -17071,7 +17073,7 @@ def voice_handle():
                 else:
                     tag = "Call summary - please follow up"
                 body = f"[{dealer_label} AI · {tag}]\n\n{summary}"
-                notify_all_staff(dealer_row, to_number, body)
+                notify_all_staff(dealer_row, to_number, body, customer_phone=from_number)
 
                 # The dealer just got a live lead for THIS call. Prevent the cold
                 # sweep from firing a SECOND, redundant DEALER lead a minute later.
