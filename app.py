@@ -203,6 +203,11 @@ _DEMO_DEALER_ROW: Dict[str, Any] = {
     "dealer email": "",
     "salesman emails": "",
     "website url": "",
+    # Real dealers use the 30-minute default (COLD_FOLLOWUP_AFTER_MINUTES), which
+    # is right for an actual shopper. A prospect kicking the tires on the demo
+    # won't wait half an hour to see the follow-up feature, so the demo chases
+    # almost immediately - while they're still holding the phone.
+    "cold followup minutes": "1",
 }
 
 
@@ -1654,28 +1659,16 @@ def inventory_upload():
     return jsonify({"ok": True, "twilio_number": twilio_number, "count": count})
 
 
-@app.route("/admin/clear-conversation", methods=["GET", "POST"])
-def clear_conversation():
-    """Wipe ALL stored history for a single customer phone number so the bot
-    treats it as a brand-new texter/caller (fresh slate — no old messages, no
-    remembered name, no pending/follow-up state). Everyone else's threads are
-    untouched.
+def wipe_customer_state(phone: str) -> Dict[str, Any]:
+    """Wipe ALL stored history for one customer phone so the bot treats them as
+    brand new - no messages, no remembered name, no pending or follow-up state.
+    Everyone else's threads are untouched. Returns {table: rows_deleted}.
 
-    Browser-friendly: paste this into your address bar (URL-encode the +, or the
-    browser will usually do it for you):
-        /admin/clear-conversation?token=YOUR_TOKEN&phone=+13175551234
-
-    Reuses INVENTORY_UPLOAD_TOKEN so there's no new secret to set up."""
-    expected = os.getenv("INVENTORY_UPLOAD_TOKEN", "").strip()
-    provided = (request.values.get("token", "")
-                or request.headers.get("X-Upload-Token", "")).strip()
-    if not expected or provided != expected:
-        app.logger.warning("clear-conversation: unauthorized attempt")
-        return jsonify({"error": "unauthorized"}), 401
-
-    phone = normalize_phone(request.values.get("phone", "") or "")
+    Shared by /admin/clear-conversation and the demo front door (which resets
+    every caller so each demo starts from zero)."""
+    phone = normalize_phone(phone)
     if not phone:
-        return jsonify({"error": "missing phone (e.g. ?phone=+13175551234)"}), 400
+        return {}
 
     conn = _db()
 
@@ -1694,7 +1687,7 @@ def clear_conversation():
             if cp:
                 related.add(cp)
     except Exception as e:
-        app.logger.warning("clear-conversation: web-session lookup failed: %s", e)
+        app.logger.warning("wipe_customer_state: web-session lookup failed: %s", e)
 
     # Best-effort wipe across every table keyed by customer_phone, for the phone
     # AND all its web sessions. Wrapped per table so a schema that lacks one of
@@ -1718,10 +1711,39 @@ def clear_conversation():
         pass
     conn.commit()
     conn.close()
+    wiped["_sessions"] = sorted(related)
+    return wiped
+
+
+@app.route("/admin/clear-conversation", methods=["GET", "POST"])
+def clear_conversation():
+    """Wipe ALL stored history for a single customer phone number so the bot
+    treats it as a brand-new texter/caller (fresh slate — no old messages, no
+    remembered name, no pending/follow-up state). Everyone else's threads are
+    untouched.
+
+    Browser-friendly: paste this into your address bar (URL-encode the +, or the
+    browser will usually do it for you):
+        /admin/clear-conversation?token=YOUR_TOKEN&phone=+13175551234
+
+    Reuses INVENTORY_UPLOAD_TOKEN so there's no new secret to set up."""
+    expected = os.getenv("INVENTORY_UPLOAD_TOKEN", "").strip()
+    provided = (request.values.get("token", "")
+                or request.headers.get("X-Upload-Token", "")).strip()
+    if not expected or provided != expected:
+        app.logger.warning("clear-conversation: unauthorized attempt")
+        return jsonify({"error": "unauthorized"}), 401
+
+    phone = normalize_phone(request.values.get("phone", "") or "")
+    if not phone:
+        return jsonify({"error": "missing phone (e.g. ?phone=+13175551234)"}), 400
+
+    wiped = wipe_customer_state(phone)
+    sessions = wiped.pop("_sessions", [phone])
     app.logger.info("clear-conversation: fresh slate for %s (sessions: %s) — %s",
-                    phone, sorted(related), wiped)
+                    phone, sessions, wiped)
     return jsonify({"ok": True, "phone": phone,
-                    "sessions_cleared": sorted(related), "cleared": wiped})
+                    "sessions_cleared": sessions, "cleared": wiped})
 
 
 @app.route("/admin/inventory-check", methods=["GET"])
@@ -11928,6 +11950,25 @@ def demo_front_door():
     and the two demo texts land on their phone instead of this line."""
     from_number = normalize_phone(request.values.get("From", ""))
     app.logger.info("demo front door: call from %s -> %s", from_number, DEMO_DEALER_TWILIO)
+
+    # Every demo call starts from zero. Without this the assistant remembers the
+    # last person who called from this number - greeting them by name, referring
+    # back to a car they asked about, or skipping questions it already asked.
+    # Great for a real customer, confusing for a prospect evaluating the product,
+    # and wrong when you hand the same demo number to the next dealer.
+    #
+    # Safe to do here: this endpoint only ever serves the demo line, and it runs
+    # before the call is bridged, so there's no live state to destroy. Real
+    # dealers keep their history - they never touch this route.
+    if from_number:
+        try:
+            wiped = wipe_customer_state(from_number)
+            wiped.pop("_sessions", None)
+            app.logger.info("demo front door: reset %s — %s", from_number, wiped)
+        except Exception as e:
+            # Never let a failed reset block the call.
+            app.logger.warning("demo front door: reset failed for %s: %s", from_number, e)
+
     vr = VoiceResponse()
     d = vr.dial(caller_id=(from_number or None), answer_on_bridge=True)
     d.number(DEMO_DEALER_TWILIO)
