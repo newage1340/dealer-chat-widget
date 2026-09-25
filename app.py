@@ -134,24 +134,25 @@ TERMS_ONLY_PRIMER = (
 # Survives Render restarts because everything is in code.
 DEMO_DEALER_SLUG    = "inventiq-demo"
 
-# The demo's bot line - the number Vapi answers on, and therefore the number
-# the dealer lookups below resolve from. Prospects dial DEMO_DEALER_FRONT_DOOR
-# (below), which forwards here.
+# The demo line. Prospects dial this number directly - it's imported into Vapi
+# and attached to the assistant, so Vapi answers it and the app resolves the
+# demo from it. Also the number both demo texts are sent FROM, so it has to stay
+# SMS-capable and in the Twilio account.
+#
+# There used to be a second "front door" number that forwarded here, mirroring
+# how real dealers are routed. Dropped 2026-09-25: the extra Twilio hop
+# intermittently killed the caller's audio mid-call (Vapi ended the calls with
+# silence-timeout while the caller was still talking). Dialing Vapi directly
+# removes the hop and the failure with it.
 #
 # MUST NOT match any real dealer's number in the sheet: the lookups short-
 # circuit on this value, so a collision would serve the demo's fake inventory
 # to that dealer's real callers.
-DEMO_DEALER_TWILIO  = "+18882810403"
+DEMO_DEALER_TWILIO  = "+12173028504"
 
-# The number printed on the demo dealership site - what a prospect dials. It
-# forwards to DEMO_DEALER_TWILIO via a TwiML Bin in Twilio, NOT via /incoming
-# (the router resolves dealers from the sheet, and the demo deliberately isn't
-# in it, so /incoming would fall back to some real dealer).
-#
-# The forward MUST pass the original caller through as callerId. If it presents
-# this number instead, every demo caller looks like the same person and the two
-# demo texts go to this line instead of the prospect's phone.
-DEMO_DEALER_FRONT_DOOR = "+12173028504"
+# Kept as an alias so anything referencing the old name still resolves. The
+# demo has no separate front door any more - it's the same number.
+DEMO_DEALER_FRONT_DOOR = DEMO_DEALER_TWILIO
 
 # Demo fees. MUST match the fee table on demo-dealership.html (#fees) and the
 # "+ $199 doc fee & $85 title/tag" line on every vehicle page - a prospect who
