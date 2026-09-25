@@ -133,18 +133,35 @@ TERMS_ONLY_PRIMER = (
 # the widget on the demo page without any real SMS/email getting sent.
 # Survives Render restarts because everything is in code.
 DEMO_DEALER_SLUG    = "inventiq-demo"
-DEMO_DEALER_TWILIO  = "+15555550000"
+
+# The demo's bot line - the number Vapi answers on, and therefore the number
+# the dealer lookups below resolve from. Prospects dial DEMO_DEALER_FRONT_DOOR
+# (below), which forwards here.
+#
+# MUST NOT match any real dealer's number in the sheet: the lookups short-
+# circuit on this value, so a collision would serve the demo's fake inventory
+# to that dealer's real callers.
+DEMO_DEALER_TWILIO  = "+18882810403"
+
+# The number printed on the demo dealership site - what a prospect actually
+# dials. Forwards to DEMO_DEALER_TWILIO. Recorded here for reference; the app
+# itself never sees this number, because the call arrives on the bot line.
+DEMO_DEALER_FRONT_DOOR = "+12173028504"
 
 # Only Auto District Indy uses the "every car on our lot is thoroughly
 # inspected before being listed" reassurance clause. Other dealers haven't
 # committed to that intake promise, so we don't put those words in their
 # mouth.
-AUTO_DISTRICT_INDY_TWILIO = "+18882810403"
+# Parked 2026-09-24: Auto District Indy moved off +18882810403, and that number
+# is now the demo line. Leaving the old value here would have made the DEMO
+# claim ADI's inspection promise. Blank matches nothing, which disables the
+# clause safely. Put ADI's current number back here when they're active again.
+AUTO_DISTRICT_INDY_TWILIO = ""
 
 # Sheet-style row — keys match the Google Form column headers so the
 # existing alias-based helpers (get_row_field etc.) pick the right values.
 _DEMO_DEALER_ROW: Dict[str, Any] = {
-    "dealership name": "InventIQ Demo",
+    "dealership name": "Demo Website",
     "twilio number given to dealer (leave this blank)": DEMO_DEALER_TWILIO,
     "slug": DEMO_DEALER_SLUG,
     "brand color": "#c8221c",
@@ -152,9 +169,31 @@ _DEMO_DEALER_ROW: Dict[str, Any] = {
     "dealer phone number": "",
     "dealer address": "123 Demo Lane, Indianapolis, IN 46201",
     "dealer hours": "Monday-Friday: 9am to 6pm, Saturday: 9am to 5pm, Sunday: closed",
-    "do you offer financing?": "Yes, we offer financing through multiple lenders and work with all credit types. You can apply online at https://inventiq.net/apply",
+    "do you offer financing?": (
+        "Yes, we offer financing through multiple lenders and work with all credit types - "
+        "good credit, bad credit, bankruptcy, repossession, or no credit history yet. "
+        "There is an online application at https://inventiq.net/demo-finance.html that takes "
+        "about three minutes. If a customer asks about financing, offer to text them that "
+        "link. It asks for their contact info, address, employer, and monthly income - no "
+        "Social Security number or date of birth, because we collect those in person. "
+        "Submitting it does not run a credit check by itself. Once we have it we send it to "
+        "our lenders and call or text back with what they are approved for. They can also "
+        "apply over the phone in a few minutes if they would rather not fill out a form."
+    ),
     "do you accept trade-ins? (feel free to be as detailed as you like)": "Yes, we accept trade-ins. A firm offer requires an in-person inspection.",
-    'any dealership policies the ai should know? (ex: "no deposits" or "prices are firm")': "Prices firm, no deposits required to hold a vehicle.",
+    'any dealership policies the ai should know? (ex: "no deposits" or "prices are firm")': (
+        "Prices are firm - we don't haggle, the listed price is the price. "
+        "Every sale has a $199 documentation fee plus $85 title and tag processing, "
+        "added on top of the listed price. We do not take deposits to hold a vehicle. "
+        "Walk-ins are welcome and appointments are recommended but not required. "
+        "A test drive requires a valid driver's license and proof of insurance. "
+        "Vehicles are sold as-is unless factory warranty remains; extended service "
+        "contracts are available and quoted in person. We do not provide vehicle "
+        "history reports - if a customer asks for one, say we don't have them on hand "
+        "and invite them to come inspect the vehicle in person. We do not deliver - "
+        "all sales are completed at the lot. Out-of-state buyers are welcome. We do "
+        "not buy vehicles outright; we only take them as trade-ins against a purchase."
+    ),
     "salesman phone numbers": "",
     "dealer email": "",
     "salesman emails": "",
@@ -173,6 +212,266 @@ def _demo_vehicle(year, make, model, trim, color, price, mileage, stock, descrip
 
 
 _DEMO_INVENTORY: List[Dict[str, Any]] = [
+    # Listed first because it's the featured vehicle on the demo dealership
+    # site (demo-vehicle-ram-1500.html). Price, mileage, and stock number must
+    # match that page — a caller looking at the listing will read them out.
+    _demo_vehicle(2021, "Ram", "1500 Big Horn", "Crew Cab 4-Door Truck",
+                  "Diamond Black Crystal Pearl", 36995, 58214, "013",
+                  "Engine: 5.7L HEMI V8 | Transmission: 8-speed automatic | "
+                  "Drive: 4x4 | Interior: Black cloth || "
+                  "Powertrain ;; 5.7L HEMI V8, 395 hp ;; 8-speed automatic ;; "
+                  "Four-wheel drive with electronic transfer case ;; "
+                  "Class IV trailer hitch ;; Trailer brake controller ;; "
+                  "17 city / 22 highway mpg | "
+                  "Exterior ;; Lifted suspension ;; 20-inch XD wheels ;; "
+                  "All-terrain tires ;; Blacked-out grille and badging ;; "
+                  "LED headlights and fog lights ;; Running boards ;; "
+                  "Spray-in bedliner | "
+                  "Interior Features ;; Uconnect touchscreen ;; "
+                  "Apple CarPlay and Android Auto ;; Backup camera ;; "
+                  "Dual-zone climate control ;; Power driver seat ;; "
+                  "Heavy-duty cloth buckets ;; Fold-up rear seat with under-seat "
+                  "storage ;; All-weather floor liners"),
+    # Featured on demo-vehicle-accord-coupe.html — keep price/mileage/stock in sync.
+    # Note: there is also a 2023 Accord Hybrid sedan further down this list. The
+    # year and body style are what keep the two apart when a caller says "Accord".
+    _demo_vehicle(2016, "Honda", "Accord", "Ex-L 2-Door Coupe", "San Marino Red",
+                  17995, 68340, "014",
+                  "Engine: 2.4L i-VTEC I4 | Transmission: Automatic | "
+                  "Drive: FWD | Interior: Black leather || "
+                  "Powertrain ;; 2.4L i-VTEC four-cylinder ;; Automatic transmission ;; "
+                  "Front-wheel drive ;; Eco Assist fuel-saving mode ;; "
+                  "25 city / 35 highway mpg | "
+                  "Exterior ;; San Marino Red paint ;; Power moonroof ;; Alloy wheels ;; "
+                  "Michelin Defender tires ;; LED daytime running lights ;; Fog lights ;; "
+                  "Dual chrome exhaust tips | "
+                  "Interior Features ;; Heated leather seats ;; Power driver seat ;; "
+                  "Push-button start ;; Dual-zone automatic climate ;; "
+                  "Touchscreen display audio ;; Bluetooth phone and audio ;; "
+                  "Backup camera ;; Honda LaneWatch blind-spot camera ;; "
+                  "All-weather floor liners"),
+    # Featured on demo-vehicle-bmw-x3.html — keep price/mileage/stock in sync.
+    # Note: there is also a 2022 BMW X7 further down. Model name keeps them apart.
+    _demo_vehicle(2012, "BMW", "X3 Xdrive28I", "4-Door Suv", "Alpine White",
+                  11995, 118450, "015",
+                  "Engine: 3.0L Inline-6 | Transmission: 8-speed automatic | "
+                  "Drive: xDrive AWD | Interior: Sand Beige leather || "
+                  "Powertrain ;; 3.0L naturally aspirated inline-six ;; "
+                  "8-speed automatic ;; xDrive all-wheel drive ;; Drive mode selector ;; "
+                  "19 city / 25 highway mpg | "
+                  "Exterior ;; Alpine White paint ;; Panoramic moonroof ;; Roof rails ;; "
+                  "Alloy wheels ;; Fog lights ;; Power tailgate | "
+                  "Interior Features ;; Sand Beige leather seating ;; Wood interior trim ;; "
+                  "Power front seats ;; iDrive with center display ;; "
+                  "Dual-zone automatic climate ;; Rear climate vents ;; "
+                  "Fold-down rear seats ;; All-weather floor mats | "
+                  "Condition ;; Drives tight and quiet ;; Body and paint are straight ;; "
+                  "Priced well under what a German SUV with this equipment usually brings"),
+    # Featured on demo-vehicle-mirage.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2015, "Mitsubishi", "Mirage", "Es 4-Door Hatchback", "Kiwi Green",
+                  6495, 96780, "016",
+                  "Engine: 1.2L 3-Cylinder | Transmission: CVT automatic | "
+                  "Drive: FWD | Interior: Black cloth || "
+                  "Powertrain ;; 1.2L three-cylinder ;; CVT automatic ;; "
+                  "Front-wheel drive ;; 37 city / 44 highway mpg | "
+                  "Exterior ;; Kiwi Green paint ;; Alloy wheels ;; "
+                  "Hatchback rear door ;; Power mirrors | "
+                  "Interior Features ;; Cloth seats ;; Air conditioning ;; "
+                  "Power windows and locks ;; Bluetooth radio ;; "
+                  "60/40 folding rear seats ;; Floor mats | "
+                  "Ownership Costs ;; Insurance is about as cheap as insurance gets ;; "
+                  "Tires are inexpensive ;; Three-cylinder is simple so routine service "
+                  "costs almost nothing ;; One of the least expensive cars on the lot to "
+                  "own as well as to buy"),
+    # Featured on demo-vehicle-mazda3.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2012, "Mazda", "Mazda3", "I Sport 4-Door Sedan", "Liquid Silver",
+                  6995, 142300, "017",
+                  "Engine: 2.0L 4-Cylinder | Transmission: Automatic | "
+                  "Drive: FWD | Interior: Black cloth || "
+                  "Powertrain ;; 2.0L four-cylinder ;; Automatic transmission ;; "
+                  "Front-wheel drive ;; 28 city / 39 highway mpg | "
+                  "Exterior ;; Liquid Silver paint ;; Black-finished alloy wheels ;; "
+                  "Fog light housings ;; Power mirrors | "
+                  "Interior Features ;; Cloth seats ;; Air conditioning ;; "
+                  "Power windows and locks ;; Cruise control ;; "
+                  "Steering wheel audio controls ;; Folding rear seats | "
+                  "Condition ;; Mechanically sound and drives well ;; "
+                  "Blacked-out alloy wheels give it a sharper look than a stock one ;; "
+                  "Parts are everywhere and any shop in town can service it"),
+    # Featured on demo-vehicle-pathfinder.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2018, "Nissan", "Pathfinder", "Sv 4-Door Suv", "Gun Metallic",
+                  16995, 108600, "018",
+                  "Engine: 3.5L V6 | Transmission: CVT automatic | "
+                  "Drive: 4x4 | Interior: Black cloth || "
+                  "Powertrain ;; 3.5L V6 ;; CVT automatic ;; Four-wheel drive ;; "
+                  "Tow package ;; 19 city / 26 highway mpg | "
+                  "Exterior ;; Gun Metallic paint ;; Roof rails ;; Running boards ;; "
+                  "Alloy wheels ;; Fog lights | "
+                  "Interior Features ;; Seats seven across three rows ;; Cloth seats ;; "
+                  "EZ Flex sliding second row that tilts with a child seat installed ;; "
+                  "Touchscreen with backup camera ;; Tri-zone climate control ;; "
+                  "Rear air vents ;; Power driver seat ;; "
+                  "Steering wheel audio and cruise controls ;; Fold-flat third row | "
+                  "Condition ;; Drives well and everything works ;; "
+                  "Body and paint are in good shape ;; "
+                  "Tow package already fitted"),
+    # Featured on demo-vehicle-cx5.html — keep price/mileage/stock in sync.
+    # Note: there is also a 2012 Mazda3 sedan above. Model name keeps them apart.
+    _demo_vehicle(2014, "Mazda", "Cx-5", "Grand Touring 4-Door Suv", "Deep Crystal Blue",
+                  11495, 126400, "019",
+                  "Engine: 2.5L SkyActiv I4 | Transmission: 6-speed automatic | "
+                  "Drive: FWD | Interior: Parchment leather || "
+                  "Powertrain ;; 2.5L SkyActiv four-cylinder ;; 6-speed automatic ;; "
+                  "Front-wheel drive ;; 25 city / 32 highway mpg | "
+                  "Exterior ;; Deep Crystal Blue paint ;; Power sunroof ;; Roof rails ;; "
+                  "Alloy wheels ;; Fog lights | "
+                  "Interior Features ;; Leather seating ;; Built-in navigation ;; "
+                  "Push-button start ;; Dual-zone automatic climate ;; "
+                  "Heated front seats ;; Power driver seat ;; Backup camera ;; "
+                  "Bluetooth and HD Radio ;; Steering wheel audio and cruise controls ;; "
+                  "60/40 folding rear seats | "
+                  "Condition ;; Everything works and it drives well ;; "
+                  "Body and paint are sharp ;; Parchment leather over Deep Crystal Blue "
+                  "is a combination Mazda charged extra for and it still looks upscale"),
+    # Featured on demo-vehicle-odyssey.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2006, "Honda", "Odyssey", "Ex-L Minivan", "Midnight Blue Pearl",
+                  5995, 178900, "020",
+                  "Engine: 3.5L V6 | Transmission: 5-speed automatic | "
+                  "Drive: FWD | Interior: Gray leather || "
+                  "Powertrain ;; 3.5L V6 ;; 5-speed automatic ;; Front-wheel drive ;; "
+                  "18 city / 25 highway mpg | "
+                  "Exterior ;; Midnight Blue Pearl paint ;; Power sunroof ;; "
+                  "Dual power sliding doors ;; Roof rails ;; Alloy wheels | "
+                  "Interior Features ;; Seats eight ;; Leather seating ;; "
+                  "Power driver seat ;; Tri-zone climate control ;; Rear air vents ;; "
+                  "Steering wheel audio and cruise controls ;; Fold-flat third row ;; "
+                  "All-weather floor mats | "
+                  "Condition ;; Runs and drives and everything works ;; "
+                  "Leather wipes clean when somebody spills ;; "
+                  "All-weather floor mats already in it ;; "
+                  "A lot of vehicle for the money at this price"),
+    # Featured on demo-vehicle-h3t.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2009, "Hummer", "H3T", "Crew Cab Pickup", "Black",
+                  17995, 132400, "021",
+                  "Engine: 3.7L 5-Cylinder | Transmission: Automatic | "
+                  "Drive: 4x4 | Interior: Black cloth || "
+                  "Powertrain ;; 3.7L five-cylinder ;; Automatic transmission ;; "
+                  "Four-wheel drive with low range ;; Body-on-frame construction ;; "
+                  "14 city / 18 highway mpg | "
+                  "Exterior ;; Black paint ;; Front brush guard ;; "
+                  "Camper shell over the bed ;; Black wheels ;; All-terrain tires ;; "
+                  "Running boards ;; Tow hooks | "
+                  "Interior Features ;; Crew cab, seats five ;; Air conditioning ;; "
+                  "Power windows and locks ;; Cruise control ;; Steering wheel controls | "
+                  "Notes ;; Rare - built for only about two model years before Hummer "
+                  "shut down, and they made a fraction as many as the regular H3 ;; "
+                  "Mechanical side is GM, shared with the Colorado and Canyon, so any "
+                  "shop in town can service it ;; Shell on the bed makes it lockable dry "
+                  "storage, so it is a genuinely useful truck and not just a statement"),
+    # Featured on demo-vehicle-mini.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2012, "Mini", "Cooper", "Hardtop 2-Door Hatchback", "Spice Orange",
+                  7995, 98200, "022",
+                  "Engine: 1.6L 4-Cylinder | Transmission: Automatic | "
+                  "Drive: FWD | Interior: Black || "
+                  "Powertrain ;; 1.6L four-cylinder ;; Automatic transmission ;; "
+                  "Front-wheel drive ;; 28 city / 36 highway mpg | "
+                  "Exterior ;; Spice Orange paint ;; Contrasting black roof ;; "
+                  "Roof rails ;; Black wheels ;; Fog lights | "
+                  "Interior Features ;; Center-mounted speedometer ;; "
+                  "Toggle switch panel ;; Air conditioning ;; Power windows and locks ;; "
+                  "Steering wheel controls ;; Folding rear seats | "
+                  "Notes ;; Go-kart quick through a corner and parks anywhere ;; "
+                  "Cheap to run - small tires and a light car is easy on brakes ;; "
+                  "Roof rails already fitted for a bike or a board"),
+    # Featured on demo-vehicle-escape.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2011, "Ford", "Escape", "Xlt 4-Door Suv", "Light Sage",
+                  6995, 145800, "023",
+                  "Engine: V6 | Transmission: Automatic | "
+                  "Drive: FWD | Interior: Tan cloth || "
+                  "Powertrain ;; V6 engine ;; Automatic transmission ;; "
+                  "Front-wheel drive ;; 19 city / 25 highway mpg | "
+                  "Exterior ;; Light Sage paint ;; Roof rails ;; Alloy wheels ;; "
+                  "Fog lights ;; Side steps | "
+                  "Interior Features ;; Cloth seats ;; Air conditioning ;; "
+                  "Power windows and locks ;; Cruise control ;; Steering wheel controls ;; "
+                  "60/40 folding rear seats ;; Square, tall cargo area | "
+                  "Condition ;; Runs, drives, everything works ;; "
+                  "Tall square cargo area actually holds boxes and dog crates ;; "
+                  "Ford sold these by the hundreds of thousands so parts are everywhere"),
+    # Featured on demo-vehicle-cx5-touring.html — keep price/mileage/stock in sync.
+    # This is the SECOND CX-5 on the lot. The gray Touring and the blue Grand
+    # Touring (stock D019) are different vehicles — separate by color and trim.
+    _demo_vehicle(2015, "Mazda", "Cx-5", "Touring 4-Door Suv", "Meteor Gray",
+                  12495, 118700, "024",
+                  "Engine: 2.5L SkyActiv I4 | Transmission: 6-speed automatic | "
+                  "Drive: FWD | Interior: Black cloth || "
+                  "Powertrain ;; 2.5L SkyActiv four-cylinder ;; 6-speed automatic ;; "
+                  "Front-wheel drive ;; 25 city / 32 highway mpg | "
+                  "Exterior ;; Meteor Gray paint ;; Roof rails ;; Alloy wheels ;; "
+                  "Fog lights | "
+                  "Interior Features ;; Touchscreen display ;; Backup camera ;; "
+                  "Bluetooth phone and audio ;; Dual-zone climate control ;; "
+                  "Power driver seat ;; Steering wheel audio and cruise controls ;; "
+                  "60/40 folding rear seats | "
+                  "Condition ;; Runs, drives, everything works ;; "
+                  "Steers quick and stays flat through a corner instead of leaning ;; "
+                  "Roof rails ready for a cargo box or bike rack"),
+    # Featured on demo-vehicle-tucson.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2016, "Hyundai", "Tucson", "Sport 4-Door Suv", "Coliseum Gray",
+                  12995, 112300, "025",
+                  "Engine: 1.6L Turbo I4 | Transmission: 7-speed automatic | "
+                  "Drive: FWD | Interior: Black cloth || "
+                  "Powertrain ;; 1.6L turbocharged four-cylinder ;; "
+                  "7-speed dual-clutch automatic ;; Front-wheel drive ;; "
+                  "24 city / 28 highway mpg | "
+                  "Exterior ;; Coliseum Gray paint ;; Roof rails ;; Alloy wheels ;; "
+                  "Fog lights ;; Body-colored mirrors | "
+                  "Interior Features ;; Touchscreen display ;; Backup camera ;; "
+                  "Bluetooth phone and audio ;; Air conditioning ;; "
+                  "Power windows and locks ;; Steering wheel audio and cruise controls ;; "
+                  "60/40 folding rear seats | "
+                  "Condition ;; Runs, drives, everything works ;; "
+                  "Much quieter ride than the generation before it ;; "
+                  "Turbo does the work of a bigger engine without the fuel bill"),
+    # Featured on demo-vehicle-malibu.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2017, "Chevrolet", "Malibu", "Lt 4-Door Sedan", "Silver Ice Metallic",
+                  11995, 104500, "026",
+                  "Engine: 1.5L Turbo I4 | Transmission: 6-speed automatic | "
+                  "Drive: FWD | Interior: Black cloth || "
+                  "Powertrain ;; 1.5L turbocharged four-cylinder ;; 6-speed automatic ;; "
+                  "Front-wheel drive ;; 27 city / 36 highway mpg | "
+                  "Exterior ;; Silver Ice Metallic paint ;; Alloy wheels ;; "
+                  "LED daytime running lights ;; Body-colored mirrors | "
+                  "Interior Features ;; Touchscreen display ;; "
+                  "Apple CarPlay and Android Auto ;; Backup camera ;; "
+                  "Bluetooth phone and audio ;; Keyless entry ;; Air conditioning ;; "
+                  "Steering wheel audio and cruise controls ;; "
+                  "60/40 folding rear seats | "
+                  "Condition ;; Everything works and it drives well ;; "
+                  "Paint and body in good shape ;; "
+                  "Apple CarPlay and Android Auto mean maps and music come straight off "
+                  "the phone instead of a dated built-in system"),
+    # Featured on demo-vehicle-challenger.html — keep price/mileage/stock in sync.
+    _demo_vehicle(2017, "Dodge", "Challenger", "Sxt 2-Door Coupe", "White Knuckle",
+                  18995, 89400, "027",
+                  "Engine: 3.6L V6 | Transmission: 8-speed automatic | "
+                  "Drive: RWD | Interior: Black cloth || "
+                  "Powertrain ;; 3.6L Pentastar V6 ;; 8-speed automatic ;; "
+                  "Rear-wheel drive ;; 19 city / 30 highway mpg | "
+                  "Exterior ;; White Knuckle paint ;; Dark contrasting roof ;; "
+                  "Gloss black wheels ;; Functional hood scoops ;; Blacked-out grille ;; "
+                  "LED taillight bar | "
+                  "Interior Features ;; Uconnect touchscreen ;; Backup camera ;; "
+                  "Bluetooth phone and audio ;; Dual-zone climate control ;; "
+                  "Keyless entry and push-button start ;; "
+                  "Steering wheel audio and cruise controls ;; Folding rear seats ;; "
+                  "Oversized trunk | "
+                  "Notes ;; This is the V6 SXT, not a Hemi - it returns 19 city and 30 "
+                  "highway, better than most midsize SUVs, so it works as a daily driver ;; "
+                  "Biggest back seat and trunk of any current muscle car | "
+                  "Condition ;; Everything works and it drives straight and strong ;; "
+                  "Paint is sharp ;; Uconnect touchscreen, backup camera, and push-button "
+                  "start make it modern to live with, not a stripped-out throwback"),
     _demo_vehicle(2022, "BMW", "X7 Xdrive40I", "4-Door Suv", "Carbon Black Metallic",
                   45000, 38500, "001",
                   "Engine: 3.0L Turbo I6 | Transmission: 8-speed automatic | "
@@ -5582,12 +5881,56 @@ def _send_email(to: str, subject: str, body: str) -> Tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
+def _demo_alert_recipient(twilio_number: str) -> str:
+    """For the demo line only: the phone number to mirror dealer-side alerts to.
+
+    A prospect calling the demo is playing both roles - customer and dealership
+    - so the "staff" who should see the lead alert is the caller themselves.
+    Returns the most recent real phone that talked to the demo line, or "" if we
+    can't resolve one (in which case we fall back to logging, as before).
+
+    Deliberately scoped to the demo number. Real dealers never reach this."""
+    tn = normalize_phone(twilio_number)
+    try:
+        conn = _db()
+        rows = conn.execute(
+            "SELECT customer_phone FROM messages WHERE twilio_number=? "
+            "ORDER BY id DESC LIMIT 20",
+            (tn,),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        app.logger.warning("Demo alert: recipient lookup failed: %s", e)
+        return ""
+
+    for r in rows:
+        phone = normalize_phone(resolve_outbound_customer_phone(r["customer_phone"], tn))
+        # Skip widget pseudo-phones and anything that would text the line itself.
+        if phone and not phone.startswith("+web") and phone != tn:
+            return phone
+    return ""
+
+
 def notify_all_staff(dealer_row: Dict[str, Any], from_number: str, body: str) -> None:
-    # Demo dealer: log the would-be alert but suppress real SMS/email. Lets
-    # dealer-prospects walk through the booking flow on the demo widget
-    # without real notifications going out.
+    # Demo line: there's no real dealership to notify, and the prospect on the
+    # other end is the person who wants to see this. Mirror the dealer-side
+    # alert back to whoever called - it's the half of the product they came to
+    # evaluate. Falls back to logging if we can't resolve a caller.
+    #
+    # Real dealers never enter this branch, so their notification path, emails,
+    # and salesman fan-out are all unchanged.
     if _is_demo_twilio(from_number):
-        app.logger.info("Demo dealer: suppressing staff notification. Body:\n%s", body)
+        target = _demo_alert_recipient(from_number)
+        if not target:
+            app.logger.info("Demo line: no caller to mirror alert to. Body:\n%s", body)
+            return
+        demo_body = ("[DEMO - this is what the dealership's team would receive]\n\n"
+                     f"{body}")
+        ok, err = _send_sms(target, from_number, demo_body)
+        if ok:
+            app.logger.info("Demo line: mirrored dealer alert to caller %s", target)
+        else:
+            app.logger.warning("Demo line: mirror to %s failed: %s", target, err)
         return
     dealer_ph = normalize_phone(get_row_field(dealer_row, DEALER_NOTIFY_PHONE_ALIASES))
     salesman_phones = get_salesman_phones(dealer_row)
@@ -5720,9 +6063,9 @@ def notify_customer_appointment(dealer_row: Dict[str, Any], *, customer_phone: s
     (e.g., widget customer who somehow skipped phone collection), OR if the
     current request came in via /sms (the bot's TwiML reply already reaches
     the customer's phone, so a separate SMS would duplicate)."""
-    if _is_demo_twilio(twilio_number):
-        app.logger.info("Demo dealer: suppressing customer appointment %s SMS", action)
-        return
+    # The demo line sends this for real. A prospect who calls in and books needs
+    # to feel their phone buzz with the confirmation - that, plus the mirrored
+    # dealer alert from notify_all_staff, is the whole product in one moment.
     if g.get("is_sms_request"):
         app.logger.info("notify_customer_appointment: skipping for SMS-origin request "
                         "(TwiML reply already covers it)")
@@ -11195,22 +11538,31 @@ def chat_webhook():
     # first name + 10-digit phone. We don't run the LLM or save the message;
     # the JS shows a profile form, the customer fills it in, then re-sends the
     # original message which now passes this gate.
-    profile = get_customer_profile(from_number, to_number)
-    needs_name  = not (profile.get("name") or "").strip()
-    needs_phone = not (profile.get("real_phone") or "").strip()
-    if needs_name or needs_phone:
-        gate_reply = (
-            "Sure, I can help with that. Before I do, could I get your first name "
-            "and 10-digit phone number? We use these so we can text you "
-            "appointment confirmations and follow up if you have any questions."
-        )
-        return jsonify({
-            "reply": gate_reply,
-            "needs_profile": True,
-            "missing": {"name": needs_name, "phone": needs_phone},
-            "pending_message": user_message,
-            "session_id": session_id,
-        })
+    #
+    # The demo dealer is exempt. Its widget lives on the Inventiq marketing
+    # site, where the person typing is a business owner evaluating the product,
+    # not a car shopper. Demanding a stranger's phone number before the bot
+    # will answer anything kills the demo. Nothing gets texted for the demo
+    # dealer regardless (staff alerts are suppressed), so there's nothing the
+    # number would be used for. The bot still asks for it conversationally
+    # during the booking flow, which is the part prospects want to see.
+    if not _is_demo_twilio(to_number):
+        profile = get_customer_profile(from_number, to_number)
+        needs_name  = not (profile.get("name") or "").strip()
+        needs_phone = not (profile.get("real_phone") or "").strip()
+        if needs_name or needs_phone:
+            gate_reply = (
+                "Sure, I can help with that. Before I do, could I get your first name "
+                "and 10-digit phone number? We use these so we can text you "
+                "appointment confirmations and follow up if you have any questions."
+            )
+            return jsonify({
+                "reply": gate_reply,
+                "needs_profile": True,
+                "missing": {"name": needs_name, "phone": needs_phone},
+                "pending_message": user_message,
+                "session_id": session_id,
+            })
 
     g.captured_reply  = None
     g.captured_primer = None
