@@ -7296,6 +7296,10 @@ Notes/Policies: {policies}
 {_fee_rule}
 === INVENTORY (SUMMARY) ===
 Every vehicle listed below is currently available for sale.
+This list is the ENTIRE lot - there is nothing else in stock. If the caller asks how many
+cars/vehicles you have, count these and give the real number ("we've got fifteen on the lot
+right now"). Never answer with a vague "a nice selection" - a caller asking for a number
+wants a number.
 {inv_text}
 
 === TOP MATCHING VEHICLE DETAILS ===
@@ -14965,7 +14969,8 @@ def _match_category_rows(cat: str, rows: List[Dict[str, Any]]) -> List[Dict[str,
     return [r for r in rows if cat in _b(r)]
 
 
-def _build_similar_reply(cat: str, rows: List[Dict[str, Any]]) -> str:
+def _build_similar_reply(cat: str, rows: List[Dict[str, Any]],
+                         twilio_number: str = "") -> str:
     """Deterministic 'we don't have that exact one, but here's what we've got'
     reply built ONLY from real in-category vehicles — so the bot can't substitute
     a van for a truck. Returns '' if we have nothing in that category."""
@@ -15014,8 +15019,10 @@ def _build_similar_reply(cat: str, rows: List[Dict[str, Any]]) -> str:
              "classic": "classic"}.get(cat, cat)
     parts = " and ".join(_line(r) for r in two)
     more = f" — plus {len(matches) - len(two)} more" if len(matches) > len(two) else ""
+    # Same fee rule as the other deterministic paths - this one quotes prices too.
+    _fees = _spoken_fee_tail(twilio_number, plural=len(two) > 1)
     return (f"We don't have that exact one on the lot right now, but for {label}s we've got "
-            f"{parts}{more}. Either of those catch your eye, or want me to keep going?")
+            f"{parts}{more}.{_fees} Either of those catch your eye, or want me to keep going?")
 
 
 def _voice_bodystyle_grounding_directive(customer_msg: str,
@@ -16240,7 +16247,7 @@ def voice_handle():
     # an "alternative" to the caller's own 2006 Accord trade-in.
     _alt_cat = None if _trade_ctx else _model_implies_category(speech, inventory_rows)
     if _alt_cat:
-        _alt_reply = _build_similar_reply(_alt_cat, inventory_rows)
+        _alt_reply = _build_similar_reply(_alt_cat, inventory_rows, to_number)
         if _alt_reply:
             raw_reply = _alt_reply
             app.logger.info("voice/handle: deterministic similar-%s alternatives", _alt_cat)
