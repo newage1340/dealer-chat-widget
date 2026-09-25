@@ -28,7 +28,7 @@ except ImportError:
     ZoneInfo = None  # type: ignore
 
 import gspread
-from flask import Flask, request, g, jsonify, render_template, session, Response
+from flask import Flask, request, g, jsonify, render_template, session, Response, has_request_context
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client as TwilioClient
@@ -5849,37 +5849,24 @@ def _send_email(to: str, subject: str, body: str) -> Tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
-def _demo_alert_recipient(twilio_number: str) -> str:
-    """For the demo line only: the phone number to mirror dealer-side alerts to.
+def _demo_alert_target(customer_phone: str, twilio_number: str) -> str:
+    """The phone to mirror a demo dealer-alert to: the caller in THIS
+    conversation, and nobody else.
 
-    A prospect calling the demo is playing both roles - customer and dealership
-    - so the "staff" who should see the lead alert is the caller themselves.
-    Returns the most recent real phone that talked to the demo line, or "" if we
-    can't resolve one (in which case we fall back to logging, as before).
-
-    Deliberately scoped to the demo number. Real dealers never reach this."""
-    tn = normalize_phone(twilio_number)
-    try:
-        conn = _db()
-        rows = conn.execute(
-            "SELECT customer_phone FROM messages WHERE twilio_number=? "
-            "ORDER BY id DESC LIMIT 20",
-            (tn,),
-        ).fetchall()
-        conn.close()
-    except Exception as e:
-        app.logger.warning("Demo alert: recipient lookup failed: %s", e)
+    An earlier version looked up "the most recent number that talked to the demo
+    line" instead. With more than one conversation in play that picks a
+    bystander - it fired a stream of "call back Mike" alerts at the owner's
+    personal phone for a test call placed from a different number. Never guess a
+    recipient; if we can't identify the caller, send nothing.
+    """
+    phone = normalize_phone(resolve_outbound_customer_phone(customer_phone or "", twilio_number))
+    if not phone or phone.startswith("+web") or phone == normalize_phone(twilio_number):
         return ""
-
-    for r in rows:
-        phone = normalize_phone(resolve_outbound_customer_phone(r["customer_phone"], tn))
-        # Skip widget pseudo-phones and anything that would text the line itself.
-        if phone and not phone.startswith("+web") and phone != tn:
-            return phone
-    return ""
+    return phone
 
 
-def notify_all_staff(dealer_row: Dict[str, Any], from_number: str, body: str) -> None:
+def notify_all_staff(dealer_row: Dict[str, Any], from_number: str, body: str,
+                     customer_phone: str = "") -> None:
     # Demo line: there's no real dealership to notify, and the prospect on the
     # other end is the person who wants to see this. Mirror the dealer-side
     # alert back to whoever called - it's the half of the product they came to
@@ -5888,9 +5875,14 @@ def notify_all_staff(dealer_row: Dict[str, Any], from_number: str, body: str) ->
     # Real dealers never enter this branch, so their notification path, emails,
     # and salesman fan-out are all unchanged.
     if _is_demo_twilio(from_number):
-        target = _demo_alert_recipient(from_number)
+        # Resolve the caller from THIS conversation. g is set per request by the
+        # SMS and voice handlers; background jobs pass customer_phone directly.
+        _cust = customer_phone or (g.get("customer_phone", "") if has_request_context() else "")
+        target = _demo_alert_target(_cust, from_number)
         if not target:
-            app.logger.info("Demo line: no caller to mirror alert to. Body:\n%s", body)
+            app.logger.info("Demo line: no identified caller to mirror alert to "
+                            "(customer_phone=%r) - sending nothing. Body:\n%s",
+                            _cust, body)
             return
         demo_body = ("[DEMO - this is what the dealership's team would receive]\n\n"
                      f"{body}")
@@ -7817,7 +7809,8 @@ def send_cold_followups() -> None:
                         lead_body = (f"Possible lead: {full_name} ({outbound_phone}) - "
                                      f"customer chatted but did not book a visit. Consider reaching out.")
                     try:
-                        notify_all_staff(dealer, twilio_number, lead_body)
+                        notify_all_staff(dealer, twilio_number, lead_body,
+                                         customer_phone=customer_phone)
                     except Exception as e:
                         app.logger.warning("Lead notify failed for %s: %s", customer_phone, e)
             else:
@@ -9031,6 +9024,9 @@ def sms_webhook():
     # skip its duplicate text (the bot's reply goes back to the customer's
     # phone automatically via TwiML).
     g.is_sms_request = True
+    # Who this request is about, so demo alert mirroring targets the right
+    # caller instead of guessing from recent traffic.
+    g.customer_phone = from_number
     # Bridge: if this real phone previously used the widget for this dealer,
     # route the SMS into that widget session so reschedules/cancels can find
     # the appointment (which was saved under the +web<sessionid> pseudo-phone).
@@ -17557,6 +17553,7 @@ def vapi_chat_completions():
     payload = request.get_json(silent=True) or {}
     stream = bool(payload.get("stream", True))
     speech, from_number, to_number, call_id, has_user_turn = _vapi_extract_fields(payload)
+    g.customer_phone = from_number
     # DIAGNOSTIC: what tools did Vapi attach to this assistant, and is it
     # streaming? Tells us whether endCall/transferCall are reaching us.
     _tool_names = []
