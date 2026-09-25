@@ -15557,6 +15557,24 @@ def voice_webhook():
     except Exception as _e:
         app.logger.warning("voice: cold-followup reset failed for %s: %s", from_number, _e)
 
+    # DEMO ONLY: every demo call starts from zero - no remembered name, no prior
+    # conversation, and crucially no leftover APPOINTMENT. A stale appointment
+    # made the no-META_JSON booking rescue skip (it only commits when the caller
+    # has none on file), so the caller was told "you're all set" and never got a
+    # confirmation text.
+    #
+    # This used to live in /demo-front-door. That endpoint stopped being called
+    # when the demo number was pointed straight at Vapi, silently taking the
+    # reset with it - so it belongs here, on the greeting, which runs on every
+    # call regardless of how it's routed. Real dealers keep their history.
+    if _is_demo_twilio(to_number):
+        try:
+            _w = wipe_customer_state(from_number)
+            _w.pop("_sessions", None)
+            app.logger.info("Demo line: fresh-start reset for %s — %s", from_number, _w)
+        except Exception as _e:
+            app.logger.warning("Demo line: fresh-start reset failed for %s: %s", from_number, _e)
+
     _voice_session_record(call_sid, to_number, from_number)
     save_message(from_number, to_number, "assistant", greeting, call_sid=call_sid)
     app.logger.info("voice/webhook call=%s from=%s to=%s dealer=%s agent=%s",
