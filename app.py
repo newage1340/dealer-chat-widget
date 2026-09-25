@@ -143,9 +143,14 @@ DEMO_DEALER_SLUG    = "inventiq-demo"
 # to that dealer's real callers.
 DEMO_DEALER_TWILIO  = "+18882810403"
 
-# The number printed on the demo dealership site - what a prospect actually
-# dials. Forwards to DEMO_DEALER_TWILIO. Recorded here for reference; the app
-# itself never sees this number, because the call arrives on the bot line.
+# The number printed on the demo dealership site - what a prospect dials. It
+# forwards to DEMO_DEALER_TWILIO via a TwiML Bin in Twilio, NOT via /incoming
+# (the router resolves dealers from the sheet, and the demo deliberately isn't
+# in it, so /incoming would fall back to some real dealer).
+#
+# The forward MUST pass the original caller through as callerId. If it presents
+# this number instead, every demo caller looks like the same person and the two
+# demo texts go to this line instead of the prospect's phone.
 DEMO_DEALER_FRONT_DOOR = "+12173028504"
 
 # Only Auto District Indy uses the "every car on our lot is thoroughly
@@ -11905,6 +11910,28 @@ def incoming_router():
                voice="Polly.Joanna-Neural")
         vr.hangup()
     return str(vr)
+
+
+@app.route("/demo-front-door", methods=["GET", "POST"])
+@app.route("/demo-front-door/", methods=["GET", "POST"])
+def demo_front_door():
+    """Voice webhook for the demo's front-door number (DEMO_DEALER_FRONT_DOOR).
+
+    Bridges straight to the demo bot line. There's no staff to ring first and no
+    business-hours check - the demo answers every call, always.
+
+    Deliberately NOT /incoming: that router resolves the dealer from the sheet,
+    and the demo is hardcoded rather than listed there, so /incoming would fall
+    back to a real dealer and forward demo calls into someone's live shop.
+
+    callerId is the original caller, so the bot sees the prospect's real number
+    and the two demo texts land on their phone instead of this line."""
+    from_number = normalize_phone(request.values.get("From", ""))
+    app.logger.info("demo front door: call from %s -> %s", from_number, DEMO_DEALER_TWILIO)
+    vr = VoiceResponse()
+    d = vr.dial(caller_id=(from_number or None), answer_on_bridge=True)
+    d.number(DEMO_DEALER_TWILIO)
+    return Response(str(vr), mimetype="text/xml")
 
 
 @app.route("/incoming/screen", methods=["GET", "POST"])
