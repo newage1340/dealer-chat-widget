@@ -201,11 +201,15 @@ _DEMO_DEALER_ROW: Dict[str, Any] = {
         "Prices are firm - we don't haggle, the listed price is the price. "
         "Every sale has a $199 documentation fee plus $85 title and tag processing, "
         "added on top of the listed price. "
-        "REQUIRED: any time you quote the price of a vehicle, say the fees in the same "
-        "breath - for example \"it's thirty-six thousand nine hundred ninety-five, plus a "
-        "one hundred ninety-nine dollar doc fee and eighty-five for title and tag.\" Never "
-        "give a bare price and wait to be asked; a customer who hears the number on the "
-        "phone and a different total at the desk feels misled. "
+        "REQUIRED - never quote a price without the fees attached: "
+        "(a) ONE vehicle: say the fees in the same breath, e.g. \"it's thirty-six thousand "
+        "nine hundred ninety-five, plus a one hundred ninety-nine dollar doc fee and "
+        "eighty-five for title and tag.\" "
+        "(b) SEVERAL vehicles at once: list the prices, then add the fee line ONCE at the "
+        "end, e.g. \"those are all plus a one hundred ninety-nine dollar doc fee and "
+        "eighty-five for title and tag\" - don't repeat it after every car. "
+        "Never give a bare price and wait to be asked; a customer who hears one number on "
+        "the phone and a bigger total at the desk feels lied to. "
         "We do not take deposits to hold a vehicle. "
         "Walk-ins are welcome and appointments are recommended but not required. "
         "A test drive requires a valid driver's license and proof of insurance. "
@@ -499,91 +503,6 @@ _DEMO_INVENTORY: List[Dict[str, Any]] = [
                   "Condition ;; Everything works and it drives straight and strong ;; "
                   "Paint is sharp ;; Uconnect touchscreen, backup camera, and push-button "
                   "start make it modern to live with, not a stripped-out throwback"),
-    _demo_vehicle(2022, "BMW", "X7 Xdrive40I", "4-Door Suv", "Carbon Black Metallic",
-                  45000, 38500, "001",
-                  "Engine: 3.0L Turbo I6 | Transmission: 8-speed automatic | "
-                  "Drive: xDrive AWD | Interior: Cognac Vernasca leather || "
-                  "Powertrain ;; Turbocharged inline-six ;; xDrive intelligent AWD | "
-                  "Comfort Features ;; Heated front seats ;; Panoramic moonroof ;; "
-                  "Harman/Kardon audio | Safety ;; Active driving assistant ;; "
-                  "Lane departure warning ;; Blind-spot monitoring"),
-    _demo_vehicle(2023, "Honda", "Accord Hybrid", "Ex-L 4-Door Sedan", "Crystal Black Pearl",
-                  19800, 24100, "002",
-                  "Engine: 2.0L Hybrid I4 | Transmission: e-CVT | Drive: FWD | "
-                  "Interior: Black leather || Powertrain ;; Two-motor hybrid ;; "
-                  "204 combined hp | Comfort Features ;; Heated front seats ;; "
-                  "Wireless phone charger | Safety ;; Honda Sensing suite ;; "
-                  "Adaptive cruise control"),
-    _demo_vehicle(2021, "Ford", "Ranger Xlt", "4-Door Truck", "Velocity Blue",
-                  17000, 41500, "003",
-                  "Engine: 2.3L EcoBoost I4 | Transmission: 10-speed automatic | "
-                  "Drive: 4WD | Interior: Ebony cloth || Powertrain ;; "
-                  "Turbocharged inline-four ;; Part-time 4WD with electronic locking | "
-                  "Convenience Features ;; Tow/haul mode ;; FX4 Off-Road Package | "
-                  "Safety ;; Pre-Collision Assist ;; Lane-Keeping System"),
-    _demo_vehicle(2020, "Audi", "Q5 45", "Premium Plus Quattro 4-Door Suv", "Glacier White Metallic",
-                  17900, 52000, "004",
-                  "Engine: 2.0L TFSI I4 | Transmission: 7-speed S tronic | "
-                  "Drive: Quattro AWD | Interior: Black leather || "
-                  "Powertrain ;; Turbocharged inline-four ;; quattro all-wheel drive | "
-                  "Comfort Features ;; Heated front seats ;; Panoramic sunroof ;; "
-                  "Bang & Olufsen audio | Safety ;; Audi Pre Sense ;; Lane departure warning"),
-    _demo_vehicle(2017, "Jeep", "Wrangler Unlimited", "Rubicon Recon 4-Door Suv", "Granite Crystal Metallic",
-                  25989, 78000, "005",
-                  "Engine: 3.6L V6 | Transmission: 5-speed automatic | Drive: 4WD | "
-                  "Interior: Black leather || Powertrain ;; Pentastar V6 ;; "
-                  "Rock-Trac 4WD ;; Electronic locking differentials | "
-                  "Exterior Features ;; Removable hard top ;; 17-inch beadlock-capable wheels | "
-                  "Convenience Features ;; Uconnect infotainment"),
-    _demo_vehicle(2022, "GMC", "Sierra 3500", "Pro 4-Door Truck", "Summit White",
-                  41000, 22500, "006",
-                  "Engine: 6.6L Duramax Turbo-Diesel V8 | Transmission: Allison 10-speed | "
-                  "Drive: 4WD | Interior: Jet Black cloth || Powertrain ;; "
-                  "Turbo-diesel V8 ;; Allison automatic | Towing ;; "
-                  "Up to 36,000 lb conventional tow rating ;; Integrated trailer brake controller | "
-                  "Safety ;; HD Surround Vision ;; Trailering camera"),
-    _demo_vehicle(2019, "Mercedes-Benz", "Glc Glc", "63 Amg 4Matic 4-Door Suv", "Selenite Grey Metallic",
-                  45000, 47000, "007",
-                  "Engine: 4.0L AMG biturbo V8 | Transmission: AMG SPEEDSHIFT MCT 9G | "
-                  "Drive: 4MATIC+ AWD | Interior: Black Nappa leather || "
-                  "Powertrain ;; Hand-built AMG V8 ;; 503 hp | "
-                  "Performance ;; AMG RIDE CONTROL+ ;; Burmester surround sound | "
-                  "Safety ;; Active Brake Assist ;; Blind Spot Assist"),
-    _demo_vehicle(2018, "Volvo", "Xc90 T6", "Momentum 4-Door Suv", "Onyx Black Metallic",
-                  16629, 89000, "008",
-                  "Engine: 2.0L Turbo+Supercharged I4 | Transmission: 8-speed automatic | "
-                  "Drive: AWD | Interior: Charcoal leather || Powertrain ;; "
-                  "Twin-charged inline-four ;; All-wheel drive | "
-                  "Seats ;; Three-row seating ;; Heated front seats | "
-                  "Safety ;; City Safety auto-brake ;; Run-off road mitigation"),
-    _demo_vehicle(2020, "Hyundai", "Palisade Sel", "4-Door Suv", "Steel Graphite",
-                  22880, 38500, "009",
-                  "Engine: 3.8L V6 | Transmission: 8-speed automatic | Drive: FWD | "
-                  "Interior: Black cloth || Powertrain ;; Atkinson-cycle V6 ;; "
-                  "Front-wheel drive | Seats ;; Three-row seating for 8 ;; "
-                  "Heated front seats | Safety ;; Forward Collision-Avoidance Assist ;; "
-                  "Blind-Spot Collision-Avoidance Assist"),
-    _demo_vehicle(2017, "Cadillac", "Xt5 Luxury", "4-Door Suv", "Crystal White Tricoat",
-                  17200, 65000, "010",
-                  "Engine: 3.6L V6 | Transmission: 8-speed automatic | Drive: AWD | "
-                  "Interior: Jet Black leather || Powertrain ;; Direct-injected V6 ;; "
-                  "Intelligent AWD | Comfort Features ;; Heated and ventilated front seats ;; "
-                  "Panoramic sunroof ;; Bose Centerpoint audio | Safety ;; "
-                  "Forward Collision Alert ;; Lane Keep Assist"),
-    _demo_vehicle(2015, "Land Rover", "Rover Range", "Rover Hse 4-Door Suv", "Santorini Black Metallic",
-                  17000, 95000, "011",
-                  "Engine: 3.0L Supercharged V6 | Transmission: 8-speed ZF automatic | "
-                  "Drive: 4WD | Interior: Ebony leather || Powertrain ;; "
-                  "Supercharged V6 ;; Terrain Response 2 | "
-                  "Comfort Features ;; Heated front and rear seats ;; Panoramic roof ;; "
-                  "Meridian audio | Safety ;; Lane Departure Warning"),
-    _demo_vehicle(2018, "Mitsubishi", "Outlander Sport", "Se 4-Door Wagon", "Mercury Gray Metallic",
-                  10299, 71000, "012",
-                  "Engine: 2.4L I4 | Transmission: CVT | Drive: AWD | "
-                  "Interior: Black cloth || Powertrain ;; MIVEC inline-four ;; "
-                  "All-Wheel Control | Convenience Features ;; Heated front seats ;; "
-                  "Touchscreen infotainment | Safety ;; Forward Collision Mitigation ;; "
-                  "Lane Departure Warning"),
 ]
 
 
@@ -7085,6 +7004,34 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
     policies     = get_row_field(dealer, DEALER_POLICIES_ALIASES) or "(none)"
     dealer_phone = normalize_phone(dealer_phone)
 
+    # Fees as their own top-level rule rather than a sentence buried in the
+    # policy prose. Stated once in the policies text, the model reliably quoted
+    # fees for a single car but dropped them when listing several ("we've got 2
+    # trucks — the H3T for seventeen nine and the Ram for thirty-six nine"),
+    # which is exactly where a customer forms their price expectation.
+    #
+    # Only built where the numbers are known good (see get_dealer_fees); dealers
+    # without configured fees get an empty string and no rule at all, so nobody
+    # gets quoted a fee we can't stand behind.
+    _fee_rule = ""
+    try:
+        _f = get_dealer_fees(dealer_twilio) if dealer_twilio else {}
+        _doc, _tt = _f.get("doc_fee", 0.0) or 0.0, _f.get("title_tag_fee", 0.0) or 0.0
+        if _doc > 0:
+            _tt_txt = f" and {_fmt_money(_tt)} for title and tag" if _tt > 0 else ""
+            _fee_rule = (
+                "\n=== FEES — NON-NEGOTIABLE RULE ===\n"
+                f"Every vehicle is the listed price PLUS a {_fmt_money(_doc)} doc fee{_tt_txt}.\n"
+                "- Quoting ONE car: attach the fees to the price in the same sentence.\n"
+                "- Listing SEVERAL cars: give the prices, then say the fee line ONCE at the "
+                "end (e.g. 'those are all plus a one ninety-nine doc fee and eighty-five "
+                "title and tag'). Do NOT repeat it after every car.\n"
+                "- NEVER state a price without the fees somewhere in the same reply. A caller "
+                "who hears one number on the phone and a bigger one at the desk feels lied to.\n"
+            )
+    except Exception as _e:
+        app.logger.warning("fee rule build failed: %s", _e)
+
     inv_text     = format_inventory_rows(inventory_rows)
     history_text = " ".join((m.get("content") or "") for m in history[-2:])
     appt_car     = confirmed_appt["car_desc"] if confirmed_appt else ""
@@ -7346,7 +7293,7 @@ Phone (use exactly, never invent): {dealer_phone if dealer_phone else "(not list
 Financing: {financing}
 Trade-ins: {tradeins}
 Notes/Policies: {policies}
-
+{_fee_rule}
 === INVENTORY (SUMMARY) ===
 Every vehicle listed below is currently available for sale.
 {inv_text}
@@ -14283,13 +14230,43 @@ def _inv_spoken(r: Dict[str, Any]) -> str:
                                 _clean_trim(f"{_inv_field(r,'Model')}")] if p)
     return f"the {part}" + (f" for ${money:,}" if money else "")
 
+def _spoken_fee_tail(twilio_number: str, plural: bool = True) -> str:
+    """One spoken sentence stating this dealer's fees, or '' if none configured.
+
+    These deterministic inventory answers bypass the LLM entirely, so the fee
+    rule in the system prompt can't reach them - they were quoting bare prices
+    on every 'do you have any trucks?' turn. Appending the tail here keeps the
+    fast path honest without repeating fees after each individual car.
+
+    Phrased as "a doc fee of $199" rather than "a $199 doc fee" because the
+    voice layer spells amounts out, and "a one hundred ninety nine dollars doc
+    fee" is a mouthful. Set plural=False when the answer named only one car."""
+    if not twilio_number:
+        return ""
+    try:
+        f = get_dealer_fees(twilio_number)
+    except Exception:
+        return ""
+    doc, tt = f.get("doc_fee", 0.0) or 0.0, f.get("title_tag_fee", 0.0) or 0.0
+    if doc <= 0:
+        return ""
+    tt_txt = f" and {_fmt_money(tt)} for title and tag" if tt > 0 else ""
+    lead = "Those are all plus" if plural else "That's plus"
+    return f" {lead} a doc fee of {_fmt_money(doc)}{tt_txt}."
+
+
 def _voice_inventory_query(speech: str, rows: List[Dict[str, Any]],
-                           history: Optional[List[Dict[str, Any]]] = None) -> str:
+                           history: Optional[List[Dict[str, Any]]] = None,
+                           twilio_number: str = "") -> str:
     """Deterministic answer for superlative ('cheapest/most expensive [category]')
     and category-availability ('do you have any trucks?') questions, or '' when
-    the turn isn't one of those (leave it to the LLM)."""
+    the turn isn't one of those (leave it to the LLM).
+
+    twilio_number is optional and only used to append the dealer's fee line to
+    any answer that quotes a price."""
     if not speech or not rows:
         return ""
+    _fees = _spoken_fee_tail(twilio_number)
     s = speech.lower()
     cat = None
     for c, words in _INV_CATEGORY_WORDS.items():
@@ -14333,7 +14310,9 @@ def _voice_inventory_query(speech: str, rows: List[Dict[str, Any]],
         pick = max(priced, key=_inv_price) if hi else min(priced, key=_inv_price)
         adj = "most expensive" if hi else "cheapest"
         noun = _CAT_LABEL_SING.get(cat, cat) if cat else "car"
-        return (f"The {adj} {noun} we've got right now is {_inv_spoken(pick)}. "
+        # One car named -> singular phrasing.
+        return (f"The {adj} {noun} we've got right now is {_inv_spoken(pick)}."
+                f"{_spoken_fee_tail(twilio_number, plural=False)} "
                 "Want to hear more about it or come take a look?")
 
     # If the caller put a PRICE limit on it ("SUVs under 10k"), defer to the
@@ -14349,7 +14328,7 @@ def _voice_inventory_query(speech: str, rows: List[Dict[str, Any]],
         ex_txt = " and ".join(_inv_spoken(r) for r in ex) if ex else ""
         n = len(matches)
         head = f"Yeah, we've got {n} {label if n != 1 else _CAT_LABEL_SING.get(cat, cat)}"
-        return head + (f" — like {ex_txt}. Want me to run through more of them?" if ex_txt
+        return head + (f" — like {ex_txt}.{_fees} Want me to run through more of them?" if ex_txt
                        else ". Want me to run through them?")
     return ""
 
@@ -14499,7 +14478,8 @@ def _voice_exact_price_for_focused_car(speech: str, rows: List[Dict[str, Any]],
 
 
 def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
-                                 history: Optional[List[Dict[str, Any]]] = None) -> str:
+                                 history: Optional[List[Dict[str, Any]]] = None,
+                                 twilio_number: str = "") -> str:
     """Deterministic answer for a PRICE-CONSTRAINED inventory question:
         'anything under $X', 'between $X and $Y', 'trucks over $20k',
         'a truck around $12k', 'any Audi under $20k', 'Ford SUVs under 15k'.
@@ -14509,6 +14489,7 @@ def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
     SPECIFIC model is named ('is the F-150 under 10k?' — that's about one car)."""
     if not speech or not rows:
         return ""
+    _fees = _spoken_fee_tail(twilio_number)
     s = speech.lower()
 
     # An "exact/actual price" ask is about ONE car's precise number — never a
@@ -14650,7 +14631,7 @@ def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
             return (f"The closest {label_sing} to ${target:,.0f} we've got is "
                     f"{_inv_spoken(nearest[0])}. Want to hear more about it?")
         ex_txt = " and ".join(_inv_spoken(r) for r in nearest[:2])
-        return (f"Closest to ${target:,.0f}, we've got {ex_txt}. "
+        return (f"Closest to ${target:,.0f}, we've got {ex_txt}.{_fees} "
                 "Want to hear more about either?")
 
     # --- BAND: under / over / between ---
@@ -14672,7 +14653,7 @@ def _voice_price_threshold_query(speech: str, rows: List[Dict[str, Any]],
             return f"Yeah — we've got one {label_sing} {band}: {ex_txt}. Want to come take a look?"
         lead = (f"Sure — toward the top of that, " if (refine_high and not min_amount)
                 else f"Yeah, we've got {n} {label} {band} — like ")
-        return f"{lead}{ex_txt}. Want me to run through more of them?"
+        return f"{lead}{ex_txt}.{_fees} Want me to run through more of them?"
     # Nothing in the band — offer the nearest priced match instead of denying flat.
     if max_amount:
         under_cap = sorted([r for r in priced if _inv_price(r) <= max_amount], key=_inv_price)
@@ -16137,14 +16118,14 @@ def voice_handle():
             # LLM: the model misfilters constantly — denies stock we have, quotes cars
             # outside the band, lists a Juke as a truck. This computes the answer from
             # the real rows, so those failure modes can't happen.
-            _price_q = _voice_price_threshold_query(speech, inventory_rows, history)
+            _price_q = _voice_price_threshold_query(speech, inventory_rows, history, to_number)
             if _price_q:
                 raw_reply = _inv_q = _price_q
                 app.logger.info("voice/handle: deterministic price-query answer")
             else:
                 # No price cap — superlatives ("cheapest truck") and plain
                 # availability ("do you have any trucks/work vans?").
-                _inv_q = _voice_inventory_query(speech, inventory_rows, history)
+                _inv_q = _voice_inventory_query(speech, inventory_rows, history, to_number)
                 if _inv_q:
                     raw_reply = _inv_q
                     app.logger.info("voice/handle: deterministic inventory-query answer")
