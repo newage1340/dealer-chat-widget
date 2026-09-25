@@ -1907,6 +1907,11 @@ _NAME_STOPWORDS = {
     "definitely", "absolutely", "seriously", "literally", "basically",
     "probably", "exactly", "totally", "hopefully", "surely", "clearly",
     "frankly", "anyway", "anyways", "whatever", "nevermind", "nothing",
+    # Negations that survive the lead-in stripper. "no" was blocked but "not"
+    # wasn't, so "no, not trading anything in" lost the "no" and saved the
+    # caller's name as "not" (seen 2026-09-25). None of these is a real name.
+    "not", "nah", "naw", "never", "none", "dont", "don't", "cant", "can't",
+    "wont", "won't", "isnt", "isn't", "aint", "ain't",
 }
 
 
