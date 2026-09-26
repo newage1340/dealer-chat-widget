@@ -507,6 +507,120 @@ _DEMO_INVENTORY: List[Dict[str, Any]] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Demo profiles — let the demo line impersonate a specific PROSPECT's lot.
+#
+# Walking into a dealership and having the demo answer as "Demo Website" with
+# made-up cars invites the obvious objection ("but it doesn't know MY
+# inventory"). A profile swaps the demo's name, inventory and fees to that
+# dealer's real ones, so the owner can ask about a car sitting twenty feet away.
+#
+# Profiles are JSON files in demo_profiles/. "default" is not a file — it's the
+# hardcoded Demo Website above, so the original demo can always be restored even
+# if every JSON file is deleted or malformed.
+#
+# This CANNOT affect a paying dealer: every lookup below is already behind a
+# `== DEMO_DEALER_TWILIO` / `== DEMO_DEALER_SLUG` check. Real dealers resolve
+# through the Google Sheet and the DB and never reach this code.
+# ---------------------------------------------------------------------------
+DEMO_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo_profiles")
+
+# Active profile, in memory. None => the hardcoded Demo Website.
+_ACTIVE_DEMO_PROFILE: Optional[Dict[str, Any]] = None
+_ACTIVE_DEMO_PROFILE_NAME: str = "default"
+
+
+def _list_demo_profiles() -> List[str]:
+    """Names of the profiles available to switch to (always includes default)."""
+    names = ["default"]
+    try:
+        for fn in sorted(os.listdir(DEMO_PROFILE_DIR)):
+            if fn.endswith(".json"):
+                names.append(fn[:-5])
+    except OSError:
+        pass
+    return names
+
+
+def _activate_demo_profile(name: str) -> Dict[str, Any]:
+    """Load a profile by name and make it the demo line's identity.
+
+    Returns a small summary. Raises ValueError if the name is unknown or the
+    file is unusable — the caller keeps the previous profile in that case, so a
+    bad file can never leave the demo line broken mid-visit.
+    """
+    global _ACTIVE_DEMO_PROFILE, _ACTIVE_DEMO_PROFILE_NAME
+
+    clean = (name or "").strip().lower()
+    if clean in ("", "default", "demo"):
+        _ACTIVE_DEMO_PROFILE = None
+        _ACTIVE_DEMO_PROFILE_NAME = "default"
+        _remember_demo_profile("default")
+        return {"profile": "default",
+                "dealership": _DEMO_DEALER_ROW["dealership name"],
+                "vehicles": len(_DEMO_INVENTORY),
+                "doc_fee": DEMO_DOC_FEE, "title_tag_fee": DEMO_TITLE_TAG_FEE}
+
+    if not re.fullmatch(r"[a-z0-9_-]+", clean):
+        raise ValueError(f"bad profile name {name!r}")
+
+    path = os.path.join(DEMO_PROFILE_DIR, f"{clean}.json")
+    if not os.path.exists(path):
+        raise ValueError(f"no such profile {clean!r} (have: {', '.join(_list_demo_profiles())})")
+
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    row = data.get("row") or {}
+    inventory = data.get("inventory") or []
+    if not row.get("dealership name"):
+        raise ValueError(f"profile {clean!r} has no dealership name")
+    if not inventory:
+        raise ValueError(f"profile {clean!r} has no inventory")
+
+    # Fill in the plumbing keys the rest of the app expects. A profile file only
+    # has to carry the dealer-specific fields.
+    row = dict(row)
+    row["twilio number given to dealer (leave this blank)"] = DEMO_DEALER_TWILIO
+    row["slug"] = DEMO_DEALER_SLUG
+    row.setdefault("cold followup minutes", "1")
+
+    _ACTIVE_DEMO_PROFILE = {
+        "row": row,
+        "inventory": [dict(v) for v in inventory],
+        "doc_fee": float(data.get("doc_fee", DEMO_DOC_FEE)),
+        "title_tag_fee": float(data.get("title_tag_fee", DEMO_TITLE_TAG_FEE)),
+    }
+    _ACTIVE_DEMO_PROFILE_NAME = clean
+    _remember_demo_profile(clean)
+    return {"profile": clean, "dealership": row["dealership name"],
+            "vehicles": len(inventory),
+            "doc_fee": _ACTIVE_DEMO_PROFILE["doc_fee"],
+            "title_tag_fee": _ACTIVE_DEMO_PROFILE["title_tag_fee"]}
+
+
+def _demo_row() -> Dict[str, Any]:
+    """The demo dealer's sheet-style row — profile's if one is active."""
+    if _ACTIVE_DEMO_PROFILE:
+        return dict(_ACTIVE_DEMO_PROFILE["row"])
+    return dict(_DEMO_DEALER_ROW)
+
+
+def _demo_inventory() -> List[Dict[str, Any]]:
+    """The demo dealer's inventory — profile's if one is active."""
+    if _ACTIVE_DEMO_PROFILE:
+        return [dict(v) for v in _ACTIVE_DEMO_PROFILE["inventory"]]
+    return [dict(v) for v in _DEMO_INVENTORY]
+
+
+def _demo_fees() -> Dict[str, float]:
+    """The demo dealer's fees — profile's if one is active."""
+    if _ACTIVE_DEMO_PROFILE:
+        return {"doc_fee": _ACTIVE_DEMO_PROFILE["doc_fee"],
+                "title_tag_fee": _ACTIVE_DEMO_PROFILE["title_tag_fee"]}
+    return {"doc_fee": DEMO_DOC_FEE, "title_tag_fee": DEMO_TITLE_TAG_FEE}
+
+
 def _is_demo_twilio(twilio_number: str) -> bool:
     """True if the given twilio number is the hardcoded demo dealer's."""
     return normalize_phone(twilio_number) == DEMO_DEALER_TWILIO
@@ -787,7 +901,7 @@ def select_dealer_for_twilio_number(dealers: List[Dict[str, Any]], twilio_to: st
         return {}
     # Demo dealer short-circuit (hardcoded, not in the sheet).
     if tn == DEMO_DEALER_TWILIO:
-        return dict(_DEMO_DEALER_ROW)
+        return _demo_row()
     for d in reversed(dealers):
         if normalize_phone(get_row_field(d, TWILIO_NUMBER_ALIASES)) == tn:
             return d
@@ -809,7 +923,7 @@ def select_dealer_for_slug(dealers: List[Dict[str, Any]], slug: str) -> Dict[str
         return {}
     # Demo dealer short-circuit (hardcoded, not in the sheet).
     if target == DEMO_DEALER_SLUG:
-        return dict(_DEMO_DEALER_ROW)
+        return _demo_row()
     for d in reversed(dealers):
         explicit = _normalize_slug(get_row_field(d, SLUG_ALIASES))
         if explicit and explicit == target:
@@ -1269,6 +1383,17 @@ def init_db() -> None:
             )
         """)
 
+        # Tiny key/value store. Currently holds only the active demo profile, so
+        # a Render restart mid-sales-day doesn't silently drop the demo line back
+        # to "Demo Website" while a prospect is dialling it.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS voice_sessions (
                 call_sid TEXT PRIMARY KEY,
@@ -1318,6 +1443,37 @@ def init_db() -> None:
 # SQLITE - INVENTORY
 # =========================
 
+def _remember_demo_profile(name: str) -> None:
+    """Persist which demo profile is active so it survives a restart/redeploy."""
+    try:
+        conn = _db()
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ('demo_profile', ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (name, datetime.now().isoformat()),
+        )
+        conn.commit()
+    except Exception as exc:  # never let bookkeeping break a switch
+        app.logger.warning("demo profile: could not persist %r: %s", name, exc)
+
+
+def restore_demo_profile() -> None:
+    """On boot, re-activate whichever profile was last selected.
+
+    Any failure falls back to the hardcoded Demo Website, which is always valid.
+    """
+    try:
+        conn = _db()
+        row = conn.execute("SELECT value FROM app_settings WHERE key='demo_profile'").fetchone()
+        name = (row[0] if row else "default") or "default"
+        if name != "default":
+            info = _activate_demo_profile(name)
+            app.logger.info("demo profile: restored %r (%s, %d vehicles)",
+                            name, info["dealership"], info["vehicles"])
+    except Exception as exc:
+        app.logger.warning("demo profile: restore failed, staying on default: %s", exc)
+
+
 def save_dealer_fees(twilio_number: str, doc_fee: str, title_tag_fee: str) -> None:
     """Upsert this dealer's scraped fees. Empty strings overwrite nothing — they
     let us refresh just one field without wiping the other when only that one
@@ -1354,7 +1510,7 @@ def get_dealer_fees(twilio_number: str) -> Dict[str, float]:
     # stored in dealer_fees, so the spoken price breakdown matches the fee table
     # printed on the demo site without needing a DB row.
     if tn == DEMO_DEALER_TWILIO:
-        return {"doc_fee": DEMO_DOC_FEE, "title_tag_fee": DEMO_TITLE_TAG_FEE}
+        return _demo_fees()
     conn = _db()
     row = conn.execute(
         "SELECT doc_fee, title_tag_fee FROM dealer_fees WHERE twilio_number=?", (tn,)
@@ -1377,7 +1533,7 @@ def get_inventory_for_twilio(twilio_number: str) -> List[Dict[str, Any]]:
     tn = normalize_phone(twilio_number)
     # Demo dealer has hardcoded inventory baked into the codebase — no DB.
     if tn == DEMO_DEALER_TWILIO:
-        return [dict(v) for v in _DEMO_INVENTORY]
+        return _demo_inventory()
     conn = _db()
     rows = conn.execute(
         "SELECT * FROM inventory WHERE twilio_number=? ORDER BY id", (tn,)
@@ -1686,6 +1842,51 @@ def clear_conversation():
                     phone, sessions, wiped)
     return jsonify({"ok": True, "phone": phone,
                     "sessions_cleared": sessions, "cleared": wiped})
+
+
+@app.route("/admin/demo-profile", methods=["GET", "POST"])
+def demo_profile():
+    """Switch the demo line's identity to a saved prospect profile, or back.
+
+    Meant to be opened on a phone in a dealership parking lot:
+        /admin/demo-profile?token=YOUR_TOKEN&use=a2z        -> becomes A2Z Autos
+        /admin/demo-profile?token=YOUR_TOKEN&use=default    -> back to Demo Website
+        /admin/demo-profile?token=YOUR_TOKEN                -> show what's active
+
+    Takes effect on the next call to +1 217 302 8504 — no redeploy, no restart.
+    Only the demo line is affected; real dealers resolve through the sheet and
+    never touch this. Reuses INVENTORY_UPLOAD_TOKEN, same as the other admin
+    routes, so there's no new secret to set up."""
+    expected = os.getenv("INVENTORY_UPLOAD_TOKEN", "").strip()
+    provided = (request.values.get("token", "")
+                or request.headers.get("X-Upload-Token", "")).strip()
+    if not expected or provided != expected:
+        app.logger.warning("demo-profile: unauthorized attempt")
+        return jsonify({"error": "unauthorized"}), 401
+
+    requested = request.values.get("use", "").strip()
+    if not requested:
+        return jsonify({
+            "active": _ACTIVE_DEMO_PROFILE_NAME,
+            "dealership": _demo_row().get("dealership name", ""),
+            "vehicles": len(_demo_inventory()),
+            "fees": _demo_fees(),
+            "available": _list_demo_profiles(),
+            "hint": "add &use=<name> to switch, &use=default to go back",
+        })
+
+    try:
+        info = _activate_demo_profile(requested)
+    except (ValueError, json.JSONDecodeError, OSError) as exc:
+        # Previous profile is still active — a bad file never breaks the line.
+        app.logger.warning("demo-profile: switch to %r failed: %s", requested, exc)
+        return jsonify({"error": str(exc),
+                        "still_active": _ACTIVE_DEMO_PROFILE_NAME,
+                        "available": _list_demo_profiles()}), 400
+
+    app.logger.info("demo-profile: now %r — %s (%d vehicles)",
+                    info["profile"], info["dealership"], info["vehicles"])
+    return jsonify({"ok": True, **info, "available": _list_demo_profiles()})
 
 
 @app.route("/admin/inventory-check", methods=["GET"])
@@ -17646,6 +17847,9 @@ def vapi_chat_completions():
 # the scheduler set up at import time.
 # =========================
 init_db()
+# Re-apply the demo profile chosen before the last restart, so a redeploy in the
+# middle of a sales visit doesn't drop the demo line back to "Demo Website".
+restore_demo_profile()
 if os.getenv("DEV_CLEAR_DB", "0") == "1":
     try:
         with _db() as _conn:
