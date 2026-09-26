@@ -7243,6 +7243,12 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
         app.logger.warning("fee rule build failed: %s", _e)
 
     inv_text     = format_inventory_rows(inventory_rows)
+    # State the lot size as a fact rather than asking the model to count a long
+    # list. The instruction below used to carry a hardcoded example ("we've got
+    # fifteen on the lot"), and the model read it as the answer — so a 68-car
+    # dealer was told it had fifteen. Give it the real number, spelled out the
+    # way the voice layer should say it.
+    _inv_count   = len(inventory_rows or [])
     history_text = " ".join((m.get("content") or "") for m in history[-2:])
     appt_car     = confirmed_appt["car_desc"] if confirmed_appt else ""
     # Is the confirmed appointment in the PAST? The bot has the time and the
@@ -7506,10 +7512,11 @@ Notes/Policies: {policies}
 {_fee_rule}
 === INVENTORY (SUMMARY) ===
 Every vehicle listed below is currently available for sale.
-This list is the ENTIRE lot - there is nothing else in stock. If the caller asks how many
-cars/vehicles you have, count these and give the real number ("we've got fifteen on the lot
-right now"). Never answer with a vague "a nice selection" - a caller asking for a number
-wants a number.
+This list is the ENTIRE lot - there is nothing else in stock.
+THERE ARE EXACTLY {_inv_count} VEHICLES ON THE LOT. If the caller asks how many cars or
+vehicles you have, say {_inv_count} - do not count the list yourself and do not use any
+number from an example. Never answer with a vague "a nice selection" - a caller asking for
+a number wants a number.
 {inv_text}
 
 === TOP MATCHING VEHICLE DETAILS ===
