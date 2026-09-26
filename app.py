@@ -599,8 +599,42 @@ def _activate_demo_profile(name: str) -> Dict[str, Any]:
             "title_tag_fee": _ACTIVE_DEMO_PROFILE["title_tag_fee"]}
 
 
+_DEMO_PROFILE_CHECKED_AT: float = 0.0
+_DEMO_PROFILE_RECHECK_S: float = 5.0
+
+
+def _ensure_demo_profile_current() -> None:
+    """Re-read the active profile from the DB if our copy might be stale.
+
+    The active profile used to live ONLY in a module global. That broke the
+    moment the switch request and the phone call were served by different
+    processes: /admin/demo-profile reported "Bobby's Auto, 34 vehicles" while
+    the actual call still answered with the default demo's fifteen cars. The DB
+    is the single source of truth; this keeps every process honest without
+    hitting it on every turn.
+    """
+    global _DEMO_PROFILE_CHECKED_AT
+    now_ts = time.monotonic()
+    if now_ts - _DEMO_PROFILE_CHECKED_AT < _DEMO_PROFILE_RECHECK_S:
+        return
+    _DEMO_PROFILE_CHECKED_AT = now_ts
+    try:
+        conn = _db()
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key='demo_profile'").fetchone()
+        conn.close()
+        wanted = (row[0] if row else "default") or "default"
+        if wanted != _ACTIVE_DEMO_PROFILE_NAME:
+            _activate_demo_profile(wanted)
+            app.logger.info("demo profile: picked up %r from DB (was %r)",
+                            wanted, _ACTIVE_DEMO_PROFILE_NAME)
+    except Exception as exc:
+        app.logger.warning("demo profile: staleness check failed: %s", exc)
+
+
 def _demo_row() -> Dict[str, Any]:
     """The demo dealer's sheet-style row — profile's if one is active."""
+    _ensure_demo_profile_current()
     if _ACTIVE_DEMO_PROFILE:
         return dict(_ACTIVE_DEMO_PROFILE["row"])
     return dict(_DEMO_DEALER_ROW)
@@ -608,6 +642,7 @@ def _demo_row() -> Dict[str, Any]:
 
 def _demo_inventory() -> List[Dict[str, Any]]:
     """The demo dealer's inventory — profile's if one is active."""
+    _ensure_demo_profile_current()
     if _ACTIVE_DEMO_PROFILE:
         return [dict(v) for v in _ACTIVE_DEMO_PROFILE["inventory"]]
     return [dict(v) for v in _DEMO_INVENTORY]
@@ -615,6 +650,7 @@ def _demo_inventory() -> List[Dict[str, Any]]:
 
 def _demo_fees() -> Dict[str, float]:
     """The demo dealer's fees — profile's if one is active."""
+    _ensure_demo_profile_current()
     if _ACTIVE_DEMO_PROFILE:
         return {"doc_fee": _ACTIVE_DEMO_PROFILE["doc_fee"],
                 "title_tag_fee": _ACTIVE_DEMO_PROFILE["title_tag_fee"]}
@@ -1866,6 +1902,9 @@ def demo_profile():
 
     requested = request.values.get("use", "").strip()
     if not requested:
+        # Refresh from the DB first so this can't report a profile that the
+        # process answering the phone isn't actually using.
+        _ensure_demo_profile_current()
         return jsonify({
             "active": _ACTIVE_DEMO_PROFILE_NAME,
             "dealership": _demo_row().get("dealership name", ""),
