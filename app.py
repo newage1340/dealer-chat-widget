@@ -7318,6 +7318,52 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
     convo_text = "\n".join(convo_lines) or "(No prior messages)"
     current_time_str = _now_local().strftime("%A, %B %d, %Y at %I:%M %p")
 
+    # Spell out the next week day-by-day with each day's real status, instead of
+    # handing over a raw hours string and trusting the model to work out what
+    # "tomorrow" is. It doesn't: asked on a Saturday evening, a dealer closed on
+    # Sundays answered "we're closed on Sundays, but I'd love to get you in
+    # tomorrow" — it knew the rule and still offered the closed day. Booking a
+    # customer for a day the lot is shut is about the worst failure this thing
+    # has. Days the dealer's hours string doesn't cover are handed to Notes/
+    # Policies rather than guessed at (e.g. "Saturday: by appointment only",
+    # which has no time range to parse).
+    _schedule_lines = []
+    try:
+        _parsed_hours = _parse_hours_string(hours or "")
+        _today_local = _now_local()
+        for _offset in range(7):
+            _d = _today_local + timedelta(days=_offset)
+            _dayname = _WEEKDAYS[_d.weekday()]
+            _label = ("TODAY" if _offset == 0 else
+                      "TOMORROW" if _offset == 1 else _dayname)
+            _status = _parsed_hours.get(_dayname)
+            if _status is None:
+                # The parser only understands time ranges and "closed", so a day
+                # written as "Saturday: by appointment only" disappears entirely.
+                # An absent day left the model improvising — it invented "closed
+                # for the night" and pushed the caller to a day the lot is shut.
+                # Catch the appointment-only phrasing off the raw string.
+                _seg = re.search(
+                    rf"{_dayname[:3]}[a-z]*\s*:?[^,;|\n]*",
+                    hours or "", re.I,
+                )
+                if _seg and re.search(r"appointment", _seg.group(0), re.I):
+                    _text = ("BY APPOINTMENT ONLY - we are here, but only for booked "
+                             "appointments. Offer to book them a specific time; do not "
+                             "tell them to just stop by, and do not call this day closed")
+                else:
+                    _text = "hours not listed - follow Notes/Policies above for this day"
+            elif str(_status).strip().lower() == "closed":
+                _text = "CLOSED - never offer a time on this day"
+            else:
+                _text = str(_status)
+            _schedule_lines.append(
+                f"- {_label} ({_dayname} {_d.strftime('%b %d')}): {_text}")
+    except Exception as _e:
+        app.logger.warning("schedule block build failed: %s", _e)
+    _schedule_block = ("\n".join(_schedule_lines)
+                       if _schedule_lines else "- (hours unavailable)")
+
     if isinstance(customer_name, dict):
         first, last, email = customer_name.get("name", ""), customer_name.get("last_name", ""), customer_name.get("email", "")
         trade_in = customer_name.get("trade_in_vehicle", "")
@@ -7535,6 +7581,17 @@ Note: measurements in inches (e.g. 144\", 148\") refer to wheelbase. AWD/RWD/FWD
 
 {focus_block}=== CURRENT DATE & TIME (use to interpret "tomorrow", "Friday", "this afternoon", etc.) ===
 Today is {current_time_str}.
+
+=== WHICH DAYS WE ARE ACTUALLY OPEN (already worked out - do NOT calculate this yourself) ===
+{_schedule_block}
+NEVER offer, suggest, or confirm a visit on a day marked CLOSED - not even as
+"tomorrow" or "this weekend". If the day they asked for is closed, say so plainly
+and offer the next day that is open above.
+If TOMORROW is marked CLOSED, do NOT use the word "tomorrow" anywhere in your
+reply - it means the closed day and saying "closed Sunday but come in tomorrow"
+is nonsense. Name the next open day instead ("Monday").
+The opening time you quote must be the one listed above for THAT day, not
+another day's.
 
 Write ONE SMS reply now.""".strip()
 
@@ -15461,6 +15518,41 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
     # was doing its own (unreliable) time math and flip-flopping between "open
     # till 6" and "closed for the night" within the same call. Now it's told.
     _open_now, _hours_today = _dealer_is_open_now(dealer)
+
+    # Work out the next day the lot is actually open, and say it by name. The
+    # examples below used to hardcode the word "tomorrow" — and being examples,
+    # the model copied them, so a dealer closed on Sunday cheerfully offered
+    # "come in tomorrow" on a Saturday evening. Appointment-only days count as
+    # open (you can still book one), they just can't be walk-ins.
+    _next_open_label, _next_open_time = "", ""
+    try:
+        _ph = _parse_hours_string(hours_str or "")
+        for _off in range(1, 8):
+            _d2 = now + timedelta(days=_off)
+            _dn = _WEEKDAYS[_d2.weekday()]
+            _st = _ph.get(_dn)
+            if _st is None:
+                _sg = re.search(rf"{_dn[:3]}[a-z]*\s*:?[^,;|\n]*", hours_str or "", re.I)
+                if _sg and re.search(r"appointment", _sg.group(0), re.I):
+                    _next_open_label = "tomorrow" if _off == 1 else _dn
+                    _next_open_time = "by appointment"
+                    break
+                continue
+            if str(_st).strip().lower() == "closed":
+                continue
+            _next_open_label = "tomorrow" if _off == 1 else _dn
+            _m2 = re.match(r"\s*([0-9:apm\.\s]+?)\s*(?:to|-|–)", str(_st), re.I)
+            _next_open_time = (_m2.group(1).strip() if _m2 else str(_st).strip())
+            break
+    except Exception as _e:
+        app.logger.warning("next-open-day build failed: %s", _e)
+    _next_open_phrase = (
+        f"{_next_open_label}"
+        + (f" — we open at {_next_open_time}" if _next_open_time
+           and _next_open_time != "by appointment" else "")
+        + (" — that day is appointment only, so let's lock in a time"
+           if _next_open_time == "by appointment" else "")
+    ) if _next_open_label else "the next day we're open"
     if _open_now is True:
         _status_line = (
             f"OPEN/CLOSED RIGHT NOW: **OPEN** (today's hours: {_hours_today}). "
@@ -15474,8 +15566,8 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
             "in — leading with 'we're closed' out of nowhere is confusing. When it "
             "IS relevant (they ask if you're open, or want to come in now), don't "
             "just state you're closed — turn it into a booking for the next open "
-            "time, e.g. 'We're actually closed for the night, but I'd love to get "
-            "you in tomorrow — we open at [open time]. What time works for ya?'. "
+            f"time, which is {_next_open_phrase}. Say that day BY NAME; never say "
+            "'tomorrow' unless that phrase literally says tomorrow. "
             "Never say you're open. Being closed does NOT limit what you can answer "
             "— keep helping with pricing, details, financing, trade-ins, everything, "
             "just like normal.\n")
@@ -15493,7 +15585,7 @@ def build_dealer_voice_prompt(dealer, inventory_rows, history, customer_msg,
         "- BEING CLOSED NEVER LIMITS WHAT YOU ANSWER. You help 24/7: answer every question fully at any hour — pricing, availability, specs, vehicle history, financing, trade-ins, anything the caller asks. The ONLY thing 'closed right now' affects is an in-person visit happening RIGHT NOW or TODAY; for that, offer the next open time. NEVER say 'I can answer that when we're open', NEVER refuse or defer a question, and NEVER pivot to 'call back during business hours' just because you're closed. Being closed is not a reason to stop helping.\n"
         "- ONLY bring up whether you're open/closed RIGHT NOW when the caller actually asks about CURRENT availability ('are you open?', 'can I come right now?', 'what time do you close today?') or asks to come in TODAY. Use the CURRENT TIME above to answer, not the hours string alone.\n"
         "- If the caller just expressed interest in a car (and did NOT ask about hours or coming in right now), do NOT mention being closed at all — pivot toward booking naturally: 'When were you thinking of coming to see it?'. Only surface 'closed' if they then ask to come now/today.\n"
-        "- When you DO mention being closed, ALWAYS turn it into a booking offer for the next open time — never leave 'we're closed' just hanging there. Past close → 'We're closed for the night, but I can get you in tomorrow — we open at [open time]. What time works?' Before open → 'We open at [time] — want me to set you up for then?'\n"
+        f"- When you DO mention being closed, ALWAYS turn it into a booking offer for the NEXT OPEN DAY, which is: {_next_open_phrase}. Never leave 'we're closed' just hanging there. Name that day explicitly and do NOT say 'tomorrow' unless that phrase itself says tomorrow — offering 'tomorrow' when the lot is shut that day is the worst mistake you can make. Before open today → 'We open at [time] — want me to set you up for then?'\n"
         "- CRITICAL: when the caller is booking a FUTURE time (tomorrow, a specific day) do NOT mention that you're closed right now — it's irrelevant and it confuses people. Just make sure the future time fits within hours and book it. NEVER randomly announce 'we just closed at 6 PM' during a booking or a general question — only when they specifically ask about coming in right now/today.\n"
         "- Do NOT say 'we're open until 6 PM today' if the current time is already past 6 PM. That's a credibility-killer.\n"
         "- For test drive scheduling: only suggest times that fit within the dealer's hours AND are in the future. Don't suggest 'today at 7' if it's already 8 PM.\n"
