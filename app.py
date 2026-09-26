@@ -7883,10 +7883,17 @@ def send_cold_followups() -> None:
             # ON a live call with the bot. Skip WITHOUT marking sent, so it can
             # still fire later if the conversation genuinely goes cold after the
             # call ends.
-            if _phone_on_active_call(outbound_phone, twilio_number):
+            # The mid-call window must never outlast this dealer's own cold
+            # interval, or the interval is silently floored. The demo line is set
+            # to 1 minute precisely so a prospect standing in front of you sees
+            # the follow-up land — a fixed 240s guard pushed that to ~5 minutes
+            # and made the feature look broken. Real dealers (30 min default) are
+            # unaffected: min() leaves them at the full 240s.
+            _guard_s = min(240, max(30, int(interval.total_seconds())))
+            if _phone_on_active_call(outbound_phone, twilio_number, within_s=_guard_s):
                 app.logger.info(
-                    "Cold follow-up: %s is on an active call — skipping this cycle",
-                    outbound_phone,
+                    "Cold follow-up: %s is on an active call — skipping this cycle "
+                    "(guard %ds)", outbound_phone, _guard_s,
                 )
                 continue
 
