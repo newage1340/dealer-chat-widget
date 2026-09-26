@@ -7218,14 +7218,25 @@ def build_prompt(dealer, inventory_rows, history, customer_msg, dealer_phone, co
         _doc, _tt = _f.get("doc_fee", 0.0) or 0.0, _f.get("title_tag_fee", 0.0) or 0.0
         if _doc > 0:
             _tt_txt = f" and {_fmt_money(_tt)} for title and tag" if _tt > 0 else ""
+            # The worked example MUST be built from this dealer's real numbers.
+            # It used to hardcode "a one ninety-nine doc fee and eighty-five title
+            # and tag", which for a dealer with no title/tag fee contradicted the
+            # line above it — and a self-contradicting rule gets followed about a
+            # third of the time. Singular/plural wording is spelled out so the
+            # voice layer reads it naturally.
+            _fee_say = f"a {_fmt_money(_doc)} doc fee"
+            if _tt > 0:
+                _fee_say += f" and {_fmt_money(_tt)} for title and tag"
             _fee_rule = (
                 "\n=== FEES — NON-NEGOTIABLE RULE ===\n"
                 f"Every vehicle is the listed price PLUS a {_fmt_money(_doc)} doc fee{_tt_txt}.\n"
-                "- Quoting ONE car: attach the fees to the price in the same sentence.\n"
+                "- Quoting ONE car: attach the fee to the price in the same sentence, e.g. "
+                f"'it's twenty-two five, plus {_fee_say}.'\n"
                 "- Listing SEVERAL cars: give the prices, then say the fee line ONCE at the "
-                "end (e.g. 'those are all plus a one ninety-nine doc fee and eighty-five "
-                "title and tag'). Do NOT repeat it after every car.\n"
-                "- NEVER state a price without the fees somewhere in the same reply. A caller "
+                f"end, e.g. 'those are all plus {_fee_say}.' Do NOT repeat it after every car.\n"
+                + ("- There is NO title or tag fee to quote. Do not invent one; say those are "
+                   "confirmed at the desk if asked.\n" if _tt <= 0 else "")
+                + "- NEVER state a price without the fee somewhere in the same reply. A caller "
                 "who hears one number on the phone and a bigger one at the desk feels lied to.\n"
             )
     except Exception as _e:
