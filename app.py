@@ -1063,6 +1063,19 @@ DEALER_PAYMENT_ALIASES = {
     "payment url", "pay link", "payment page", "make payment link",
     "online payment link", "payment portal",
 }
+# Loan / payment calculator URL. Texted when a caller asks what a monthly (or
+# weekly) payment would be - the bot never quotes payments itself.
+DEALER_LOAN_CALC_ALIASES = {
+    "loan calculator link", "loan calculator", "payment calculator link",
+    "payment calculator", "calculator link", "finance calculator",
+}
+# "yes" when the dealer's listing pages carry a Make Offer form (DealerCarSearch
+# sites do). Lets real dealers get the offer-link text without a per-car
+# OfferURL in their inventory feed - the listing URL IS the offer page.
+DEALER_OFFER_ON_LISTING_ALIASES = {
+    "make offer on listings", "make offer on listing", "make an offer on listings",
+    "offer link on listings", "listing has make offer",
+}
 DEALER_FEE_ALIASES = {
     "dealer fee", "dealer fee (flat)", "flat dealer fee", "flat fee",
     "dealership fee", "dealer fees",
@@ -5914,6 +5927,87 @@ def _payment_link(dealer_row: Dict[str, Any]) -> str:
     _v = (get_row_field(dealer_row, DEALER_PAYMENT_ALIASES) or "").strip()
     _m = re.search(r"https?://\S+", _v)
     return _m.group(0).rstrip(".,)") if _m else ""
+
+
+def _loan_calculator_link(dealer_row: Dict[str, Any]) -> str:
+    """The dealer's loan/payment calculator URL, or '' if none is configured."""
+    _v = (get_row_field(dealer_row, DEALER_LOAN_CALC_ALIASES) or "").strip()
+    _m = re.search(r"https?://\S+", _v)
+    return _m.group(0).rstrip(".,)") if _m else ""
+
+
+# "What would my payments be?" - the monthly/weekly amount question. Deliberately
+# excludes "make a payment" (bill-pay, handled by the payment link) and a bare
+# "down payment" (the LLM answers that from policy).
+_PAYMENT_ESTIMATE_RE = re.compile(
+    r"\b(?:monthly|weekly|bi-?weekly)\s+(?:payments?|note|amount)\b|"
+    r"\b(?:payments?|note)\s+(?:a|per|each)\s+(?:month|week)\b|"
+    r"\bhow much\s+(?:a|per|each)\s+(?:month|week)\b|"
+    r"\b(?:pay|paying)\s+(?:a|per|each)\s+(?:month|week)\b|"
+    r"\b(?:a|per)\s+month\b[^.?!]{0,30}\b(?:pay|payment|cost)|"
+    r"\bwhat (?:would|will|are|is|'?d)\s+(?:my|the)\s+(?:payments?|note)\b|"
+    r"\b(?:my|the)\s+payments?\s+(?:be|look|run|come out)\b|"
+    r"\b(?:loan|payment|finance|car)\s+calculator\b|"
+    r"\bcalculat\w*\s+(?:my|a|the)?\s*payments?\b",
+    re.I)
+_CALC_AFFIRM_RE = re.compile(
+    r"\b(yes|yeah|yep|yup|sure|ok|okay|please|go ahead|send it|text it|text me|"
+    r"send me|that works|sounds good|absolutely|definitely)\b", re.I)
+
+
+def _wants_calculator_link(msg: str, history: List[Dict[str, Any]]) -> bool:
+    if _PAYMENT_ESTIMATE_RE.search(msg or ""):
+        return True
+    for m in reversed(history or []):
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            c = (m.get("content") or "").lower()
+            if "calculator" in c and any(w in c for w in ("send", "text", "want", "like me")):
+                return bool(_CALC_AFFIRM_RE.search(msg or ""))
+            return False
+    return False
+
+
+# Price negotiation - the caller wants a better number. When the car's page has
+# a Make Offer form we text it instead of haggling on the phone.
+_OFFER_RE = re.compile(
+    r"\b(?:make|put in|send|submit|place)\s+(?:an?\s+|my\s+)?offer\b|"
+    r"\boffer\s+(?:link|form|page)\b|"
+    r"\bnegotia\w*|\bhaggl\w*|\bwiggle\s+room\b|"
+    r"\b(?:best|lowest|bottom)[\s-]+(?:price|dollar|number|line|deal|you(?:'?ll| can| could)\s+(?:do|go|take))\b|"
+    r"\bhow\s+low\s+(?:can|could|will|would)\s+you\b|\b(?:can|could)\s+you\s+do\s+better\b|"
+    r"\b(?:any|a)\s+better\s+(?:price|deal|number)\b|\bwhat'?s?\s+(?:the|your)\s+best\s+you\s+can\s+do\b|"
+    r"\b(?:come|go|get)\s+down\s+(?:on|any|at all|some|a little|a bit)\b|"
+    r"\bgo\s+(?:any\s+)?lower\b|\btake\s+less\b|\bknock\s+(?:some|anything|a little)?\s*off\b|"
+    r"\b(?:do|work with me on)\s+(?:any\s+)?better\s+on\s+(?:the\s+)?price\b|"
+    r"\bflexib\w*\s+(?:on|with)\s+(?:the\s+)?price\b|\bprice\s+(?:is\s+)?(?:firm|negotiable)\b",
+    re.I)
+
+
+def _wants_offer_link(msg: str, history: Optional[List[Dict[str, Any]]] = None) -> bool:
+    if _OFFER_RE.search(msg or ""):
+        return True
+    # "yes" right after the bot offered to text the Make Offer link.
+    for m in reversed(history or []):
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            c = (m.get("content") or "").lower()
+            if "make offer" in c and any(w in c for w in ("text", "send", "like me", "want me")):
+                return bool(_CALC_AFFIRM_RE.search(msg or ""))
+            return False
+    return False
+
+
+def _offer_link_for(vehicle: Optional[Dict[str, Any]], dealer_row: Dict[str, Any]) -> str:
+    """Make-offer URL for this car: the inventory OfferURL if present, else the
+    listing URL when the dealer's listings carry a Make Offer form."""
+    if not vehicle:
+        return ""
+    url = str(vehicle.get("OfferURL", "") or "").strip()
+    if url:
+        return url
+    flag = (get_row_field(dealer_row, DEALER_OFFER_ON_LISTING_ALIASES) or "").strip().lower()
+    if flag in ("yes", "y", "true", "1"):
+        return str(vehicle.get("DetailURL", "") or "").strip()
+    return ""
 
 
 def _is_carfax_question(msg):
@@ -12898,6 +12992,14 @@ def _strip_soft_close_tail(reply: str) -> str:
     return out
 
 
+# "closed on Sundays", "closed Sunday", "closed on weekends" - the bot is
+# answering about a specific day, which the hallucinated-closed override must
+# leave alone.
+_CLOSED_NAMED_DAY_RE = re.compile(
+    r"clos(?:ed|ing)\s+(?:on\s+|all\s+day\s+(?:on\s+)?)?(?:sun|mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?)"
+    r"(?:day)?s?\b|clos(?:ed|ing)\s+(?:on\s+)?weekends?\b|clos(?:ed|ing)\s+(?:on\s+)?holidays?\b",
+    re.I)
+
 _FALSE_CLOSED_RE = re.compile(
     # "we're / we are / we've / the dealership is" + optional filler
     # (actually / already / currently / just / now) + closed/closing …
@@ -14070,12 +14172,14 @@ def _voice_price_directive(customer_msg: str,
     if not _VOICE_PRICE_QUESTION_RE.search(customer_msg):
         return ""
 
-    matched_row: Optional[Dict[str, Any]] = None
+    # The car the caller names in THIS message wins ("how much is the 2014
+    # Encore?" on the first turn has no assistant history to match against).
+    matched_row: Optional[Dict[str, Any]] = _find_exact_year_make_match(customer_msg, inventory_rows)
     recent_assistant_turns = [
         m for m in (history or [])
         if isinstance(m, dict) and m.get("role") == "assistant"
     ][-4:]
-    for m in reversed(recent_assistant_turns):
+    for m in (reversed(recent_assistant_turns) if not matched_row else []):
         content = (m.get("content") or "").lower()
         year_m = _VOICE_DISAMBIG_YEAR_RE.search(content)
         if not year_m:
@@ -14106,6 +14210,21 @@ def _voice_price_directive(customer_msg: str,
     mk = str(matched_row.get("make") or matched_row.get("Make") or "").strip()
     md = str(matched_row.get("model") or matched_row.get("Model") or "").strip()
     car = " ".join(p for p in [y, mk, md] if p) or "that car"
+
+    # Buy-here-pay-here lots (Richardson) list some cars as "$X down, $Y weekly"
+    # with no cash price. Those terms ARE the posted price - quote them exactly
+    # instead of calling it call-for-price.
+    _desc = str(matched_row.get("Description") or matched_row.get("description") or "")
+    _bhph = re.search(r"Buy-here-pay-here terms:\s*(\$[\d,]+)\s*down,\s*(\$[\d,]+)\s*(weekly|bi-weekly|monthly)",
+                      _desc, re.I)
+    if _bhph:
+        return (
+            "\n\n=== PRICE DIRECTIVE FOR THIS TURN — HARD RULE ===\n"
+            f"The caller just asked about price. The {car} is listed buy-here-pay-here: "
+            f"{_bhph.group(1)} down and {_bhph.group(2)} {_bhph.group(3).lower()}. There is no cash price posted.\n"
+            "Give those two numbers exactly as written (down payment and the payment amount/frequency). "
+            "Do NOT invent a cash price or any other number, and do NOT call it 'call for price'.\n"
+        )
 
     return (
         "\n\n=== PRICE DIRECTIVE FOR THIS TURN — HARD RULE ===\n"
@@ -16793,14 +16912,86 @@ def voice_handle():
                             from_number, _pre_url, ok, _pre_resend, _info)
             _tail = random.choice(["Anything else?", "Need anything else while I've got ya?",
                                    "That everything for ya?", "Anything else I can grab for ya?"])
-            raw_reply = (f"Just texted you the pre-approval link — only takes a couple minutes to fill out. {_tail}"
-                         if ok else
-                         f"I'll get that pre-approval link texted right over. {_tail}")
+            raw_reply_link = (f"Just texted you the pre-approval link — only takes a couple minutes to fill out. {_tail}"
+                              if ok else
+                              f"I'll get that pre-approval link texted right over. {_tail}")
+            # Caller asked a real question (not just "send me the link"): keep the
+            # LLM's answer sentences, drop its offer-to-send sentence, then confirm.
+            _asked = re.match(r"\s*(?:do|does|did|can|could|will|would|is|are|what|how|who|which)\b",
+                              speech or "", re.I)
+            _answer = ""
+            if _asked:
+                _sents = re.split(r"(?<=[.!?])\s+", (raw_reply or "").strip())
+                _keep = [x for x in _sents if x and not re.search(
+                    r"pre-?\s?approv|would you like|want me to|shall i|send (?:you|it|that)|text (?:you|it|that)",
+                    x, re.I)]
+                _answer = " ".join(_keep).strip()
+            raw_reply = f"{_answer} {raw_reply_link}".strip() if _answer else raw_reply_link
         else:
             # No link on file — don't promise a text we can't send. Offer the
             # real fallback: have the team send the application / book a visit.
             raw_reply = ("I can absolutely help you get pre-approved — I'll have someone from the team send over "
                          "the financing application. Want me to set up a time for you to come in too?")
+
+    # Payment-estimate send: "what would my monthly be?" The bot never quotes a
+    # payment, so text the dealer's loan calculator and steer to pre-approval.
+    # Only when the dealer has a calculator link - otherwise the LLM answers.
+    elif _wants_calculator_link(speech, history) and _loan_calculator_link(dealer_row):
+        _calc_url = _loan_calculator_link(dealer_row)
+        _calc_already = any(_calc_url in (m.get("content") or "")
+                            for m in history if isinstance(m, dict) and m.get("role") == "assistant")
+        if _calc_already:
+            app.logger.info("voice/handle: calculator link already sent this call - not resending")
+        else:
+            ok, _info = _send_sms(from_number, to_number,
+                                  "Here's our payment calculator - plug in the price and your down "
+                                  f"payment to see what the payments would look like: {_calc_url}")
+            app.logger.info("voice/handle: calculator link SMS to=%s url=%s ok=%s (%s)",
+                            from_number, _calc_url, ok, _info)
+            if ok:
+                save_message(from_number, to_number, "assistant",
+                             f"(Payment calculator link texted to caller: {_calc_url})", call_sid=call_sid)
+            raw_reply = ("Just texted you our payment calculator so you can play with the numbers. "
+                         "The exact payment depends on your approval though - would you like me to "
+                         "send you the pre-approval form too?"
+                         if ok else
+                         "I'll get our payment calculator texted right over. The exact payment depends "
+                         "on your approval - would you like the pre-approval form too?")
+
+    # Make-offer send: caller wants a better price. If the car's listing has a
+    # Make Offer form, text it instead of negotiating on the phone. Falls through
+    # to the LLM when the car can't be pinned down or has no offer page.
+    elif _wants_offer_link(speech, history) and (
+            _offer_link_for(
+                _find_exact_year_make_match(speech, inventory_rows)
+                or _extract_car_from_last_bot_message(history, inventory_rows)
+                or _best_history_vehicle_match(
+                    inventory_rows, " ".join((m.get("content") or "") for m in history[-6:])),
+                dealer_row)):
+        _om = (_find_exact_year_make_match(speech, inventory_rows)
+               or _extract_car_from_last_bot_message(history, inventory_rows)
+               or _best_history_vehicle_match(
+                   inventory_rows, " ".join((m.get("content") or "") for m in history[-6:])))
+        _offer_url = _offer_link_for(_om, dealer_row)
+        _otitle = _vehicle_title(_om)
+        _offer_already = any(_offer_url in (m.get("content") or "")
+                             for m in history if isinstance(m, dict) and m.get("role") == "assistant")
+        if not _offer_already:
+            ok, _info = _send_sms(from_number, to_number,
+                                  f"Here's the {_otitle} - tap Make Offer on that page to send the team "
+                                  f"your number: {_offer_url}")
+            app.logger.info("voice/handle: offer link SMS to=%s url=%s ok=%s (%s)",
+                            from_number, _offer_url, ok, _info)
+            if ok:
+                save_message(from_number, to_number, "assistant",
+                             f"(Make-offer link texted to caller: {_offer_url})", call_sid=call_sid)
+        _tail = random.choice(["Anything else?", "Need anything else while I've got ya?",
+                               "Anything else I can grab for ya?"])
+        raw_reply = (f"I can't change the price myself, but I just texted you the {_otitle} - hit Make "
+                     f"Offer on that page with your number and the team will get back to you on it. {_tail}"
+                     if not _offer_already else
+                     f"That link I texted has a Make Offer button - put your number in there and the "
+                     f"team will look at it. {_tail}")
 
     # Payment-link send: caller wants to make a loan/account payment ("make a
     # payment", "send me the payment link", "where do I pay"). Checked BEFORE the
@@ -16900,7 +17091,7 @@ def voice_handle():
     # 'we just closed at 6 PM' regardless of the actual time. If we can
     # determine the dealership is ACTUALLY open right now AND the response
     # falsely claims closed, override the response with the correct status.
-    if _FALSE_CLOSED_RE.search(raw_reply):
+    if _FALSE_CLOSED_RE.search(raw_reply) and not _CLOSED_NAMED_DAY_RE.search(raw_reply):
         is_open, hours_today = _dealer_is_open_now(dealer_row)
         if is_open is True:
             app.logger.info("voice/handle: overriding hallucinated 'closed' reply (actually open)")
