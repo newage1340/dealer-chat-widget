@@ -1,6 +1,7 @@
 flask
 openai
 twilio
+gunicorn
 gspread
 apscheduler
 requests
