@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import NewType
 
-TenantId = NewType("TenantId", str)
+TenantId  = NewType("TenantId", str)
 ContactId = NewType("ContactId", str)
 
 
@@ -17,5 +17,5 @@ class ConversationKey:
     Each Message records the channel it arrived on.
     """
 
-    tenant_id: TenantId
+    tenant_id:  TenantId
     contact_id: ContactId

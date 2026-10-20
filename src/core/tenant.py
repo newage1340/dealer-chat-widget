@@ -10,7 +10,7 @@ from .ids import TenantId
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Branding:
-    color: str = ""
+    color:    str = ""
     logo_url: str = ""
 
 
@@ -23,18 +23,25 @@ class Tenant:
     `profile` holds the tenant's free-text answers to that domain's questions
     (e.g. "do you offer financing?"); its keys are defined by the domain, not by core.
     `settings` holds structured, domain-defined options.
+    `agent_name` / `voice_agent_name` override the domain's default persona names.
     """
 
-    id: TenantId
-    name: str
-    domain: str
-    timezone: str
-    endpoints: Mapping[Channel, tuple[Address, ...]] = field(default_factory=dict)
-    staff_contacts: tuple[Address, ...] = ()
-    branding: Branding = field(default_factory=Branding)
-    hours_text: str = ""
-    profile: Mapping[str, str] = field(default_factory=dict)
-    settings: Mapping[str, Any] = field(default_factory=dict)
+    id:               TenantId
+    name:             str
+    domain:           str
+    timezone:         str
+    slug:             str = ""
+    phone:            str = ""
+    address:          str = ""
+    website:          str = ""
+    agent_name:       str = ""
+    voice_agent_name: str = ""
+    endpoints:        Mapping[Channel, tuple[Address, ...]] = field(default_factory=dict)
+    staff_contacts:   tuple[Address, ...] = ()
+    branding:         Branding = field(default_factory=Branding)
+    hours_text:       str = ""
+    profile:          Mapping[str, str] = field(default_factory=dict)
+    settings:         Mapping[str, Any] = field(default_factory=dict)
 
     def endpoint(self, channel: Channel) -> Address | None:
         """

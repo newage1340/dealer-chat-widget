@@ -26,13 +26,13 @@ class InboundMessage:
     Resolving it to a Tenant is a separate step so channel adapters stay ignorant of tenancy.
     """
 
-    channel: Channel
-    sender: Address
-    recipient: Address
-    text: str
+    channel:     Channel
+    sender:      Address
+    recipient:   Address
+    text:        str
     received_at: datetime
-    session_id: str | None = None  # call SID, widget session, etc.
-    raw: Mapping[str, Any] = field(default_factory=dict)
+    session_id:  str | None = None  # call SID, widget session, etc.
+    raw:         Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -41,10 +41,10 @@ class Message:
     One turn of stored conversation history.
     """
 
-    key: ConversationKey
-    role: Role
-    text: str
-    channel: Channel
+    key:        ConversationKey
+    role:       Role
+    text:       str
+    channel:    Channel
     created_at: datetime
-    id: int | None = None
-    meta: Mapping[str, Any] = field(default_factory=dict)
+    id:         int | None = None
+    meta:       Mapping[str, Any] = field(default_factory=dict)

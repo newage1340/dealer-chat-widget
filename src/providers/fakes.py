@@ -4,9 +4,7 @@ In-memory providers for tests and offline development.
 
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
-
 from core import ServiceKind, UsageRecord, UsageUnit
-
 from .llm import LLMRequest, LLMResponse
 from .messaging import OutboundMessage, SendReceipt
 
@@ -31,17 +29,27 @@ class FakeLLM:
         self.requests.append(request)
         text = self._reply(request)
         prompt_chars = sum(len(m.content) for m in request.messages)
+        usage_units = {
+            UsageUnit.INPUT_TOKENS: prompt_chars / 4,
+            UsageUnit.OUTPUT_TOKENS: len(text) / 4
+        }
         usage = UsageRecord(
-            provider=self.name,
-            service=ServiceKind.LLM,
-            operation="complete",
-            occurred_at=datetime.now(timezone.utc),
-            units={UsageUnit.INPUT_TOKENS: prompt_chars / 4, UsageUnit.OUTPUT_TOKENS: len(text) / 4},
-            purpose=request.purpose,
-            tenant_id=request.tenant_id,
-            channel=request.channel,
+            provider    = self.name,
+            service     = ServiceKind.LLM,
+            operation   = "complete",
+            occurred_at = datetime.now(timezone.utc),
+            units       = usage_units,
+            purpose     = request.purpose,
+            tenant_id   = request.tenant_id,
+            channel     = request.channel,
         )
-        return LLMResponse(text=text, provider=self.name, model=f"{request.tier}", usage=usage, finish_reason="stop")
+        return LLMResponse(
+            text          = text,
+            provider      = self.name,
+            model         = f"{request.tier}",
+            usage         = usage,
+            finish_reason = "stop"
+        )
 
 
 class FakeMessaging:
@@ -56,13 +64,17 @@ class FakeMessaging:
     def send(self, message: OutboundMessage) -> SendReceipt:
         self.sent.append(message)
         usage = UsageRecord(
-            provider=self.name,
-            service=ServiceKind.MESSAGING,
-            operation="send",
-            occurred_at=datetime.now(timezone.utc),
-            units={UsageUnit.SMS_SEGMENTS: 1},
-            purpose=message.purpose,
-            tenant_id=message.tenant_id,
-            channel=message.channel,
+            provider    = self.name,
+            service     = ServiceKind.MESSAGING,
+            operation   = "send",
+            occurred_at = datetime.now(timezone.utc),
+            units       = {UsageUnit.SMS_SEGMENTS: 1},
+            purpose     = message.purpose,
+            tenant_id   = message.tenant_id,
+            channel     = message.channel,
         )
-        return SendReceipt(provider=self.name, provider_message_id=f"fake-{len(self.sent)}", usage=usage)
+        return SendReceipt(
+            provider            = self.name,
+            provider_message_id = f"fake-{len(self.sent)}",
+            usage               = usage
+        )

@@ -19,15 +19,15 @@ class Contact:
     (e.g. a web-widget session that later supplies a phone number).
     """
 
-    id: ContactId
-    tenant_id: TenantId
-    first_name: str = ""
-    last_name: str = ""
-    email: str = ""
-    phone: str = ""
-    addresses: tuple[Address, ...] = ()
+    id:                ContactId
+    tenant_id:         TenantId
+    first_name:        str = ""
+    last_name:         str = ""
+    email:             str = ""
+    phone:             str = ""
+    addresses:         tuple[Address, ...] = ()
     terms_accepted_at: datetime | None = None
-    attributes: Mapping[str, Any] = field(default_factory=dict)
+    attributes:        Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def display_name(self) -> str:

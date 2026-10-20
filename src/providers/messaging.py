@@ -13,20 +13,20 @@ from core import Address, Channel, TenantId, UsageRecord
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OutboundMessage:
-    to: Address
-    sender: Address
-    text: str
-    channel: Channel = Channel.SMS
+    to:         Address
+    sender:     Address
+    text:       str
+    channel:    Channel = Channel.SMS
     media_urls: tuple[str, ...] = ()
-    purpose: str = "turn"
-    tenant_id: TenantId | None = None
+    purpose:    str = "turn"
+    tenant_id:  TenantId | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SendReceipt:
-    provider: str
+    provider:            str
     provider_message_id: str
-    usage: UsageRecord
+    usage:               UsageRecord
 
 
 class MessagingProvider(Protocol):

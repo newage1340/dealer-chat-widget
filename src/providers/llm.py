@@ -20,34 +20,34 @@ class ModelTier(StrEnum):
     CAPABLE: open-ended conversation where quality matters more than speed.
     """
 
-    FAST = "fast"
+    FAST    = "fast"
     CAPABLE = "capable"
 
 
 @dataclass(frozen=True, slots=True)
 class ChatMessage:
-    role: Role
+    role:    Role
     content: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LLMRequest:
-    messages: Sequence[ChatMessage]
-    tier: ModelTier = ModelTier.FAST
-    max_tokens: int = 512
+    messages:    Sequence[ChatMessage]
+    tier:        ModelTier = ModelTier.FAST
+    max_tokens:  int = 512
     temperature: float | None = None
-    timeout_s: float | None = None
-    purpose: str = "turn"
-    tenant_id: TenantId | None = None
-    channel: Channel | None = None
+    timeout_s:   float | None = None
+    purpose:     str = "turn"
+    tenant_id:   TenantId | None = None
+    channel:     Channel | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LLMResponse:
-    text: str
-    provider: str
-    model: str
-    usage: UsageRecord
+    text:          str
+    provider:      str
+    model:         str
+    usage:         UsageRecord
     finish_reason: str = ""
 
 
@@ -62,3 +62,4 @@ class LLMProvider(Protocol):
     name: str
 
     def complete(self, request: LLMRequest) -> LLMResponse: ...
+

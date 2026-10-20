@@ -3,7 +3,13 @@ name = "front-desk"
 version = "0.1.0"
 description = "Domain-neutral customer conversation assistant for small businesses (SMS, web chat, voice)."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "APScheduler==3.11.3",
+    "Flask==3.1.3",
+    "gunicorn==26.2.0",
+    "openai==3.35.1",
+    "twilio==9.12.0",
+]
 
 [dependency-groups]
 dev = ["pytest>=8"]

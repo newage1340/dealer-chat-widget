@@ -14,39 +14,39 @@ from core import TenantId, UsageRecord
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Audio:
-    data: bytes
-    mime_type: str
+    data:       bytes
+    mime_type:  str
     duration_s: float | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SynthesisRequest:
-    text: str
-    voice: str = ""  # provider-specific voice id; empty means the provider default
-    purpose: str = "turn"
+    text:      str
+    voice:     str = ""  # provider-specific voice id; empty means the provider default
+    purpose:   str = "turn"
     tenant_id: TenantId | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SynthesisResult:
-    audio: Audio
+    audio:    Audio
     provider: str
-    usage: UsageRecord
+    usage:    UsageRecord
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TranscriptionRequest:
-    audio: Audio
-    language: str = "en"
-    purpose: str = "turn"
+    audio:     Audio
+    language:  str = "en"
+    purpose:   str = "turn"
     tenant_id: TenantId | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Transcript:
-    text: str
-    provider: str
-    usage: UsageRecord
+    text:       str
+    provider:   str
+    usage:      UsageRecord
     confidence: float | None = None
 
 

@@ -5,14 +5,14 @@ from enum import StrEnum
 
 
 class Channel(StrEnum):
-    SMS = "sms"
-    WEB = "web"
+    SMS   = "sms"
+    WEB   = "web"
     VOICE = "voice"
 
 
 class AddressKind(StrEnum):
-    PHONE = "phone"
-    EMAIL = "email"
+    PHONE       = "phone"
+    EMAIL       = "email"
     WEB_SESSION = "web_session"
 
 
@@ -25,7 +25,7 @@ class Address:
     comparisons are meaningful everywhere else.
     """
 
-    kind: AddressKind
+    kind:  AddressKind
     value: str
 
     def __str__(self) -> str:

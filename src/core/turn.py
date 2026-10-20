@@ -24,14 +24,14 @@ from .tenant import Tenant
 class SendMessage:
     """An extra outbound message, beyond the turn's reply."""
 
-    to: Address
-    text: str
+    to:      Address
+    text:    str
     channel: Channel
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class NotifyStaff:
-    text: str
+    text:   str
     reason: str
 
 
@@ -42,8 +42,8 @@ class UpdateContact:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ScheduleTask:
-    kind: str
-    run_at: datetime
+    kind:    str
+    run_at:  datetime
     payload: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -57,15 +57,45 @@ class EndSession:
     """Hang up a call or close a session after the reply is delivered."""
 
 
-type Action = SendMessage | NotifyStaff | UpdateContact | ScheduleTask | TransferCall | EndSession
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BookAppointment:
+    """
+    Record a confirmed booking, confirm it to the contact and alert staff.
+
+    `rescheduled` marks a booking that replaces the contact's existing appointment.
+    """
+
+    time_text:   str
+    subject:     str
+    starts_at:   datetime | None = None
+    location:    str = ""
+    details:     Mapping[str, Any] = field(default_factory=dict)
+    rescheduled: bool = False
+
+
+type Action = (
+    SendMessage
+    | NotifyStaff
+    | UpdateContact
+    | ScheduleTask
+    | TransferCall
+    | EndSession
+    | BookAppointment
+)
 
 
 # --- Results ----------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Reply:
-    text: str
+    """
+    `data` carries channel-specific hints alongside the text
+    (e.g. the web widget's `needs_profile` flag).
+    """
+
+    text:   str
     speech: str | None = None  # voice rendering, when it should differ from text
+    data:   Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -81,24 +111,24 @@ class Outcome:
     removes keys.
     """
 
-    reply: Reply | None = None
-    actions: tuple[Action, ...] = ()
+    reply:         Reply | None = None
+    actions:       tuple[Action, ...] = ()
     state_updates: Mapping[str, Any] = field(default_factory=dict)
     state_deletes: frozenset[str] = frozenset()
-    handled: bool = True
+    handled:       bool = True
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TurnContext:
     """Everything a handler may read while handling one inbound message."""
 
-    tenant: Tenant
+    tenant:  Tenant
     contact: Contact
-    key: ConversationKey
+    key:     ConversationKey
     inbound: InboundMessage
     history: tuple[Message, ...]
-    state: Mapping[str, Any]
-    now: datetime
+    state:   Mapping[str, Any]
+    now:     datetime
 
     @property
     def channel(self) -> Channel:
