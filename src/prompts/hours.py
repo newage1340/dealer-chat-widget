@@ -151,11 +151,15 @@ def open_status_line(hours_text: str, now: datetime) -> str:
     nxt = next_open_day(hours, now)
     next_phrase = f"{nxt[0]} ({nxt[1].text})" if nxt else "the next day we're open"
     if state is True:
-        return (f"OPEN/CLOSED RIGHT NOW: OPEN (today's hours: {today.text}). "
-                "If asked whether we're open, say yes.")
+        return (
+            f"OPEN/CLOSED RIGHT NOW: OPEN (today's hours: {today.text if today is not None else 'Unknown'}). "
+            "If asked whether we're open, say yes."
+        )
     if state is False:
-        return (f"OPEN/CLOSED RIGHT NOW: CLOSED (today: {today.text if today else 'closed'}). "
-                "Don't volunteer it unless they ask about coming in now/today; when it is relevant, "
-                f"turn it into a booking for the next open time: {next_phrase}. "
-                "Being closed never limits what you can answer.")
+        return (
+            f"OPEN/CLOSED RIGHT NOW: CLOSED (today: {today.text if today else 'closed'}). "
+            "Don't volunteer it unless they ask about coming in now/today; when it is relevant, "
+            f"turn it into a booking for the next open time: {next_phrase}. "
+            "Being closed never limits what you can answer."
+        )
     return ""

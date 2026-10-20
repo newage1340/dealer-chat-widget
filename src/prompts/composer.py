@@ -97,7 +97,14 @@ class PromptComposer:
             values[f"profile_{key}"] = value
         return values
 
-    def domain_section(self, tenant: Tenant, pack: DomainPack, values: PromptValues, *, voice: bool) -> str:
+    def domain_section(
+        self,
+        tenant: Tenant,
+        pack: DomainPack,
+        values: PromptValues,
+        *,
+        voice: bool
+    ) -> str:
         parts = [render(pack.prompts.chat, values)]
         if voice:
             parts.append(render(pack.prompts.voice, values))
@@ -133,8 +140,10 @@ class PromptComposer:
         if customer_site:
             location_step = (
                 f"\nSTEP 0.5 - Where the {b.visit_noun} happens\n"
-                f"- The team comes to the customer. Before confirming, get the full address for the {b.visit_noun} "
-                "(street and city) unless it is already in the conversation. Include it as \"location\" in META_JSON.\n"
+                "- The team comes to the customer. "
+                f"Before confirming, get the full address for the {b.visit_noun} "
+                "(street and city) unless it is already in the conversation. "
+                "Include it as \"location\" in META_JSON.\n"
             )
             location_voice_step = f"  a2. Get the address for the {b.visit_noun} (street and city) if you don't have it.\n"
 
@@ -187,7 +196,11 @@ class PromptComposer:
         head = [f"=== {spec.heading} ==="]
         if spec.intro:
             head.append(spec.intro)
-        head.append(f"THERE ARE EXACTLY {count} {noun} LISTED. If asked how many, say {count} - don't count the list yourself.")
+        head.append(
+            f"THERE ARE EXACTLY {count} {noun} LISTED. " +
+            f"If asked how many, say {count} - " +
+            "don't count the list yourself."
+        )
         return "\n".join(head) + "\n" + catalog_summary(inputs.items, spec)
 
     def _focus(self, inputs: PromptInputs) -> str:
@@ -235,12 +248,17 @@ class PromptComposer:
         what = f"{a.time_text} for {a.subject}"
         starts_local = a.starts_at.astimezone(ZoneInfo(inputs.tenant.timezone)).replace(tzinfo=None) if a.starts_at else None
         if starts_local is not None and starts_local < inputs.now:
-            return ("=== CONFIRMED APPOINTMENT ===\n"
-                    f"This customer had an appointment {what}, but that time has ALREADY PASSED. "
-                    "Don't talk about it as upcoming; acknowledge it and gently offer to reschedule if it fits.")
-        return ("=== CONFIRMED APPOINTMENT ===\n"
-                f"This customer has a confirmed appointment {what}. Don't push for a booking - they're booked. "
-                "Answer their questions naturally.")
+            return (
+                "=== CONFIRMED APPOINTMENT ===\n"
+                f"This customer had an appointment {what}, but that time has ALREADY PASSED. "
+                "Don't talk about it as upcoming; acknowledge it and gently offer to reschedule if it fits."
+            )
+        return (
+            "=== CONFIRMED APPOINTMENT ===\n"
+           f"This customer has a confirmed appointment {what}. "
+           "Don't push for a booking - they're booked. \n"
+           "Answer their questions naturally."
+        )
 
     def _time(self, inputs: PromptInputs) -> str:
         now = inputs.now
@@ -249,9 +267,10 @@ class PromptComposer:
             f"Today is {now.strftime('%A, %B %d, %Y at %I:%M %p')}.\n\n"
             "=== WHICH DAYS WE ARE ACTUALLY OPEN (already worked out - do NOT calculate this yourself) ===\n"
             f"{schedule_block(inputs.tenant.hours_text, now)}\n"
-            "NEVER offer, suggest, or confirm a time on a day marked CLOSED. If the day they asked for is closed, "
-            "say so and offer the next open day by name. If TOMORROW is closed, don't use the word \"tomorrow\" "
-            "for a booking - name the next open day instead. Quote the opening time listed for THAT day."
+            "NEVER offer, suggest, or confirm a time on a day marked CLOSED.\n"
+            "If the day they asked for is closed, say so and offer the next open day by name.\n"
+            "If TOMORROW is closed, don't use the word \"tomorrow\" for a booking - name the next open day instead.\n"
+            "Quote the opening time listed for THAT day."
         )
 
     def _real_world(self, inputs: PromptInputs) -> str:
@@ -262,16 +281,21 @@ class PromptComposer:
             f"CURRENT TIME: {now.strftime('%A %B %d, %Y at %I:%M %p')}\n"
             f"HOURS: {inputs.tenant.hours_text or '(not listed)'}\n"
             + (status + "\n" if status else "") +
-            "- Being closed never limits what you answer; it only affects coming in right now.\n"
-            "- Only bring up open/closed when the caller asks about now/today. Don't announce it during a booking for a future day.\n"
-            "- Never say we're open until a time that has already passed. Only suggest future times within the hours."
+            "-   Being closed never limits what you answer; it only affects coming in right now.\n"
+            "-   Only bring up open/closed when the caller asks about now/today.\n"
+            "    Don't announce it during a booking for a future day.\n"
+            "-   Never say we're open until a time that has already passed.\n"
+            "    Only suggest future times within the hours."
         )
 
     def _caller_number(self, inputs: PromptInputs) -> str:
         if not inputs.caller_phone:
             return ""
-        return ("=== CALLER'S NUMBER (from caller ID - already on file) ===\n"
-                f"{spoken_digits(inputs.caller_phone)}. Never ask for it and never read it back; use it silently.")
+        return (
+            "=== CALLER'S NUMBER (from caller ID - already on file) ===\n"
+            f"{spoken_digits(inputs.caller_phone)}.\n"
+            "Never ask for it and never read it back; use it silently."
+        )
 
     def _history_messages(self, history: Sequence[Message]) -> list[ChatMessage]:
         return [ChatMessage(m.role, m.text) for m in list(history)[-MAX_HISTORY:]
@@ -293,8 +317,10 @@ class PromptComposer:
             self._time(inputs),
             "Write ONE reply now.",
         ])
-        return [ChatMessage(Role.SYSTEM, system), *self._history_messages(inputs.history),
-                ChatMessage(Role.USER, inputs.message)]
+        return [
+            ChatMessage(Role.SYSTEM, system), *self._history_messages(inputs.history),
+            ChatMessage(Role.USER, inputs.message),
+        ]
 
     def voice_messages(self, inputs: PromptInputs) -> list[ChatMessage]:
         t, p = inputs.tenant, inputs.pack
@@ -312,10 +338,18 @@ class PromptComposer:
             self._caller_number(inputs),
         ] if s)
         stamp = f"[NOW: {inputs.now.strftime('%A %I:%M %p')}]"
-        return [ChatMessage(Role.SYSTEM, system), *self._history_messages(inputs.history),
-                ChatMessage(Role.USER, f"{stamp}\n{inputs.message}")]
+        return [
+            ChatMessage(Role.SYSTEM, system), *self._history_messages(inputs.history),
+            ChatMessage(Role.USER, f"{stamp}\n{inputs.message}"),
+        ]
 
-    def summary_messages(self, tenant: Tenant, pack: DomainPack, transcript: str, caller_info: str) -> list[ChatMessage]:
+    def summary_messages(
+        self,
+        tenant: Tenant,
+        pack: DomainPack,
+        transcript: str,
+        caller_info: str
+    ) -> list[ChatMessage]:
         values = self.values(tenant, pack, Channel.VOICE)
         intake_sections = "".join(f"\n{f.label.upper()}\n  One line, if it came up.\n" for f in pack.booking.intake)
         values.update({
@@ -330,7 +364,14 @@ class PromptComposer:
         user = f"CALL TRANSCRIPT:\n{transcript}\n\nKNOWN CALLER INFO:\n{caller_info or '(none yet)'}"
         return [ChatMessage(Role.SYSTEM, system), ChatMessage(Role.USER, user)]
 
-    def followup_text(self, tenant: Tenant, pack: DomainPack, kind: str, contact: Contact, **extra: str) -> str | None:
+    def followup_text(
+        self,
+        tenant: Tenant,
+        pack: DomainPack,
+        kind: str,
+        contact: Contact,
+        **extra: str
+    ) -> str | None:
         template = pack.followups.get(kind)
         if not template:
             return None
