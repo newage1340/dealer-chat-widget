@@ -164,14 +164,17 @@ export const Hours = {
             return `- (could not parse hours; raw hours: ${hoursText || "not listed"})`;
         }
         const lines: string[] = [];
-        for (let offset = 0; offset < 7; offset++) {
+        // Two weeks, with the exact date to put in a booking, so "next Friday" is looked up, not calculated.
+        for (let offset = 0; offset < 14; offset++) {
             const d = LocalTime.plusDays(now, offset);
             const day = LocalTime.weekdayName(d);
             const label = offset === 0
                 ? "TODAY"
                 : offset === 1
                     ? "TOMORROW"
-                    : day;
+                    : offset < 7
+                        ? `this ${day}`
+                        : `next ${day}`;
             const h = hours[day];
             const status = h === undefined
                 ? "hours not listed - follow the business notes for this day"
@@ -180,7 +183,8 @@ export const Hours = {
                     : Hours.isClosed(h)
                         ? "CLOSED - never offer a time on this day"
                         : h.text;
-            lines.push(`- ${label} (${day} ${LocalTime.monthName(d)} ${String(d.day).padStart(2, "0")}): ${status}`);
+            const iso = `${d.year}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
+            lines.push(`- ${label} (${day} ${LocalTime.monthName(d)} ${String(d.day).padStart(2, "0")}, date ${iso}): ${status}`);
         }
         return lines.join("\n");
     },

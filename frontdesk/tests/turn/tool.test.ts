@@ -18,3 +18,16 @@ describe("Tool.define", () => {
         expect(result.directive).toBeNull();
     });
 });
+
+describe("parsePrice", async () => {
+    const { parsePrice } = await import("../../src/tools/index.ts");
+    it.each([
+        ["15.95", { low: 15.95, high: 15.95, minimum: false }],
+        ["$129-$249", { low: 129, high: 249, minimum: false }],
+        ["from $45", { low: 45, high: 45, minimum: true }],
+        ["$1,450+", { low: 1450, high: 1450, minimum: true }],
+        ["Quoted on site", null],
+    ])("%s", (text, expected) => {
+        expect(parsePrice(text)).toEqual(expected);
+    });
+});

@@ -53,6 +53,7 @@ Saying "I'll connect you" without calling `transfer_call` leaves the caller wait
 -   `end_call`: the conversation is over (they said goodbye, or the booking or callback is done). Say your goodbye in the same turn. Never mid-call.
 -   `flag_conversation`: the caller is clearly not here for the {business_noun} (pranks, nonsense) or is abusive. Call it on EVERY such turn, not just the first. Stay polite; the system handles the rest.
 -   `search_catalog`: look up {item_noun_plural} by what the caller describes, and get exact details and prices.
+-   `price_items`: whenever you'd say a total for more than one {item_noun} (or a quantity). Never add prices up yourself.
 
 === BOOKING BY PHONE ===
 1.  NEVER say "you're all set" / "you're booked" / "confirmed" before `book_appointment` succeeds.

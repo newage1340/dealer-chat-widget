@@ -1,0 +1,15 @@
+{
+  "name": "Chinese restaurant: pickup total is computed, not guessed",
+  "tenant": "demo-chinese-restaurant",
+  "channel": "sms",
+  "turns": [
+    {
+      "say": "I want 2 General Tso's chicken and 1 crab rangoon for pickup. What's my total?",
+      "expect": {
+        "replyIncludes": [
+          "39.85"
+        ]
+      }
+    }
+  ]
+}

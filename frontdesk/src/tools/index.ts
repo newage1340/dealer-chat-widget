@@ -129,7 +129,7 @@ function bookAppointment(ctx: TurnContext): Tool {
         followUp:    true,
         parameters:  z.object({
             time_text:      z.string().describe("The time as you'd say it to the customer, with the day, e.g. 'Saturday at 2 PM'"),
-            time_iso:       z.string().describe("The same time as local YYYY-MM-DDTHH:MM, using CURRENT DATE & TIME to resolve words like 'tomorrow'"),
+            time_iso:       z.string().describe("The same time as local YYYY-MM-DDTHH:MM. Copy the date from WHICH DAYS WE ARE ACTUALLY OPEN; never calculate it"),
             subject:        z.string().describe(`${pack.booking.subjectHint}, or '${pack.booking.generalSubject}'`),
             ...(customerSite ? { location: z.string().min(1).describe(`Street address and city for the ${pack.booking.visitNoun}`) } : {}),
             details,
@@ -290,6 +290,96 @@ function searchCatalog(ctx: TurnContext): Tool {
     });
 }
 
+// --- Prices ------------------------------------------------------------------------
+
+type PriceRange = {
+    readonly low:     number;
+    readonly high:    number;
+    readonly minimum: boolean;
+};
+
+/**
+ * Dollar amounts in a price field: "$15.95", "$129-$249", "from $45", "$450+".
+ * `minimum` marks prices that are a starting point. Null for text like "Quoted on site".
+ */
+export function parsePrice(text: string): PriceRange | null {
+    const amounts = (text.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map(n => Number(n.replaceAll(",", "")));
+    if (amounts.length === 0 || amounts.length > 2) {
+        return null;
+    }
+    const minimum = /\b(from|starting|desde|at least|and up)\b|\+\s*$/i.test(text.trim());
+    return { low: amounts[0]!, high: amounts[1] ?? amounts[0]!, minimum };
+}
+
+function dollars(amount: number): string {
+    return Number.isInteger(amount)
+        ? `$${amount.toLocaleString("en-US")}`
+        : `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function rangeText(r: PriceRange): string {
+    const base = r.low === r.high
+        ? dollars(r.low)
+        : `${dollars(r.low)}-${dollars(r.high)}`;
+    return r.minimum ? `from ${base}` : base;
+}
+
+/**
+ * Adds up what the customer wants from the catalog's own prices, so totals are computed, never estimated.
+ */
+function priceItems(ctx: TurnContext): Tool {
+    const spec = ctx.pack.catalog;
+    return Tool.define({
+        name:        "price_items",
+        promise:     /\b(total (is|comes to|would be|will be)|(that'?ll|that will|it'?ll) (be|come to|run) (about |around )?\$)/i,
+        description: `Add up the prices of ${spec.itemNounPlural} the customer wants (with quantities). Call it before saying any total; repeat its numbers exactly.`,
+        followUp:    true,
+        parameters:  z.object({
+            items: z.array(z.object({
+                item:     z.string().describe(`The ${spec.itemNoun}, by name as listed`),
+                quantity: z.number().int().min(1).max(99).default(1),
+            })).min(1).max(30),
+        }),
+        run: (args: { items: { item: string; quantity: number }[] }) => {
+            if (spec.priceField === null) {
+                return ToolResult.error(`This business doesn't list prices for its ${spec.itemNounPlural}.`);
+            }
+            const field = spec.priceField;
+            const lines: string[] = [];
+            const notFound: string[] = [];
+            const unpriced: string[] = [];
+            let low = 0;
+            let high = 0;
+            let minimum = false;
+            for (const want of args.items) {
+                const item = Catalog.match(ctx.catalog, want.item, spec, 1)[0];
+                if (item === undefined) {
+                    notFound.push(want.item);
+                    continue;
+                }
+                const title = Catalog.title(item, spec);
+                const price = parsePrice(String(item.fields[field] ?? ""));
+                if (price === null) {
+                    unpriced.push(`${title} (${String(item.fields[field] ?? "") || "no price listed"})`);
+                    continue;
+                }
+                const line = { low: price.low * want.quantity, high: price.high * want.quantity, minimum: price.minimum };
+                low += line.low;
+                high += line.high;
+                minimum = minimum || price.minimum;
+                lines.push(`${want.quantity} x ${title} at ${rangeText(price)} = ${rangeText(line)}`);
+            }
+            return ToolResult.output({
+                lines,
+                subtotal:  lines.length > 0 ? rangeText({ low, high, minimum }) : null,
+                not_found: notFound,
+                unpriced,
+                note:      "Prices are as listed, before tax and fees. Say the subtotal exactly; mention anything not found or unpriced.",
+            });
+        },
+    });
+}
+
 // --- Conversation control ----------------------------------------------------------
 
 /**
@@ -388,6 +478,7 @@ export function toolsFor(ctx: TurnContext): Tool[] {
         bookAppointment(ctx),
         sendLink(ctx, linkOptions(ctx)),
         searchCatalog(ctx),
+        priceItems(ctx),
         requestCallback(),
         switchLanguage(ctx),
         flagConversation(),

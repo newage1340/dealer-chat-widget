@@ -41,10 +41,12 @@ describe("Hours", () => {
         expect(Hours.nextOpenDay(h, saturdayEvening)?.label).toBe("Monday");
     });
 
-    it("writes a seven-day schedule starting today", () => {
+    it("writes a two-week schedule starting today, with booking dates", () => {
         const block = Hours.scheduleBlock(text, WED_11).split("\n");
-        expect(block[0]).toBe("- TODAY (Wednesday Oct 21): 8 to 5");
-        expect(block[4]).toBe("- Sunday (Sunday Oct 25): CLOSED - never offer a time on this day");
+        expect(block).toHaveLength(14);
+        expect(block[0]).toBe("- TODAY (Wednesday Oct 21, date 2026-10-21): 8 to 5");
+        expect(block[4]).toBe("- this Sunday (Sunday Oct 25, date 2026-10-25): CLOSED - never offer a time on this day");
+        expect(block[9]).toBe("- next Friday (Friday Oct 30, date 2026-10-30): 8 to 5");
     });
 });
 
