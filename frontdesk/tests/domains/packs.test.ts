@@ -91,3 +91,32 @@ describe("validation", () => {
         expect(result.ok && result.value.followups.confirm).toEqual({ en: "Booked for {visit_time}.", es: "Reservado para {visit_time}." });
     });
 });
+
+describe("lint", () => {
+    it("finds nothing to warn about in the bundled packs", async () => {
+        const { lintPack } = await import("../../src/domains/index.ts");
+        const { TOOL_NAMES } = await import("../../src/tools/index.ts");
+        const registry = await DomainRegistry.fromDirectory();
+        const warnings = registry.ids().flatMap(id => lintPack(registry.get(id), TOOL_NAMES).map(w => `${id}: ${w}`));
+        expect(warnings).toEqual([]);
+    });
+
+    it("knows every tool the model can be given", async () => {
+        const { TOOL_NAMES, toolsFor } = await import("../../src/tools/index.ts");
+        const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../../src/tools/index.ts", import.meta.url), "utf8"));
+        const defined = [...source.matchAll(/name:\s+"([a-z_]+)",\n\s+(?:promise|description)/g)].map(m => m[1]);
+        expect(new Set(defined)).toEqual(TOOL_NAMES);
+        expect(typeof toolsFor).toBe("function");
+    });
+
+    it("warns about a tenant setup that won't work well", async () => {
+        const { lintTenant } = await import("../../src/tenants/lint.ts");
+        const { tenant } = await import("../support/fixtures.ts");
+        const registry = await DomainRegistry.fromDirectory();
+        const t = tenant({ id: "x", slug: "x", domain: "plumbing", hoursText: "Mon-Fri 8am-5pm" });
+        const warnings = lintTenant(t, registry.get(t.domain), []);
+        expect(warnings.join("\n")).toMatch(/only cover 5 of 7 days/);
+        expect(warnings.join("\n")).toMatch(/"Service area" is not answered/);
+        expect(warnings.join("\n")).toMatch(/No staff email/);
+    });
+});

@@ -11,6 +11,7 @@ import { fetchRows, mapColumns } from "../catalogs/index.ts";
 import { ROOT } from "../config.ts";
 import { Catalog, DomainRegistry } from "../domains/index.ts";
 import { Hours } from "../prompts/hours.ts";
+import { lintTenant } from "../tenants/lint.ts";
 import { parseTenant } from "../tenants/schema.ts";
 
 const DEMO_DIR = join(ROOT, "tenants", "demo");
@@ -72,6 +73,9 @@ for (const path of paths) {
     }
     if (unknown.size > 0) {
         console.log(`warn ${path}: columns the ${pack.id} pack ignores: ${[...unknown].join(", ")}`);
+    }
+    for (const warning of lintTenant(tenant, pack, items)) {
+        console.log(`warn ${path}: ${warning}`);
     }
     console.log(`ok   ${path} (${tenant.slug}: ${pack.id}, ${items.length} ${spec.itemNounPlural})`);
     for (const item of items.slice(0, 3)) {

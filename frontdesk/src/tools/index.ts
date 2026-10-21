@@ -299,11 +299,14 @@ type PriceRange = {
 };
 
 /**
- * Dollar amounts in a price field: "$15.95", "$129-$249", "from $45", "$450+".
+ * Dollar amounts in a price field: "$15.95", "$129-$249", "from $45", "$450+", "Free".
  * `minimum` marks prices that are a starting point. Null for text like "Quoted on site".
  */
 export function parsePrice(text: string): PriceRange | null {
     const amounts = (text.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map(n => Number(n.replaceAll(",", "")));
+    if (amounts.length === 0 && /\b(free|gratis|no charge|complimentary|included)\b/i.test(text)) {
+        return { low: 0, high: 0, minimum: false };
+    }
     if (amounts.length === 0 || amounts.length > 2) {
         return null;
     }
@@ -469,6 +472,14 @@ function endCall(): Tool {
 }
 
 // --- Selection ---------------------------------------------------------------------
+
+/**
+ * Every tool name, for checks that prompt text only mentions tools that exist.
+ */
+export const TOOL_NAMES: ReadonlySet<string> = new Set([
+    "save_customer_details", "book_appointment", "send_link", "search_catalog", "price_items",
+    "request_callback", "switch_language", "flag_conversation", "transfer_call", "end_call",
+]);
 
 export function toolsFor(ctx: TurnContext): Tool[] {
     const voice = ctx.inbound.channel === "voice";

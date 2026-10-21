@@ -6,6 +6,9 @@ export {
     Catalog,
 } from "./catalog.ts";
 export {
+    lintPack,
+} from "./lint.ts";
+export {
     DomainPackError,
     DomainRegistry,
     loadPack,

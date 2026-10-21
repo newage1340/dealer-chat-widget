@@ -27,6 +27,7 @@ describe("parsePrice", async () => {
         ["from $45", { low: 45, high: 45, minimum: true }],
         ["$1,450+", { low: 1450, high: 1450, minimum: true }],
         ["Quoted on site", null],
+        ["Free", { low: 0, high: 0, minimum: false }],
     ])("%s", (text, expected) => {
         expect(parsePrice(text)).toEqual(expected);
     });

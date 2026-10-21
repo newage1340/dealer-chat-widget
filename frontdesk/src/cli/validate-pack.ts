@@ -6,7 +6,8 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { DomainPackError, loadPack, PACKS_DIR } from "../domains/index.ts";
+import { DomainPackError, lintPack, loadPack, PACKS_DIR } from "../domains/index.ts";
+import { TOOL_NAMES } from "../tools/index.ts";
 
 const args = process.argv.slice(2);
 const paths = args.length > 0
@@ -21,6 +22,9 @@ for (const path of paths) {
     try {
         const pack = await loadPack(path);
         console.log(`ok   ${path} (${pack.id}: ${pack.catalog.fields.length} fields, ${pack.topics.length} topics)`);
+        for (const warning of lintPack(pack, TOOL_NAMES)) {
+            console.log(`warn ${path}: ${warning}`);
+        }
     } catch (e) {
         failed = true;
         console.log(e instanceof DomainPackError

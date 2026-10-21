@@ -26,6 +26,7 @@ import {
     type Tenant,
     type Weekday,
 } from "../../core/index.ts";
+import { lintTenant } from "../../tenants/lint.ts";
 import { fromTenant, parseTenant, type TenantDraft } from "../../tenants/schema.ts";
 import { previewPrompt } from "../admin.ts";
 import type { ChannelDeps } from "../context.ts";
@@ -117,11 +118,13 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
 
     const render = async (c: Context, tenant: Tenant, notice: string, problems: readonly string[] = []) => {
         const now = services.clock();
+        const pack = registry.get(tenant.domain);
+        const items = await store.tenants.catalog(tenant.id);
         const html = tenantPage({
             tenant,
-            pack:        registry.get(tenant.domain),
+            pack,
             domains:     domains(),
-            items:       await store.tenants.catalog(tenant.id),
+            items,
             sync:        await store.tenants.syncStatus(tenant.id),
             datasets:    await datasets(),
             blocked:     await store.blocks.blocked(tenant.id, now),
@@ -129,6 +132,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
             monthToDate: await store.spend.monthToDate(tenant, now),
             notice,
             problems,
+            warnings:    lintTenant(tenant, pack, items),
         });
         return c.html(html, problems.length > 0 ? 400 : 200);
     };

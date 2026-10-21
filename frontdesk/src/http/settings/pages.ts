@@ -59,6 +59,7 @@ export type TenantPageData = {
     readonly monthToDate: number;
     readonly notice:      string;
     readonly problems:    readonly string[];
+    readonly warnings:    readonly string[];
 };
 
 function clock(minute: number): string {
@@ -143,6 +144,7 @@ export function tenantPage(d: TenantPageData): string {
 <main>
 ${d.notice ? html`<p role="status"><strong>${d.notice}</strong></p>` : ""}
 ${d.problems.length > 0 ? html`<div role="alert"><p><strong>Not saved:</strong></p><ul>${d.problems.map(p => html`<li>${p}</li>`)}</ul></div>` : ""}
+${d.warnings.length > 0 ? html`<section id="check"><h2>Things to check</h2><ul>${d.warnings.map(w => html`<li>${w}</li>`)}</ul></section>` : ""}
 ${business(d)}
 ${numbers(d)}
 ${assistant(d)}
