@@ -146,7 +146,13 @@ export const LocalTime = {
         let guess = Date.UTC(y, mo - 1, d, h, mi);
         for (let i = 0; i < 2; i++) {
             const local = LocalTime.of(new Date(guess), timeZone);
-            const asUtc = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute);
+            const asUtc = Date.UTC(
+                local.year,
+                local.month - 1,
+                local.day,
+                local.hour,
+                local.minute
+            );
             guess += Date.UTC(y, mo - 1, d, h, mi) - asUtc;
         }
         return new Date(guess);
