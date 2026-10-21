@@ -52,6 +52,14 @@ function on(body: Body, name: string): boolean {
     return one(body, name) !== "";
 }
 
+/**
+ * A number field, or undefined when it was left blank (so the current value stays).
+ */
+function num(body: Body, name: string): number | undefined {
+    const raw = one(body, name);
+    return raw === "" ? undefined : Number(raw);
+}
+
 function lines(text: string): string[] {
     return text.split(/[\n,]+/).map(l => l.trim()).filter(Boolean);
 }
@@ -268,7 +276,12 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
             professionalism: (one(body, "professionalism") || null) as Professionalism | null,
             honestAboutAi:   honest === "" ? null : honest === "yes",
         };
-        draft.settings.maxSessionMinutes = Number(one(body, "maxSessionMinutes")) || 30;
+        draft.settings.maxSessionMinutes = num(body, "maxSessionMinutes") ?? draft.settings.maxSessionMinutes;
+        draft.settings.calls = {
+            silenceSeconds:    num(body, "silenceSeconds") ?? draft.settings.calls.silenceSeconds,
+            stillTherePrompts: num(body, "stillTherePrompts") ?? draft.settings.calls.stillTherePrompts,
+            hiddenCallerId:    (["assistant", "voicemail", "reject"] as const).find(v => v === one(body, "hiddenCallerId")) ?? "assistant",
+        };
         draft.settings.coldFollowupMinutes = cold === "" ? null : Number(cold);
         draft.settings.recordingDisclosure = on(body, "recordingDisclosure");
         draft.settings.skipProfileGate = on(body, "skipProfileGate");

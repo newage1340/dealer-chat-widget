@@ -2,6 +2,7 @@
  * A business using the system, and which domain it belongs to.
  */
 
+import { Bound, PLATFORM_BOUNDS } from "./bounds.ts";
 import type { AbusePolicy, SessionLimits } from "./budget.ts";
 import { DEFAULT_CATALOG_SETTINGS, type CatalogSettings } from "./catalog.ts";
 import type { Address, Channel, PhoneNumber } from "./channel.ts";
@@ -75,6 +76,24 @@ export type AgentStyle = {
 };
 
 /**
+ * How calls avoid paying for dead air, within PLATFORM_BOUNDS.
+ * `silenceSeconds` is how long to wait for the caller to speak; `stillTherePrompts` how many times to ask
+ * "are you still there?" before hanging up. `hiddenCallerId` is what calls without caller ID get
+ * (robocalls usually hide it): the assistant, our voicemail, or no answer.
+ */
+export type CallSettings = {
+    readonly silenceSeconds:    number;
+    readonly stillTherePrompts: number;
+    readonly hiddenCallerId:    "assistant" | "voicemail" | "reject";
+};
+
+export const DEFAULT_CALL_SETTINGS: CallSettings = {
+    silenceSeconds:    PLATFORM_BOUNDS.silenceSeconds.default,
+    stillTherePrompts: PLATFORM_BOUNDS.stillTherePrompts.default,
+    hiddenCallerId:    "assistant",
+};
+
+/**
  * Options every tenant can set, regardless of domain.
  * `coldFollowupMinutes` null means the tenant does not send cold follow-ups.
  * `notifications` lists, per notice, how staff want to receive it (email by default).
@@ -100,6 +119,7 @@ export type TenantSettings = {
     readonly privacy:             PrivacySettings;
     readonly style:               AgentStyle;
     readonly catalog:             CatalogSettings;
+    readonly calls:               CallSettings;
 };
 
 /**
@@ -154,6 +174,16 @@ export const Tenant = {
                 privacy:   { ...DEFAULT_PRIVACY, ...s.privacy },
                 style:     s.style ?? { professionalism: null, honestAboutAi: null },
                 catalog:   s.catalog ?? DEFAULT_CATALOG_SETTINGS,
+                calls:     {
+                    ...DEFAULT_CALL_SETTINGS,
+                    ...s.calls,
+                    silenceSeconds:    Bound.clamp(PLATFORM_BOUNDS.silenceSeconds, s.calls?.silenceSeconds ?? DEFAULT_CALL_SETTINGS.silenceSeconds),
+                    stillTherePrompts: Bound.clamp(PLATFORM_BOUNDS.stillTherePrompts, s.calls?.stillTherePrompts ?? DEFAULT_CALL_SETTINGS.stillTherePrompts),
+                },
+                limits:    {
+                    ...stored.settings.limits,
+                    maxSessionSeconds: 60 * Bound.clamp(PLATFORM_BOUNDS.maxSessionMinutes, stored.settings.limits.maxSessionSeconds / 60),
+                },
             },
         };
     },

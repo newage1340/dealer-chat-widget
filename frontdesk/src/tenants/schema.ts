@@ -17,9 +17,11 @@ import {
     Language,
     PhoneNumber,
     PiiKind,
+    PLATFORM_BOUNDS,
     Professionalism,
     ServiceSchedule,
     TenantId,
+    type Bound,
     type CatalogSource,
     type LocalizedText,
 } from "../core/index.ts";
@@ -61,6 +63,13 @@ const CatalogSourceFile = z.discriminatedUnion("kind", [
     z.strictObject({ kind: z.literal("csv_url"), url: z.url(), refreshMinutes: refresh }),
     z.strictObject({ kind: z.literal("json_url"), url: z.url(), itemsPath: z.string().default(""), refreshMinutes: refresh }),
 ]);
+
+/**
+ * A whole number inside a platform bound (see core/bounds.ts), with its default.
+ */
+function bounded(bound: Bound) {
+    return z.number().int().min(bound.min, `at least ${bound.min}`).max(bound.max, `at most ${bound.max}`).default(bound.default);
+}
 
 const Window = z.strictObject({
     day:         z.number().int().min(0).max(6),
@@ -118,7 +127,7 @@ export const TenantFile = z.strictObject({
             handoff:      notices.default(["email"]),
             budget_alert: notices.default(["email"]),
         }).prefault({}),
-        maxSessionMinutes:   z.number().int().min(5).max(120).default(DEFAULT_SESSION_LIMITS.maxSessionSeconds / 60),
+        maxSessionMinutes:   bounded(PLATFORM_BOUNDS.maxSessionMinutes),
         recordingDisclosure: z.boolean().default(false),
         languages:           z.array(z.enum(LANGUAGES)).min(1).default(LANGUAGES),
         privacy:             z.strictObject({
@@ -129,6 +138,11 @@ export const TenantFile = z.strictObject({
         style:               z.strictObject({
             professionalism: z.enum(LEVELS).nullable().default(null),
             honestAboutAi:   z.boolean().nullable().default(null),
+        }).prefault({}),
+        calls:               z.strictObject({
+            silenceSeconds:    bounded(PLATFORM_BOUNDS.silenceSeconds),
+            stillTherePrompts: bounded(PLATFORM_BOUNDS.stillTherePrompts),
+            hiddenCallerId:    z.enum(["assistant", "voicemail", "reject"]).default("assistant"),
         }).prefault({}),
         catalog:             z.strictObject({
             source:   CatalogSourceFile.default({ kind: "manual" }),
@@ -198,6 +212,7 @@ export function toTenant(file: z.output<typeof TenantFile>): Tenant {
             privacy:             s.privacy,
             style:               s.style,
             catalog:             s.catalog,
+            calls:               s.calls,
         },
     };
 }
@@ -254,6 +269,7 @@ export function fromTenant(tenant: Tenant) {
             privacy:             { redact: [...s.privacy.redact], sensitive: s.privacy.sensitive, crisisSupport: s.privacy.crisisSupport },
             style:               { ...s.style },
             catalog:             { source: { ...s.catalog.source } as CatalogSource, fieldMap: { ...s.catalog.fieldMap } },
+            calls:               { ...s.calls },
         },
     } satisfies z.input<typeof TenantFile>;
 }

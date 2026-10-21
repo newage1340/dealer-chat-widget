@@ -78,6 +78,14 @@ describe("settings pages", () => {
         expect(saved.settings.privacy).toEqual({ redact: ["card", "birth_date"], sensitive: true, crisisSupport: false });
         expect(saved.settings.limits.maxSessionSeconds).toBe(20 * 60);
 
+        const tooLong = await post("/settings/demo-plumber/assistant", { maxSessionMinutes: "500", silenceSeconds: "1" });
+        expect(tooLong.status).toBe(400);
+        const page = await tooLong.text();
+        expect(page).toContain("at most 45");
+        expect(page).toContain("at least 3");
+        await post("/settings/demo-plumber/assistant", { silenceSeconds: "4", stillTherePrompts: "0", hiddenCallerId: "voicemail" });
+        expect((await app.store.tenants.bySlug("demo-plumber"))?.settings.calls).toEqual({ silenceSeconds: 4, stillTherePrompts: 0, hiddenCallerId: "voicemail" });
+
         const bad = await post("/settings/demo-plumber/business", { name: "X", domain: "plumbing", timezone: "Mars/Olympus", hoursText: "" });
         expect(bad.status).toBe(400);
         expect(await bad.text()).toContain("unknown timezone");

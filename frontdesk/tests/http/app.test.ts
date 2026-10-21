@@ -131,3 +131,19 @@ describe("admin", () => {
         expect((await app.http.request("/admin/blocks?tenant=plumber")).status).toBe(401);
     });
 });
+
+describe("call settings", () => {
+    it("listens as long and re-prompts as often as the tenant allows", async () => {
+        await app.store.tenants.save(plumber({ settings: { calls: { silenceSeconds: 4, stillTherePrompts: 0 } } }));
+        const greeting = await (await post("/voice", { CallSid: "CA9", From: CUSTOMER, To: PLUMBER_NUMBER })).text();
+        expect(greeting.match(/<Gather/g)?.length).toBe(1);
+        expect(greeting).toContain('timeout="4"');
+    });
+
+    it("sends hidden caller ID to voicemail when the tenant says so", async () => {
+        await app.store.tenants.save(plumber({ settings: { calls: { hiddenCallerId: "voicemail" } } }));
+        const twiml = await (await post("/voice", { CallSid: "CA10", From: "+266696687", To: PLUMBER_NUMBER })).text();
+        expect(twiml).toContain("<Record");
+        expect(twiml).not.toContain("<Gather");
+    });
+});

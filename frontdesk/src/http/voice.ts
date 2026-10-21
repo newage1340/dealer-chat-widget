@@ -23,6 +23,7 @@ import {
     type Conversation,
     type EventBody,
     type Inbound,
+    type CallSettings,
     type Language,
     type Session,
 } from "../core/index.ts";
@@ -118,6 +119,14 @@ export async function startCall(services: Services, tenant: Tenant, caller: Addr
         now,
     });
     const language = Tenant.startLanguage(tenant, contact.preferredLanguage);
+    // Robocalls usually hide their caller ID; the tenant decides whether those reach the assistant.
+    if (caller.kind !== "phone" && tenant.settings.calls.hiddenCallerId !== "assistant") {
+        if (tenant.settings.calls.hiddenCallerId === "reject") {
+            return { kind: "reject" as const, contact };
+        }
+        const session = await store.conversations.session(conversation, { channel: "voice", externalId: callId, vendor, handling: "voicemail" }, { language, smsIdleMs: services.smsIdleMs }, now);
+        return { kind: "voicemail" as const, session, contact };
+    }
     const defaults = { language, smsIdleMs: services.smsIdleMs };
     if (admission.kind === "admit") {
         const session = await store.conversations.session(conversation, { channel: "voice", externalId: callId, vendor, handling: "assistant" }, defaults, now);
@@ -140,6 +149,14 @@ export async function startCall(services: Services, tenant: Tenant, caller: Addr
     return { kind: "voicemail" as const, session, contact };
 }
 
+/**
+ * What Twilio puts in `From` when the caller hid their number (anonymous, restricted, unavailable, blocked).
+ */
+const HIDDEN_CALLER_IDS: ReadonlySet<string> = new Set([
+    "", "anonymous", "restricted", "unknown", "unavailable", "private",
+    "+266696687", "+7378742833", "+8656696", "+2562533",
+]);
+
 export function voiceRoutes(deps: ChannelDeps): Hono {
     const app = new Hono();
     const { services, engine, config } = deps;
@@ -148,10 +165,16 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
 
     const reply = (c: Context, vr: VoiceResponse) => xml(c, vr.toString());
     const turnUrl = (callId: string) => absolute(config, `/voice/turn?call=${encodeURIComponent(callId)}`);
-    const listen = (vr: VoiceResponse, text: string, callId: string, language: Language, pack: DomainPack) => {
+    /**
+     * Say `text` and listen; on silence ask "still there?" as many times as the tenant allows, then hang up.
+     * Every <Gather> is billed, so the tenant's call settings decide how much dead air we pay for.
+     */
+    const listen = (vr: VoiceResponse, text: string, callId: string, language: Language, pack: DomainPack, calls: CallSettings) => {
         const hints = pack.voice.speechHints;
-        vr.gather({ action: turnUrl(callId), language, prompt: text, hints, timeout: 6 });
-        vr.gather({ action: turnUrl(callId), language, prompt: say(STRINGS.stillThere, language), hints, timeout: 8 });
+        vr.gather({ action: turnUrl(callId), language, prompt: text, hints, timeout: calls.silenceSeconds });
+        for (let i = 0; i < calls.stillTherePrompts; i++) {
+            vr.gather({ action: turnUrl(callId), language, prompt: say(STRINGS.stillThere, language), hints, timeout: calls.silenceSeconds + 2 });
+        }
         vr.say(say(STRINGS.silenceGoodbye, language), language).hangup();
         return vr;
     };
@@ -162,8 +185,12 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
             ? null
             : await store.tenants.byEndpoint("voice", called);
     };
-    const callerOf = (f: Record<string, string>, callId: string): Address =>
-        Address.phone(f["From"] ?? "") ?? Address.webSession(`call-${callId}`);
+    const callerOf = (f: Record<string, string>, callId: string): Address => {
+        const from = (f["From"] ?? "").trim();
+        return HIDDEN_CALLER_IDS.has(from.toLowerCase())
+            ? Address.webSession(`call-${callId}`)
+            : Address.phone(from) ?? Address.webSession(`call-${callId}`);
+    };
 
     app.post("/voice", signed, async c => {
         const f = await form(c);
@@ -192,7 +219,7 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
                     .hangup());
             }
             case "assistant":
-                return reply(c, listen(new VoiceResponse().pause(1), Speech.forPolly(start.text, pack), callId, start.session.language, pack));
+                return reply(c, listen(new VoiceResponse().pause(1), Speech.forPolly(start.text, pack), callId, start.session.language, pack, tenant.settings.calls));
         }
     });
 
@@ -219,10 +246,10 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
             if (call.status === "ended") {
                 return reply(c, new VoiceResponse().say(say(STRINGS.silenceGoodbye, language), language).hangup());
             }
-            return reply(c, listen(new VoiceResponse(), say(STRINGS.stillThere, language), callId, language, pack));
+            return reply(c, listen(new VoiceResponse(), say(STRINGS.stillThere, language), callId, language, pack, tenant.settings.calls));
         }
         if (confidence > 0 && confidence < LOW_CONFIDENCE && said.split(/\s+/).length <= 2) {
-            return reply(c, listen(new VoiceResponse(), say(STRINGS.reprompt, language), callId, language, pack));
+            return reply(c, listen(new VoiceResponse(), say(STRINGS.reprompt, language), callId, language, pack, tenant.settings.calls));
         }
 
         const inbound: Inbound = {
@@ -248,10 +275,10 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
             if (directive.kind === "end") {
                 return reply(c, new VoiceResponse().say(text, spoken).hangup());
             }
-            return reply(c, listen(new VoiceResponse(), text, callId, spoken, pack));
+            return reply(c, listen(new VoiceResponse(), text, callId, spoken, pack, tenant.settings.calls));
         } catch (e) {
             console.error("voice turn failed:", e);
-            return reply(c, listen(new VoiceResponse(), say(STRINGS.fallbackVoice, language), callId, language, pack));
+            return reply(c, listen(new VoiceResponse(), say(STRINGS.fallbackVoice, language), callId, language, pack, tenant.settings.calls));
         }
     });
 

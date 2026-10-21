@@ -10,9 +10,11 @@ import {
     PhoneNumber,
     PiiKind,
     Plan,
+    PLATFORM_BOUNDS,
     Professionalism,
     Tenant,
     WEEKDAY_NAMES,
+    type Bound,
     type CatalogItem,
     type CatalogSyncStatus,
     type Contact,
@@ -197,6 +199,13 @@ function section(id: string, title: string, body: Html): Html {
     return html`<section id="${id}">\n<h2>${title}</h2>\n${body}</section>\n`;
 }
 
+/**
+ * A number input limited to a platform bound, with the range shown.
+ */
+function bounded(name: string, value: number, bound: Bound): Html {
+    return html`${input(name, value, "number", `min="${bound.min}" max="${bound.max}"`)} <small>${bound.min}-${bound.max}</small>`;
+}
+
 function action(d: TenantPageData, name: string): string {
     return `/settings/${d.tenant.slug}/${name}`;
 }
@@ -241,7 +250,13 @@ function assistant(d: TenantPageData): Html {
     return section("assistant", "Assistant", form(action(d, "assistant"), html`
 ${field("How formal", select("professionalism", levels, s.style.professionalism ?? ""))}
 ${field("If asked whether it's an AI", select("honestAboutAi", honesty, s.style.honestAboutAi === null ? "" : s.style.honestAboutAi ? "yes" : "no"))}
-${field("Longest conversation (minutes)", input("maxSessionMinutes", Math.round(s.limits.maxSessionSeconds / 60), "number", "min=\"5\" max=\"120\""), "the assistant starts wrapping up politely three replies before this")}
+${field("Longest conversation (minutes)", bounded("maxSessionMinutes", Math.round(s.limits.maxSessionSeconds / 60), PLATFORM_BOUNDS.maxSessionMinutes), "the assistant starts wrapping up politely three replies before this")}
+<fieldset>
+<legend>Calls</legend>
+${field("Wait for the caller to speak (seconds)", bounded("silenceSeconds", s.calls.silenceSeconds, PLATFORM_BOUNDS.silenceSeconds))}
+${field("\"Are you still there?\" prompts before hanging up", bounded("stillTherePrompts", s.calls.stillTherePrompts, PLATFORM_BOUNDS.stillTherePrompts))}
+${field("Calls with hidden caller ID", select("hiddenCallerId", [["assistant", "Answer normally"], ["voicemail", "Send to voicemail"], ["reject", "Don't answer"]], s.calls.hiddenCallerId), "robocalls usually hide their number")}
+</fieldset>
 ${field("Follow-up text after a quiet chat (minutes)", input("coldFollowupMinutes", s.coldFollowupMinutes, "number", "min=\"1\""), "blank: no follow-up texts")}
 <p>${check("Announce that calls are recorded", "recordingDisclosure", s.recordingDisclosure.enabled)}</p>
 <p>${check("Let web chat visitors skip the name and phone form", "skipProfileGate", s.skipProfileGate)}</p>
