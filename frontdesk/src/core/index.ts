@@ -139,6 +139,9 @@ export {
     type TurnMetric,
 } from "./quality.ts";
 export {
+    AsyncQueue,
+} from "./queue.ts";
+export {
     Result,
 } from "./result.ts";
 export {

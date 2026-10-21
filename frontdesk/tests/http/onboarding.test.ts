@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Config } from "../../src/config.ts";
+import { TEST_CONFIG } from "../support/config.ts";
 import { onboardingRoutes } from "../../src/http/onboarding.ts";
 import { Hours } from "../../src/prompts/hours.ts";
 import { FakeLlm, LoggingEmail, LoggingMessaging } from "../../src/providers/index.ts";
@@ -9,14 +10,7 @@ import { buildApp, type App } from "../../src/server.ts";
 import { openStore } from "../../src/storage/index.ts";
 import { plumber } from "../support/fixtures.ts";
 
-const CONFIG: Config = {
-    port: 0, publicBaseUrl: "", databaseUrl: "", embeddedDbDir: null, adminToken: "admin", uploadToken: "upload",
-    llm: { primary: "openai", openaiApiKey: "", openaiModels: { small: "m", fast: "m", capable: "m" }, localBaseUrl: "", localApiKey: "", localModels: { small: "", fast: "", capable: "" }, localMaxConcurrency: 1 },
-    pricesFile: new URL("../../prices.json", import.meta.url).pathname,
-    twilioAccountSid: "", twilioAuthToken: "", twilioMessagingSid: "", twilioDefaultFrom: "", validateTwilio: false,
-    resendApiKey: "", emailFrom: "test@example.com", deepgramApiKey: "", termsUrl: "https://t", privacyUrl: "https://p",
-    defaultSlug: "", dashboardUrl: "", sessionIdleMinutes: 30, runWorker: false, onboardingCode: "",
-};
+const CONFIG: Config = { ...TEST_CONFIG };
 
 let app: App;
 let routes: Hono;

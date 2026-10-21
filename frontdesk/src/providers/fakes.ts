@@ -2,11 +2,20 @@
  * Stand-ins for external services: scripted for tests, logging for running without credentials.
  */
 
-import type { UsageRecord } from "../core/index.ts";
+import { AsyncQueue, type Language, type UsageRecord } from "../core/index.ts";
 import type { EmailProvider, EmailReceipt, OutboundEmail } from "./email.ts";
 import type { LlmProvider, LlmRequest, LlmStreamPart, ToolCall } from "./llm.ts";
 import type { MessagingProvider, OutboundSms, SendReceipt } from "./messaging.ts";
-import type { BatchTranscriber, BatchTranscript, SpeechContext } from "./speech.ts";
+import type {
+    AudioFormat,
+    BatchTranscriber,
+    BatchTranscript,
+    Recognition,
+    SpeechChunk,
+    SpeechContext,
+    SpeechToText,
+    TextToSpeech,
+} from "./speech.ts";
 
 /**
  * What a scripted model does on one call: say `text`, then call `tools`.
@@ -129,5 +138,57 @@ export class FakeTranscriber implements BatchTranscriber {
             language: context.languages[0] ?? null,
             usage:    { ...usage(this.name, "stt", context.purpose, { audio_seconds: 10 }), tenantId: context.tenantId },
         };
+    }
+}
+
+/**
+ * A streaming recognizer the test drives: `hear("...")` delivers an utterance, `startSpeaking()` a barge-in.
+ * It drains whatever audio it's given and counts the bytes.
+ */
+export class FakeStt implements SpeechToText {
+    readonly name = "fake-stt";
+    bytes = 0;
+    languages: Language[] = [];
+    #out: AsyncQueue<Recognition> | null = null;
+
+    hear(text: string): void {
+        this.#out?.push({ kind: "final", text, confidence: 0.9, language: null });
+    }
+
+    startSpeaking(): void {
+        this.#out?.push({ kind: "speech_started" });
+    }
+
+    async *transcribe(audio: AsyncIterable<Uint8Array>, _format: AudioFormat, context: SpeechContext): AsyncIterable<Recognition> {
+        const out = new AsyncQueue<Recognition>();
+        this.#out = out;
+        this.languages.push(...context.languages);
+        void (async () => {
+            for await (const chunk of audio) {
+                this.bytes += chunk.byteLength;
+            }
+            out.close();
+        })();
+        yield* out;
+    }
+}
+
+/**
+ * Speech as one byte of silence per character, so tests can count what was "said".
+ */
+export class FakeTts implements TextToSpeech {
+    readonly name = "fake-tts";
+    readonly spoken: string[] = [];
+
+    supports(): boolean {
+        return true;
+    }
+
+    async *synthesize(text: AsyncIterable<string>, _voice: string, _format: AudioFormat, context: SpeechContext): AsyncIterable<SpeechChunk> {
+        for await (const piece of text) {
+            this.spoken.push(piece);
+            yield { kind: "audio", bytes: new Uint8Array(piece.length).fill(0xff) };
+            yield { kind: "usage", usage: { ...usage(this.name, "tts", context.purpose, { characters: piece.length }), tenantId: context.tenantId } };
+        }
     }
 }

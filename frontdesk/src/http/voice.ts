@@ -35,6 +35,8 @@ import { Speech } from "../prompts/speech.ts";
 import { STRINGS, say } from "../prompts/strings.ts";
 import { Subscriber } from "../turn/index.ts";
 import { absolute, form, twilioSignature, xml, type ChannelDeps } from "./context.ts";
+import { PENDING_DIRECTIVES } from "../voice/stream.ts";
+import { streamUrl } from "./stream.ts";
 import { VoiceResponse } from "./twiml.ts";
 
 const LOW_CONFIDENCE = 0.45;
@@ -219,6 +221,18 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
                     .hangup());
             }
             case "assistant":
+                if (deps.voice !== undefined && deps.voice.kind !== "twilio_gather") {
+                    // Our own pipeline: Twilio streams the audio to /voice/stream, which greets the caller;
+                    // when we close the stream, Twilio follows the redirect to learn what comes next.
+                    return reply(c, new VoiceResponse()
+                        .stream(streamUrl(config.publicBaseUrl, c.req.header("host") ?? ""), {
+                            call:          callId,
+                            tenant:        tenant.id,
+                            from:          f["From"] ?? "",
+                            forwardedFrom: f["ForwardedFrom"] ?? "",
+                        })
+                        .redirect(absolute(config, `/voice/after?call=${encodeURIComponent(callId)}`)));
+                }
                 return reply(c, listen(new VoiceResponse().pause(1), Speech.forPolly(start.text, pack), callId, start.session.language, pack, tenant.settings.calls));
         }
     });
@@ -285,6 +299,18 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
     app.post("/voice/recorded", signed, c => reply(c, new VoiceResponse().hangup()));
 
     /**
+     * Where a streamed call goes after its stream closes: a transfer the assistant asked for, or hang up.
+     */
+    app.post("/voice/after", signed, c => {
+        const callId = c.req.query("call") ?? "";
+        const directive = PENDING_DIRECTIVES.get(callId);
+        PENDING_DIRECTIVES.delete(callId);
+        return reply(c, directive?.kind === "transfer"
+            ? new VoiceResponse().dial(directive.to, { timeout: 25 })
+            : new VoiceResponse().hangup());
+    });
+
+    /**
      * Twilio posts here when a voicemail recording is ready.
      */
     app.post("/voice/recording", signed, async c => {
@@ -337,7 +363,7 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
         const session = await callSession(tenant, callId);
         await store.usage.record({
             provider:   "twilio",
-            model:      "",
+            model:      PhoneNumber.isTollFree(f["To"] ?? "") ? "toll_free" : "",
             service:    "telephony",
             purpose:    "turn",
             occurredAt: services.clock(),
@@ -350,8 +376,26 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
         if (session === null || session.channel !== "voice") {
             return c.body(null, 204);
         }
-        if (session.handling === "assistant") {
+        // With <Gather>, Twilio bills each listen and every character <Say> speaks with a neural voice.
+        // Streamed calls meter their own speech services (see voice/stream.ts).
+        const gathered = deps.voice === undefined || deps.voice.kind === "twilio_gather";
+        if (session.handling === "assistant" && gathered) {
             const turns = session.call.turns;
+            const spoken = (await store.conversations.sessionMessages(session.id))
+                .filter(m => m.role === "assistant")
+                .reduce((n, m) => n + m.text.length, 0);
+            await store.usage.record({
+                provider:   "twilio-tts",
+                model:      "polly-neural",
+                service:    "tts",
+                purpose:    "turn",
+                occurredAt: services.clock(),
+                units:      { characters: spoken },
+                costUsd:    null,
+                latencyMs:  null,
+                tenantId:   tenant.id,
+                channel:    "voice",
+            });
             await store.usage.record({
                 provider:   "twilio-speech",
                 model:      "",

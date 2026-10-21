@@ -35,6 +35,22 @@ export type LlmConfig = {
     readonly localMaxConcurrency: number;
 };
 
+/**
+ * Self-hosted speech servers on the GPU machine (OpenAI-compatible APIs), for the media_streams_local pipeline.
+ */
+export type LocalSpeechConfig = {
+    readonly sttBaseUrl:        string;
+    readonly sttApiKey:         string;
+    readonly sttModel:          string;
+    readonly sttMaxConcurrency: number;
+    readonly sttTimeoutMs:      number;
+    readonly ttsBaseUrl:        string;
+    readonly ttsApiKey:         string;
+    readonly ttsModel:          string;
+    readonly ttsVoice:          string;
+    readonly ttsLanguages:      readonly string[];
+};
+
 export type Config = {
     readonly port:                 number;
     readonly publicBaseUrl:        string;
@@ -59,6 +75,10 @@ export type Config = {
     readonly sessionIdleMinutes:   number;
     readonly runWorker:            boolean;
     readonly onboardingCode:       string;
+    readonly voicePipeline:        "twilio_gather" | "media_streams" | "media_streams_local";
+    readonly openaiTtsModel:       string;
+    readonly openaiTtsVoice:       string;
+    readonly localSpeech:          LocalSpeechConfig;
 };
 
 function env(name: string, fallback = ""): string {
@@ -140,5 +160,20 @@ export function loadConfig(): Config {
         sessionIdleMinutes: int("SESSION_IDLE_MINUTES", 30),
         runWorker:          flag("RUN_WORKER", true),
         onboardingCode:     env("ONBOARDING_CODE"),
+        voicePipeline:      (["media_streams", "media_streams_local"] as const).find(p => p === env("VOICE_PIPELINE").toLowerCase()) ?? "twilio_gather",
+        openaiTtsModel:     env("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+        openaiTtsVoice:     env("OPENAI_TTS_VOICE", "coral"),
+        localSpeech:        {
+            sttBaseUrl:        env("LOCAL_STT_BASE_URL"),
+            sttApiKey:         env("LOCAL_STT_API_KEY"),
+            sttModel:          env("LOCAL_STT_MODEL", "Systran/faster-whisper-large-v3"),
+            sttMaxConcurrency: int("LOCAL_STT_MAX_CONCURRENCY", 8),
+            sttTimeoutMs:      int("LOCAL_STT_TIMEOUT_MS", 4000),
+            ttsBaseUrl:        env("LOCAL_TTS_BASE_URL"),
+            ttsApiKey:         env("LOCAL_TTS_API_KEY"),
+            ttsModel:          env("LOCAL_TTS_MODEL", "kokoro"),
+            ttsVoice:          env("LOCAL_TTS_VOICE", "af_heart"),
+            ttsLanguages:      env("LOCAL_TTS_LANGUAGES", "en,es,fr,pt,zh").split(",").map(l => l.trim()).filter(Boolean),
+        },
     };
 }

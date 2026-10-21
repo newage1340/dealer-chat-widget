@@ -37,6 +37,7 @@ async function runServer(): Promise<void> {
     const server = serve({ fetch: app.http.fetch, port: config.port }, info => {
         console.info(`front desk listening on http://localhost:${info.port}`);
     });
+    app.injectWebSocket(server);
     const stop = async () => {
         app.worker.stop();
         server.close();

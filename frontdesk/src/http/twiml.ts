@@ -115,6 +115,23 @@ export class VoiceResponse {
         return this;
     }
 
+    /**
+     * Hand the call's audio to our WebSocket (both directions). The next verb runs when we close the socket.
+     */
+    stream(url: string, parameters: Readonly<Record<string, string>>): this {
+        const params = Object.entries(parameters)
+            .filter(([, value]) => value !== "")
+            .map(([name, value]) => `<Parameter${attrs({ name, value })}/>`)
+            .join("");
+        this.#parts.push(`<Connect><Stream${attrs({ url })}>${params}</Stream></Connect>`);
+        return this;
+    }
+
+    redirect(url: string): this {
+        this.#parts.push(`<Redirect method="POST">${escape(url)}</Redirect>`);
+        return this;
+    }
+
     reject(): this {
         this.#parts.push(`<Reject reason="busy"/>`);
         return this;

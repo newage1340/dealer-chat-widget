@@ -1,7 +1,7 @@
 /**
  * Streaming speech interfaces, for running the voice pipeline ourselves
  * (self-hosted or per-use vendors) instead of paying a voice platform per minute.
- * Nothing implements these yet; they fix the shape adapters will meet.
+ * Implemented by deepgram.ts, whisper.ts and openai-tts.ts; used by src/voice/stream.ts.
  */
 
 import type { Language, Purpose, TenantId, UsageRecord } from "../core/index.ts";
@@ -14,8 +14,10 @@ export type AudioFormat = {
 /**
  * `final` results end a caller utterance; interim ones may still change.
  * `language` is set by recognizers that detect it, null otherwise.
+ * `speech_started` is the caller starting to talk, used to stop the assistant mid-sentence (barge-in).
  */
 export type Recognition =
+    | { readonly kind: "speech_started" }
     | { readonly kind: "interim";
         readonly text: string
     }

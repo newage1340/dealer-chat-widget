@@ -19,6 +19,13 @@ export type PhoneNumber = Brand<string, "PhoneNumber">;
 
 export const PhoneNumber = {
     /**
+     * Whether a US number is toll-free (800, 833, 844, 855, 866, 877, 888), which Twilio bills at a higher rate.
+     */
+    isTollFree(raw: string): boolean {
+        return /^\+?1?(800|833|844|855|866|877|888)\d{7}$/.test(raw.replace(/[^\d+]/g, ""));
+    },
+
+    /**
      * Normalize user or vendor input to E.164.
      * Bare 10-digit and 1-prefixed 11-digit numbers are treated as US numbers;
      * anything else must already carry a leading "+".

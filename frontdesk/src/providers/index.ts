@@ -26,7 +26,9 @@ export {
 } from "./llm.ts";
 export {
     FakeLlm,
+    FakeStt,
     FakeTranscriber,
+    FakeTts,
     LoggingEmail,
     LoggingMessaging,
     type ScriptedReply,

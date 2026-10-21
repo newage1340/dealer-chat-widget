@@ -5,6 +5,7 @@
 
 import { readFile } from "node:fs/promises";
 
+import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 
 import type { Config, LlmConfig } from "./config.ts";
@@ -35,13 +36,19 @@ import {
     type Route,
     type UsageSink,
 } from "./providers/index.ts";
-import { DeepgramTranscriber } from "./providers/deepgram.ts";
+import type { Language } from "./core/index.ts";
+import { streamUpgrade } from "./http/stream.ts";
+import { DeepgramStreamingStt, DeepgramTranscriber, DeepgramTts } from "./providers/deepgram.ts";
+import { OpenAiCompatibleTts } from "./providers/openai-tts.ts";
+import { LocalWhisperStt } from "./providers/whisper.ts";
+import { VoicePipeline } from "./voice/pipeline.ts";
 import { OpenAiCompatibleLlm } from "./providers/openai.ts";
 import { ResendEmail } from "./providers/resend.ts";
 import { TwilioSms } from "./providers/twilio.ts";
 import { openStore, type Store } from "./storage/index.ts";
 
 export type Overrides = {
+    readonly voice?:          VoicePipeline;
     readonly store?:          Store;
     readonly llm?:            LlmProvider;
     readonly messaging?:      MessagingProvider;
@@ -53,6 +60,10 @@ export type Overrides = {
 
 export type App = {
     readonly http:     Hono;
+    /**
+     * Attach WebSocket handling (media streams) to the running HTTP server.
+     */
+    readonly injectWebSocket: (server: Parameters<ReturnType<typeof createNodeWebSocket>["injectWebSocket"]>[0]) => void;
     readonly services: Services;
     readonly engine:   TurnEngine;
     readonly worker:   Worker;
@@ -88,6 +99,52 @@ export function buildLlm(cfg: LlmConfig, sink: UsageSink, prices: PriceTable): L
         console.info(`LLM routes: ${ordered.map(r => r.provider.name).join(" -> ")}`);
     }
     return new LlmRouter({ small: smallFirst, fast: ordered, capable: ordered }, sink, prices);
+}
+
+/**
+ * The voice pipeline the config asks for, or Twilio <Gather> when what it needs isn't configured.
+ */
+export function buildVoicePipeline(config: Config): VoicePipeline {
+    if (config.voicePipeline === "twilio_gather") {
+        return VoicePipeline.gather;
+    }
+    const deepgram = config.deepgramApiKey;
+    const openaiVoice = config.llm.openaiApiKey
+        ? [new OpenAiCompatibleTts({ name: "openai-tts", baseUrl: "https://api.openai.com/v1", apiKey: config.llm.openaiApiKey, model: config.openaiTtsModel, voice: config.openaiTtsVoice, languages: "all" })]
+        : [];
+    const deepgramVoice = deepgram ? [new DeepgramTts(deepgram)] : [];
+    const local = config.localSpeech;
+    if (config.voicePipeline === "media_streams") {
+        if (!deepgram) {
+            console.warn("VOICE_PIPELINE=media_streams needs DEEPGRAM_API_KEY; using Twilio <Gather> instead.");
+            return VoicePipeline.gather;
+        }
+        return { kind: "media_streams", stt: new DeepgramStreamingStt(deepgram), voices: [...deepgramVoice, ...openaiVoice] };
+    }
+    if (!local.sttBaseUrl) {
+        console.warn("VOICE_PIPELINE=media_streams_local needs LOCAL_STT_BASE_URL; using Twilio <Gather> instead.");
+        return VoicePipeline.gather;
+    }
+    const localVoice = local.ttsBaseUrl
+        ? [new OpenAiCompatibleTts({ name: "local-tts", baseUrl: local.ttsBaseUrl, apiKey: local.ttsApiKey, model: local.ttsModel, voice: local.ttsVoice, languages: local.ttsLanguages as Language[] })]
+        : [];
+    const voices = [...localVoice, ...deepgramVoice, ...openaiVoice];
+    if (voices.length === 0) {
+        console.warn("VOICE_PIPELINE=media_streams_local needs a voice: LOCAL_TTS_BASE_URL, DEEPGRAM_API_KEY or OPENAI_API_KEY; using Twilio <Gather> instead.");
+        return VoicePipeline.gather;
+    }
+    return {
+        kind:   "media_streams_local",
+        stt:    new LocalWhisperStt({
+            baseUrl:        local.sttBaseUrl,
+            apiKey:         local.sttApiKey,
+            model:          local.sttModel,
+            maxConcurrency: local.sttMaxConcurrency,
+            timeoutMs:      local.sttTimeoutMs,
+            backup:         deepgram ? new DeepgramTranscriber(deepgram) : null,
+        }),
+        voices,
+    };
 }
 
 export async function buildApp(config: Config, overrides: Overrides = {}): Promise<App> {
@@ -129,8 +186,13 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
         dashboardUrl:   config.dashboardUrl,
     });
 
-    const deps: ChannelDeps = { config, services, engine };
+    const voice = overrides.voice ?? buildVoicePipeline(config);
+    if (voice.kind !== "twilio_gather") {
+        console.info(`voice pipeline: ${voice.kind} (listening with ${voice.stt.name}; voices ${voice.voices.map(v => v.name).join(", ")})`);
+    }
+    const deps: ChannelDeps = { config, services, engine, voice };
     const http = new Hono();
+    const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app: http });
     http.onError((e, c) => {
         console.error(`${c.req.method} ${c.req.path} failed:`, e);
         return c.json({ error: "internal error" }, 500);
@@ -142,5 +204,8 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
     http.route("/", voiceRoutes(deps));
     http.route("/", vapiRoutes(deps));
     http.route("/", webRoutes(deps));
-    return { http, services, engine, worker, store };
+    if (voice.kind !== "twilio_gather") {
+        http.get("/voice/stream", streamUpgrade(deps, voice, upgradeWebSocket));
+    }
+    return { http, injectWebSocket, services, engine, worker, store };
 }

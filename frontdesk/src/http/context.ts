@@ -8,11 +8,13 @@ import type { Config } from "../config.ts";
 import type { TurnEngine } from "../pipeline/engine.ts";
 import type { Services } from "../pipeline/services.ts";
 import { TwilioSignature } from "../providers/twilio.ts";
+import type { VoicePipeline } from "../voice/pipeline.ts";
 
 export type ChannelDeps = {
     readonly config:   Config;
     readonly services: Services;
     readonly engine:   TurnEngine;
+    readonly voice?:   VoicePipeline;
 };
 
 /**

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Config } from "../../src/config.ts";
+import { TEST_CONFIG } from "../support/config.ts";
 import { TwilioSignature } from "../../src/providers/twilio.ts";
 import { FakeLlm, LoggingEmail, LoggingMessaging, type LlmRequest, type ScriptedReply } from "../../src/providers/index.ts";
 import { buildApp, type App } from "../../src/server.ts";
@@ -8,14 +9,7 @@ import { openStore } from "../../src/storage/index.ts";
 import { CUSTOMER, PLUMBER_NUMBER, plumber } from "../support/fixtures.ts";
 import { lastUser } from "../support/harness.ts";
 
-const CONFIG: Config = {
-    port: 0, publicBaseUrl: "https://frontdesk.example", databaseUrl: "", embeddedDbDir: null, adminToken: "admin", uploadToken: "upload",
-    llm: { primary: "openai", openaiApiKey: "", openaiModels: { small: "m", fast: "m", capable: "m" }, localBaseUrl: "", localApiKey: "", localModels: { small: "", fast: "", capable: "" }, localMaxConcurrency: 1 },
-    pricesFile: new URL("../../prices.json", import.meta.url).pathname,
-    twilioAccountSid: "", twilioAuthToken: "", twilioMessagingSid: "", twilioDefaultFrom: "", validateTwilio: false,
-    resendApiKey: "", emailFrom: "test@example.com", deepgramApiKey: "", termsUrl: "https://t", privacyUrl: "https://p",
-    defaultSlug: "", dashboardUrl: "", sessionIdleMinutes: 30, runWorker: false, onboardingCode: "",
-};
+const CONFIG: Config = { ...TEST_CONFIG, publicBaseUrl: "https://frontdesk.example" };
 
 function script(request: LlmRequest): ScriptedReply | string {
     const said = lastUser(request);
