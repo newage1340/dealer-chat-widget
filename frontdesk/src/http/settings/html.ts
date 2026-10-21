@@ -63,11 +63,18 @@ ${body.html}
 // --- form controls ---------------------------------------------------------------------
 
 /**
- * A labelled control. Labels are bold; text boxes start on the line below their label, with the help text to their right.
+ * A labelled control. Labels are bold; text boxes start on the line below their label,
+ * with the help text in a block to their right.
  */
 export function field(label: string, control: Html, help = ""): Html {
     if (control.html.startsWith("<textarea")) {
-        return html`<p><label><strong>${label}</strong><br>${control}</label>${help ? html` <small>${help}</small>` : ""}</p>\n`;
+        if (!help) {
+            return html`<p><label><strong>${label}</strong><br>${control}</label></p>\n`;
+        }
+        // A two-cell table keeps the help text beside the box as one block, without CSS.
+        const id = /\sid="([^"]*)"/.exec(control.html)?.[1] ?? "";
+        return html`<div><p><label for="${id}"><strong>${label}</strong></label></p>
+<table role="presentation"><tr><td>${control}</td><td><small>${help}</small></td></tr></table></div>\n`;
     }
     return html`<p><label><strong>${label}</strong> ${control}</label>${help ? html` <small>${help}</small>` : ""}</p>\n`;
 }
@@ -77,7 +84,7 @@ export function input(name: string, value: string | number | null | undefined, t
 }
 
 export function textarea(name: string, value: string, rows = 4): Html {
-    return html`<textarea name="${name}" rows="${rows}" cols="60">${value}</textarea>`;
+    return html`<textarea id="field-${name}" name="${name}" rows="${rows}" cols="60">${value}</textarea>`;
 }
 
 export function select(name: string, options: readonly (readonly [string, string])[], selected: string): Html {
