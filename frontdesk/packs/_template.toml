@@ -1,0 +1,157 @@
+# DOMAIN PACK TEMPLATE
+# One file = one business type. Copy to <id>.toml, fill every field, then run:
+#   python src/main.py validate-domain src/domains/packs/<id>.toml
+#
+# Placeholders you may use inside prompt text, intake asks, goal and capabilities:
+#   {business_name} {business_noun} {agent_name} {agent_role} {staff_noun}
+#   {item_noun} {item_noun_plural} {spoken_item_noun} {visit_noun} {general_subject}
+#   {subject_label} {phone} {address} {website}
+#   {setting_<key>}  -> the tenant's settings.<key>
+#   {profile_<key>}  -> the tenant's answer to [[profile]] question <key>
+# [followups] templates may also use {first_name} {visit_time} {subject}.
+# Write literal curly braces as {{ and }}.
+#
+# Do NOT restate universal rules here (persona honesty, one question per message, no URLs,
+# booking steps, META_JSON, call tokens, hours handling). The base prompts already cover them.
+# Only write what is specific to this kind of business.
+
+[domain]
+id                       = "example"            # lowercase, matches the file name and tenants' "domain"
+name                     = "Example Business"   # shown as the "=== NAME SPECIFICS ===" heading
+description              = "One line about who this pack is for."
+business_noun            = "shop"               # "the shop", "the salon", "the dealership"
+staff_noun               = "team"               # who follows up: "sales team", "service team", "stylists"
+agent_role               = "front desk coordinator"   # chat persona role
+voice_agent_role         = "receptionist"       # phone persona role
+default_agent_name       = "Dave"               # chat persona name (tenants can override)
+default_voice_agent_name = "Sarah"              # phone persona name (tenants can override)
+goal                     = "What a successful conversation achieves, in one or two sentences."
+upsell_topics            = "things worth asking about when they come up, comma separated"
+
+# Questions every tenant of this type answers when onboarding.
+# The answers are shown to the model under `label` in BUSINESS INFO.
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the assistant should know?"
+
+[catalog]
+item_noun        = "service"                 # what the business offers, singular
+item_noun_plural = "services"
+spoken_noun      = "service"                 # what it's called out loud
+heading          = "SERVICES WE OFFER"       # section heading in the prompt
+intro            = "One or two sentences telling the model how to treat this list."
+empty_text       = "(No services listed yet.)"
+title_template   = "{name}"                  # built from field names below
+id_field         = "code"                    # optional: a stable id field
+summary_parts    = ["{price}", "{duration}"] # extra bits shown after the title in the list
+summary_suffix   = ""                        # optional trailing text, e.g. "[stock# {stock}]"
+url_field        = ""                        # optional: field holding a page URL
+price_field      = "price"                   # optional
+
+# One block per field. type: text | integer | number | money | url
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Service"
+searchable = true      # used to match what the customer asked about
+required   = true
+in_details = false     # the title already shows it
+
+[[catalog.fields]]
+name       = "price"
+label      = "Price"
+empty_text = "Quoted in person"   # shown when the field is blank
+
+[[catalog.fields]]
+name  = "duration"
+label = "Typical length"
+
+# Optional: map raw source column names onto field names (case-insensitive).
+[catalog.aliases]
+# "Service Name" = "name"
+
+# Optional: fields the SYSTEM texts when asked (the model never writes URLs).
+# [[catalog.sendables]]
+# field   = "booking_url"
+# label   = "booking page"
+# trigger = '\b(link|website|book online)\b'
+
+[booking]
+visit_noun       = "appointment"     # "visit", "service call", "appointment"
+subject_label    = "Service"         # label in staff alerts
+subject_hint     = "service name"    # what goes in META_JSON "subject"
+general_subject  = "consultation"    # subject when nothing specific was chosen
+location         = "business"        # "business" (they come in) or "customer" (we go to them)
+skip_intake_when = ""                # optional: when the intake questions don't apply
+
+# Questions asked before confirming a booking. channels: ["chat"], ["voice"] or both (default).
+[[booking.intake]]
+key = "notes"
+label = "Notes"
+ask = "What to ask and when it can be skipped."
+
+[widget]
+header_title      = "Assistant"
+tagline           = "Instant answers, 24/7."
+input_placeholder = "Ask a question or book an appointment..."
+icon              = "💬"
+capabilities      = "questions, pricing, and booking"   # "I can help with ..."
+
+# Sidebar shortcuts. requires_field/requires_any hide a topic unless some catalog item matches.
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Book"
+message = "I'd like to book an appointment"
+
+[voice]
+speak_years  = false
+speech_hints = "comma,separated,terms,speech-to-text,should,expect"
+
+# Optional regex -> spoken-form replacements for text-to-speech.
+# [[voice.pronunciations]]
+# pattern = '\bABC-1\b'
+# say     = "A B C one"
+
+# Classification topics: what a finished conversation was mostly about, for metrics and email subjects.
+# Keep it to 5-10 topics staff would actually sort by. "other" is added automatically.
+[[topics]]
+id          = "pricing"
+label       = "Pricing question"
+description = "The customer mainly wanted to know what something costs."
+
+[[topics]]
+id          = "booking"
+label       = "Booking"
+description = "The customer wanted to schedule, change or cancel a visit."
+
+[followups]
+# Each follow-up is a string (English) or a table of translations that includes English:
+#   [followups.confirm]
+#   en = "You're booked with {business_name} for {visit_time}."
+#   es = "Su cita con {business_name} es {visit_time}."
+cold     = "Hi {first_name}, it's {agent_name} with {business_name}. Just checking in - can I help you get something booked?"
+reminder = "Reminder: your {visit_noun} with {business_name} is {visit_time} ({subject}). Reply here if anything changes."
+confirm  = "You're booked with {business_name} for {visit_time} - {subject}. Reply here if anything changes."
+
+[prompts]
+summary_focus = "What the person following up on a call needs to know first for this kind of business."
+
+chat = '''
+DOMAIN RULES
+- Specific rules for this business type, written as short imperative bullets.
+'''
+
+voice = '''
+PHONE TALK
+- How a real person at this kind of business sounds on the phone, plus phone-only rules.
+'''
+
+# Optional: sections included only when a tenant setting is truthy (else_* when it isn't).
+# [[prompts.toggles]]
+# setting = "deposit_required"
+# chat    = "DEPOSITS: a {setting_deposit_amount} deposit holds the appointment."

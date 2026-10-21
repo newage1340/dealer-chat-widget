@@ -1,0 +1,260 @@
+# Residential / light-commercial plumbing domain pack.
+# The first non-automotive pack: the catalog is a service menu, visits happen at the
+# customer's address, and emergencies are routed to a live person.
+
+[domain]
+id                       = "plumbing"
+name                     = "Plumbing Service"
+description              = "Local plumbing companies: repairs, installs, drain cleaning and emergency calls."
+business_noun            = "shop"
+staff_noun               = "service team"
+agent_role               = "customer service coordinator"
+voice_agent_role         = "dispatcher"
+default_agent_name       = "Dave"
+default_voice_agent_name = "Sarah"
+goal                     = "Understand the customer's plumbing problem, tell them honestly what we can do, and book a service call at their address. Emergencies (active flooding, burst pipes, sewage backup, gas smell, no water) go to a live person right away."
+upsell_topics            = "water heater replacement, drain maintenance plans, water softeners or filtration, fixture upgrades, or a whole-home inspection"
+
+[[profile]]
+key      = "service_area"
+label    = "Service area"
+question = "What towns, zip codes, or radius do you cover?"
+required = true
+
+[[profile]]
+key      = "emergency"
+label    = "Emergency / after-hours service"
+question = "Do you offer emergency or after-hours service? Any extra charge?"
+
+[[profile]]
+key      = "pricing"
+label    = "Pricing policy"
+question = "How do you price jobs? (trip/diagnostic fee, flat-rate vs hourly, free estimates?)"
+
+[[profile]]
+key      = "guarantees"
+label    = "Warranty / guarantee"
+question = "What warranty or guarantee do you offer on labor and parts?"
+
+[[profile]]
+key      = "credentials"
+label    = "License & insurance"
+question = "License number and insurance details customers can be told."
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the AI should know? (payment methods, brands you install, jobs you don't take)"
+
+[catalog]
+item_noun        = "service"
+item_noun_plural = "services"
+spoken_noun      = "service"
+heading          = "SERVICES WE OFFER"
+intro            = "These are the services this shop offers. Prices are typical starting ranges, not quotes - the exact price is set by the technician on site."
+empty_text       = "(No service list provided - answer from Business Info and offer a service call.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{category}", "{price_range}", "{duration}"]
+price_field      = "price_range"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Service"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "category"
+label      = "Category"
+searchable = true
+
+[[catalog.fields]]
+name       = "price_range"
+label      = "Typical price"
+empty_text = "Quoted on site"
+
+[[catalog.fields]]
+name  = "duration"
+label = "Typical time on site"
+
+[[catalog.fields]]
+name       = "description"
+label      = "What's included"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[booking]
+visit_noun       = "service call"
+subject_label    = "Job"
+subject_hint     = "short description of the problem or service"
+general_subject  = "diagnostic visit"
+location         = "customer"
+skip_intake_when = ""
+
+[[booking.intake]]
+key      = "problem"
+label    = "Problem"
+ask      = "Get a clear one-line description of the problem: what fixture or system, what's happening, and since when. Don't re-ask if they already explained it."
+required = true
+
+[[booking.intake]]
+key   = "urgency"
+label = "Urgency"
+ask   = "Check whether it's an emergency (water actively leaking or flooding, sewage backing up, no water at all, gas smell). If it IS an emergency, don't continue booking - follow the EMERGENCIES rules."
+
+[[booking.intake]]
+key   = "property"
+label = "Property"
+ask   = "Ask whether it's a house, apartment/condo, or business, and whether they own it or rent (renters may need landlord approval)."
+
+[[booking.intake]]
+key      = "access"
+label    = "Access notes"
+ask      = "Ask if there's anything the tech should know to get in (gate code, pets, where the shutoff or water heater is). Keep it to one quick question."
+channels = ["voice"]
+
+[widget]
+header_title      = "Service Desk"
+tagline           = "Book a plumber or get answers, 24/7."
+input_placeholder = "Describe your plumbing problem, or ask about a service..."
+icon              = "🔧"
+capabilities      = "plumbing questions, pricing info, and booking a service call"
+
+[[widget.topics]]
+section = "Urgent"
+label   = "🚨 Emergency"
+message = "I have a plumbing emergency"
+
+[[widget.topics]]
+section        = "Common Jobs"
+label          = "🚿 Clogged Drain"
+message        = "My drain is clogged"
+requires_field = "category"
+requires_any   = ["drain"]
+
+[[widget.topics]]
+section        = "Common Jobs"
+label          = "🔥 Water Heater"
+message        = "I need help with my water heater"
+requires_field = "category"
+requires_any   = ["water heater"]
+
+[[widget.topics]]
+section        = "Common Jobs"
+label          = "💧 Leak"
+message        = "I have a leak"
+requires_field = "category"
+requires_any   = ["leak", "repair"]
+
+[[widget.topics]]
+section        = "Common Jobs"
+label          = "🚽 Toilet"
+message        = "My toilet needs fixing"
+requires_field = "category"
+requires_any   = ["fixture", "toilet"]
+
+[[widget.topics]]
+section = "Get Started"
+label   = "💲 Pricing"
+message = "How much do you charge?"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Book a Service Call"
+message = "I'd like to schedule a service call"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📍 Service Area / Hours"
+message = "What areas do you serve and what are your hours?"
+
+[voice]
+speak_years  = false
+speech_hints = "plumber,plumbing,water heater,tankless,sump pump,garbage disposal,disposal,clogged,drain,sewer,sewer line,main line,hydro jetting,jetting,camera inspection,leak,leaking,burst pipe,frozen pipe,shutoff valve,shut-off,toilet,faucet,shower,tub,P-trap,PEX,copper,galvanized,backflow,water softener,water pressure,gas line,slab leak,septic,estimate,diagnostic fee,trip charge,emergency"
+
+[[topics]]
+id          = "emergency"
+label       = "Emergency"
+description = "Active flooding, burst pipe, sewage backup, no water, gas smell, or anything needing someone right away."
+
+[[topics]]
+id          = "drain"
+label       = "Drains & sewer"
+description = "Clogged drains, slow drains, sewer line problems, drain cleaning or camera inspection."
+
+[[topics]]
+id          = "water_heater"
+label       = "Water heater"
+description = "Water heater repair, replacement, no hot water, tankless units."
+
+[[topics]]
+id          = "leak_repair"
+label       = "Leaks & repairs"
+description = "Leaking pipes, faucets, toilets or fixtures, and other repairs."
+
+[[topics]]
+id          = "install"
+label       = "Install / replacement"
+description = "Installing or replacing fixtures, softeners, filtration, repiping, or other larger projects."
+
+[[topics]]
+id          = "pricing"
+label       = "Pricing question"
+description = "Mainly asking what something costs, without a specific job booked."
+
+[[topics]]
+id          = "scheduling"
+label       = "Scheduling"
+description = "Booking, rescheduling, cancelling, or asking when a tech will arrive."
+
+[followups]
+cold     = "Hi {first_name}, it's {agent_name} with {business_name}. Just checking in on that plumbing issue - want me to get a tech scheduled out to you?"
+reminder = "Reminder from {business_name}: your service call is {visit_time} ({subject}). Our tech will text when they're on the way. Reply here if anything changes."
+confirm  = "You're booked with {business_name} for {visit_time} - {subject}. Reply here if anything changes."
+
+[prompts]
+summary_focus = "The problem in plain words, whether it's urgent, and the service address - dispatch plans the day around those."
+
+chat = '''
+PLUMBING RULES
+- NEVER diagnose with certainty or quote a firm price for a job. Prices in SERVICES WE OFFER are typical starting ranges; the technician confirms the exact price on site. Say so whenever you mention a price.
+- If Business Info lists a trip, diagnostic, or after-hours fee, mention it whenever you talk about price.
+- Before booking, check that the address is inside the Service area. If it clearly isn't, say so kindly and don't book.
+- You may give simple, safe stopgap advice while they wait (turn off the fixture's shutoff valve or the main water shutoff, stop using the drain, turn off power/gas to a leaking water heater). Never advise anything risky (no gas work, no electrical work, no chemical drain cleaners mixed with other products).
+- Never claim a license, certification, warranty, or brand affiliation that isn't in Business Info.
+- Renters: mention the landlord may need to approve the work, but still help book.
+
+EMERGENCIES
+- Signs: water actively pouring or flooding, burst pipe, sewage backing up into the home, no water at all, water heater leaking heavily, or ANY gas smell.
+- Gas smell: tell them to leave the building and call the gas utility or 911 from outside first - safety before anything else.
+- For the others: tell them how to shut off the water (main shutoff is usually where the line enters the house, near the meter or water heater), then follow the Emergency line in Business Info. In chat, give the phone number and say to call now; do not slow them down with booking steps.
+
+BOOKING
+- The subject of a service call is a short description of the job (e.g. "kitchen sink drain clog", "water heater leaking"), never a vague "plumbing".
+- Offer arrival windows (e.g. "between 8 and 11") rather than an exact minute if the customer asks how precise the time is; record the start of the window as the time.
+'''
+
+voice = '''
+DISPATCH TALK
+- Calm, competent, and quick - people calling a plumber are often stressed. "Okay, we can help with that."
+- Get the problem in their own words first, then location, then timing. One question per turn.
+- Don't use jargon unless they do ("main line," "P-trap") - say "the pipe under the sink," "the main water shutoff."
+- EMERGENCY on the phone: if water is actively flooding, sewage is backing up, or there's no water, give the one-sentence shutoff tip and then emit [TRANSFER] to get them to a live person now. Gas smell: tell them to get outside and call the gas company or 911, then [TRANSFER].
+- Never promise an exact arrival minute; give the window.
+'''
+
+[[prompts.toggles]]
+setting = "free_estimates"
+chat    = "ESTIMATES: This shop offers free estimates for larger jobs (installs, replacements, repipes) - offer one when the customer is pricing a big project."
