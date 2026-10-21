@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CallState, PhoneNumber, type CallEvent } from "../../src/core/index.ts";
 
-function run(events: readonly CallEvent[], limits = { maxTurns: 30, maxSilentTurns: 3 }): CallState {
+function run(events: readonly CallEvent[], limits = { maxSilentTurns: 3 }): CallState {
     let state = CallState.start();
     for (const event of events) {
         const next = CallState.next(state, event, limits);
@@ -36,22 +36,6 @@ describe("CallState", () => {
         expect(state).toMatchObject({
 			status: "ended",
 			reason: "silence"
-		});
-    });
-
-    it("ends at the turn limit", () => {
-        const turn: CallEvent[] = [
-			{ kind: "heard", text: "x" },
-			{ kind: "replied", directive: { kind: "continue" }}
-		];
-        const state = run(
-			[ ...turn, ...turn, { kind: "heard", text: "x" } ],
-			{ maxTurns: 2, maxSilentTurns: 3 }
-		);
-        expect(state).toMatchObject({
-			status: "ended",
-			reason: "turn_limit",
-			turns: 2
 		});
     });
 

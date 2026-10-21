@@ -1,59 +1,50 @@
 /**
- * Spending limits that protect against abuse and runaway cost.
+ * Limits on how long conversations run and how much a tenant can spend.
  *
- * Limits nest: a session (one call or chat), a contact (per day), and a tenant (per day and month).
- * They are checked before every turn, deterministically and for free,
- * so a caller who keeps talking nonsense is cut off by budget even if no classifier notices.
+ * Sessions are never cut off mid-sentence.
+ * When a limit is reached the session enters a wind-down: the model gets a few closing turns
+ * to wrap up politely (business hours, thanks for calling), and only then does the session end.
+ * The tenant's monthly cap is the one hard limit, because it protects the margin on the plan.
  */
 
+import type { Block, Contact, ContactChanges } from "./contact.ts";
 import type { ValueOf } from "./lang.ts";
+import type { Plan } from "./tenant.ts";
 
 /**
- * `maxUnproductiveTurns` counts consecutive turns the model flagged as off-topic or abusive;
- * any productive turn resets the count.
+ * `maxSessionSeconds` is how long a call or chat may run; tenants can change it.
+ * The wind-down starts `closingLeadSeconds` before that, and lasts `closingTurns` turns.
+ * `maxUnproductiveTurns` consecutive off-topic turns also start the wind-down.
  */
 export type SessionLimits = {
-    readonly maxTurns:             number;
+    readonly maxSessionSeconds:    number;
+    readonly closingLeadSeconds:   number;
+    readonly closingTurns:         number;
     readonly maxSilentTurns:       number;
-    readonly maxDurationSeconds:   number;
-    readonly maxCostUsd:           number;
     readonly maxUnproductiveTurns: number;
 };
 
-export type ContactLimits = {
-    readonly maxSessionsPerDay: number;
-    readonly maxCostUsdPerDay:  number;
-};
-
-export type TenantLimits = {
-    readonly maxCostUsdPerDay:   number;
-    readonly maxCostUsdPerMonth: number;
-};
-
-export type Limits = {
-    readonly session: SessionLimits;
-    readonly contact: ContactLimits;
-    readonly tenant:  TenantLimits;
-};
-
 /**
- * Running totals for one session, kept on the Session and updated by every commit.
+ * `strikesToBlock` sessions ended for abuse within `strikeWindowDays` block the caller for `blockHours`.
  */
-export type SessionMeter = {
-    readonly turns:             number;
-    readonly unproductiveTurns: number;
-    readonly costUsd:           number;
-    readonly startedAt:         Date;
+export type AbusePolicy = {
+    readonly strikesToBlock:   number;
+    readonly strikeWindowDays: number;
+    readonly blockHours:       number;
 };
 
-/**
- * Spend outside the current session, read from the usage table before the turn.
- */
-export type Spend = {
-    readonly contactSessionsToday: number;
-    readonly contactCostToday:     number;
-    readonly tenantCostToday:      number;
-    readonly tenantCostThisMonth:  number;
+export const DEFAULT_SESSION_LIMITS: SessionLimits = {
+    maxSessionSeconds:    30 * 60,
+    closingLeadSeconds:   2 * 60,
+    closingTurns:         3,
+    maxSilentTurns:       3,
+    maxUnproductiveTurns: 3,
+};
+
+export const DEFAULT_ABUSE_POLICY: AbusePolicy = {
+    strikesToBlock:   2,
+    strikeWindowDays: 30,
+    blockHours:       24,
 };
 
 /**
@@ -67,50 +58,86 @@ export const TurnAssessment = {
 } as const;
 export type TurnAssessment = ValueOf<typeof TurnAssessment>;
 
-export const BudgetReason = {
-    TurnLimit:     "turn_limit",
-    Duration:      "duration",
-    SessionCost:   "session_cost",
-    Unproductive:  "unproductive",
-    ContactDaily:  "contact_daily",
-    TenantDaily:   "tenant_daily",
-    TenantMonthly: "tenant_monthly",
-    Blocked:       "blocked",
+export const ClosingReason = {
+    Duration:     "duration",
+    Unproductive: "unproductive",
+    Abusive:      "abusive",
+    TenantCap:    "tenant_cap",
 } as const;
-export type BudgetReason = ValueOf<typeof BudgetReason>;
+export type ClosingReason = ValueOf<typeof ClosingReason>;
 
 /**
- * `warn` lets the turn run but tells the model to steer back or say the conversation will end.
- * `end` closes the session after a short canned goodbye, without calling the model.
- * `refuse` answers with a canned line and no model call at all (blocked caller, tenant over budget).
+ * A wind-down in progress. `turnsLeft` counts the closing turns not yet used.
+ */
+export type Closing = {
+    readonly reason:    ClosingReason;
+    readonly turnsLeft: number;
+};
+
+/**
+ * Running totals for one session, kept on the Session and updated by every commit.
+ */
+export type SessionMeter = {
+    readonly turns:             number;
+    readonly unproductiveTurns: number;
+    readonly abusiveTurns:      number;
+    readonly costUsd:           number;
+    readonly startedAt:         Date;
+    readonly closing:           Closing | null;
+};
+
+/**
+ * `closing` lets the model answer, told it has `turnsLeft` turns (this one included) to wrap up.
+ * `end` means the wind-down is used up: say a canned goodbye without calling the model.
  */
 export type BudgetVerdict =
     | { readonly kind: "ok" }
-    | { readonly kind: "warn";
-		readonly reason: BudgetReason
+    | { readonly kind: "closing";
+		readonly reason: ClosingReason;
+		readonly turnsLeft: number
 	}
     | { readonly kind: "end";
-		readonly reason: BudgetReason
-	}
-    | { readonly kind: "refuse";
-		readonly reason: BudgetReason
+		readonly reason: ClosingReason
 	};
+
+/**
+ * Whether a new session may use the model at all.
+ * Refused sessions fall back without it: calls forward to the business, texts get a canned reply.
+ */
+export type Admission =
+    | { readonly kind: "admit" }
+    | { readonly kind: "refuse";
+		readonly reason: "blocked" | "tenant_cap"
+	};
+
+/**
+ * Where a tenant stands against its monthly cap; `warning` starts at 80%.
+ */
+export type CapStatus =
+    | "ok"
+    | "warning"
+    | "exceeded";
+
+const CAP_WARNING_SHARE = 0.8;
 
 export const SessionMeter = {
     start(now: Date): SessionMeter {
         return {
             turns:             0,
             unproductiveTurns: 0,
+            abusiveTurns:      0,
             costUsd:           0,
             startedAt:         now,
+            closing:           null,
         };
     },
 
     /**
-     * The meter after one more turn.
+     * The meter after a turn that ran under `verdict`.
      */
     record(
         meter: SessionMeter,
+        verdict: BudgetVerdict,
         assessment: TurnAssessment,
         costUsd: number
     ): SessionMeter
@@ -121,73 +148,124 @@ export const SessionMeter = {
             unproductiveTurns: assessment === "productive"
                 ? 0
                 : meter.unproductiveTurns + 1,
+            abusiveTurns:      assessment === "abusive"
+                ? meter.abusiveTurns + 1
+                : meter.abusiveTurns,
             costUsd:           meter.costUsd + costUsd,
+            closing:           verdict.kind === "closing"
+                ? { reason: verdict.reason, turnsLeft: verdict.turnsLeft - 1 }
+                : meter.closing,
         };
     },
 } as const;
 
 export const Budget = {
-    /**
-     * Whether a new session may start for this contact.
-     */
+    capStatus(costThisMonth: number, plan: Plan): CapStatus {
+        if (costThisMonth >= plan.monthlyCostCapUsd) {
+            return "exceeded";
+        }
+        return costThisMonth >= plan.monthlyCostCapUsd * CAP_WARNING_SHARE
+            ? "warning"
+            : "ok";
+    },
+
     admit(
-        spend: Spend,
-        limits: Limits,
-        blockedUntil: Date | null,
+        block: Block | null,
+        costThisMonth: number,
+        plan: Plan,
         now: Date
-    ): BudgetVerdict
+    ): Admission
     {
-        if (blockedUntil !== null && blockedUntil > now) {
+        if (block !== null && (block.until === null || block.until > now)) {
             return { kind: "refuse", reason: "blocked" };
         }
-        if (spend.tenantCostThisMonth >= limits.tenant.maxCostUsdPerMonth) {
-            return { kind: "refuse", reason: "tenant_monthly" };
-        }
-        if (spend.tenantCostToday >= limits.tenant.maxCostUsdPerDay) {
-            return { kind: "refuse", reason: "tenant_daily" };
-        }
-        if (
-            spend.contactSessionsToday >= limits.contact.maxSessionsPerDay
-            || spend.contactCostToday >= limits.contact.maxCostUsdPerDay
-        ) {
-            return { kind: "refuse", reason: "contact_daily" };
-        }
-        return { kind: "ok" };
+        return Budget.capStatus(costThisMonth, plan) === "exceeded"
+            ? { kind: "refuse", reason: "tenant_cap" }
+            : { kind: "admit" };
     },
 
     /**
-     * Whether the next turn of a running session may call the model.
-     * Hard limits end the session; reaching the last allowed unproductive turn only warns.
+     * How the next turn of a running session may proceed.
      */
     check(
         meter: SessionMeter,
-        spend: Spend,
-        limits: Limits,
+        limits: SessionLimits,
+        costThisMonth: number,
+        plan: Plan,
         now: Date
     ): BudgetVerdict
     {
-        const s = limits.session;
-        const elapsed = (now.getTime() - meter.startedAt.getTime()) / 1000;
-        if (meter.turns >= s.maxTurns) {
-            return { kind: "end", reason: "turn_limit" };
+        if (meter.closing !== null) {
+            return meter.closing.turnsLeft > 0
+                ? { kind: "closing", ...meter.closing }
+                : { kind: "end", reason: meter.closing.reason };
         }
-        if (elapsed >= s.maxDurationSeconds) {
-            return { kind: "end", reason: "duration" };
+        const reason = closingReason(meter, limits, costThisMonth, plan, now);
+        return reason === null
+            ? { kind: "ok" }
+            : { kind: "closing", reason, turnsLeft: limits.closingTurns };
+    },
+} as const;
+
+function closingReason(
+    meter: SessionMeter,
+    limits: SessionLimits,
+    costThisMonth: number,
+    plan: Plan,
+    now: Date
+): ClosingReason | null
+{
+    const elapsed = (now.getTime() - meter.startedAt.getTime()) / 1000;
+    if (costThisMonth + meter.costUsd >= plan.monthlyCostCapUsd) {
+        return "tenant_cap";
+    }
+    if (meter.abusiveTurns > 0) {
+        return "abusive";
+    }
+    if (meter.unproductiveTurns >= limits.maxUnproductiveTurns) {
+        return "unproductive";
+    }
+    if (elapsed >= limits.maxSessionSeconds - limits.closingLeadSeconds) {
+        return "duration";
+    }
+    return null;
+}
+
+const DAY_MS  = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+
+export const Abuse = {
+    /**
+     * Whether a session that wound down for `reason` counts as an abuse strike.
+     */
+    isStrike(reason: ClosingReason): boolean {
+        return reason === "abusive"
+            || reason === "unproductive";
+    },
+
+    /**
+     * Record a strike against a contact, blocking them once they reach the policy's threshold.
+     * Strikes older than the window are dropped; an existing staff block is never shortened.
+     */
+    strike(
+        contact: Contact,
+        policy: AbusePolicy,
+        now: Date
+    ): ContactChanges
+    {
+        const windowStart = now.getTime() - policy.strikeWindowDays * DAY_MS;
+        const strikes = [...contact.abuseStrikes, now].filter(t => t.getTime() >= windowStart);
+        if (strikes.length < policy.strikesToBlock || contact.block?.source === "staff") {
+            return { abuseStrikes: strikes };
         }
-        if (meter.costUsd >= s.maxCostUsd) {
-            return { kind: "end", reason: "session_cost" };
-        }
-        if (meter.unproductiveTurns >= s.maxUnproductiveTurns) {
-            return { kind: "end", reason: "unproductive" };
-        }
-        if (
-            spend.contactCostToday + meter.costUsd >= limits.contact.maxCostUsdPerDay
-        ) {
-            return { kind: "end", reason: "contact_daily" };
-        }
-        if (meter.unproductiveTurns === s.maxUnproductiveTurns - 1) {
-            return { kind: "warn", reason: "unproductive" };
-        }
-        return { kind: "ok" };
+        return {
+            abuseStrikes: [],
+            block: {
+                until:     new Date(now.getTime() + policy.blockHours * HOUR_MS),
+                source:    "auto",
+                reason:    `${strikes.length} abusive sessions in ${policy.strikeWindowDays} days`,
+                createdAt: now,
+            },
+        };
     },
 } as const;

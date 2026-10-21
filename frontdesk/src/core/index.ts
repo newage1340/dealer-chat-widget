@@ -8,16 +8,19 @@ export {
     AppointmentStatus,
 } from "./appointment.ts";
 export {
+    Abuse,
     Budget,
-    BudgetReason,
+    ClosingReason,
+    DEFAULT_ABUSE_POLICY,
+    DEFAULT_SESSION_LIMITS,
     SessionMeter,
     TurnAssessment,
+    type AbusePolicy,
+    type Admission,
     type BudgetVerdict,
-    type ContactLimits,
-    type Limits,
+    type CapStatus,
+    type Closing,
     type SessionLimits,
-    type Spend,
-    type TenantLimits,
 } from "./budget.ts";
 export {
     CallEndReason,
@@ -39,6 +42,7 @@ export {
     PhoneNumber,
 } from "./channel.ts";
 export {
+    Block,
     Contact,
     type ContactChanges,
 } from "./contact.ts";
@@ -101,6 +105,7 @@ export {
     Tenant,
     type Branding,
     type Plan,
+    type RecordingDisclosure,
     type TenantLink,
     type TenantSettings,
 } from "./tenant.ts";

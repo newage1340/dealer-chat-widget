@@ -3,6 +3,7 @@
  */
 
 export {
+    type BlockStore,
     type ClaimedJob,
     type CommittedTurn,
     type ConversationStore,

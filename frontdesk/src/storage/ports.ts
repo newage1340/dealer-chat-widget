@@ -4,9 +4,9 @@
  */
 
 import type {
-	Address, Appointment, CallVendor, CatalogItem, Channel, Classification,
+	Address, Appointment, Block, CallVendor, CatalogItem, Channel, Classification,
 	Contact, ContactChanges, ContactId, Conversation, ConversationId, DomainEvent,
-	Job, JobId, Message, Session, SessionId, SessionOutcome, Spend,
+	Job, JobId, Message, Session, SessionId, SessionOutcome,
 	Tenant, TenantId, Transcript } from "../core/index.ts";
 import type { UsageSink } from "../providers/index.ts";
 
@@ -111,10 +111,22 @@ export interface TranscriptStore {
 }
 
 /**
- * Spend aggregated from the usage table, in the tenant's day and month.
+ * Spend aggregated from the usage table.
  */
 export interface SpendLedger {
-    spend(tenant: Tenant, contactId: ContactId, now: Date): Promise<Spend>;
+    /**
+     * The tenant's estimated service cost since the start of the current month, in its timezone.
+     */
+    monthToDate(tenant: Tenant, now: Date): Promise<number>;
+}
+
+/**
+ * Staff actions on bans, from the web app.
+ */
+export interface BlockStore {
+    block(contactId: ContactId, block: Block): Promise<void>;
+    unblock(contactId: ContactId): Promise<void>;
+    blocked(tenantId: TenantId, now: Date): Promise<readonly Contact[]>;
 }
 
 export interface Store {
@@ -125,4 +137,5 @@ export interface Store {
     readonly jobs:          JobQueue;
     readonly usage:         UsageSink;
     readonly spend:         SpendLedger;
+    readonly blocks:        BlockStore;
 }

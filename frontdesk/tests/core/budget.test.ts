@@ -1,50 +1,95 @@
 import { describe, expect, it } from "vitest";
 
-import { Budget, SessionMeter, type Limits, type Spend } from "../../src/core/index.ts";
+import {
+    Abuse,
+    Budget,
+    DEFAULT_ABUSE_POLICY,
+    DEFAULT_SESSION_LIMITS,
+    SessionMeter,
+    type BudgetVerdict,
+    type Contact,
+    type Plan,
+    type TurnAssessment,
+} from "../../src/core/index.ts";
 
-const LIMITS: Limits = {
-    session: { maxTurns: 30, maxSilentTurns: 3, maxDurationSeconds: 900, maxCostUsd: 0.5, maxUnproductiveTurns: 3 },
-    contact: { maxSessionsPerDay: 5, maxCostUsdPerDay: 1 },
-    tenant:  { maxCostUsdPerDay: 20, maxCostUsdPerMonth: 300 },
-};
-const NO_SPEND: Spend = { contactSessionsToday: 0, contactCostToday: 0, tenantCostToday: 0, tenantCostThisMonth: 0 };
+const PLAN: Plan = { priceUsd: 99, monthlyCostCapUsd: 40, smsNotifications: false };
 const T0 = new Date("2026-10-21T15:00:00Z");
+const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);
 
-describe("Budget.admit", () => {
-    it("refuses blocked callers and tenants over budget", () => {
-        expect(Budget.admit(NO_SPEND, LIMITS, new Date("2026-10-22T00:00:00Z"), T0)).toEqual({ kind: "refuse", reason: "blocked" });
-        expect(Budget.admit({ ...NO_SPEND, tenantCostThisMonth: 300 }, LIMITS, null, T0)).toEqual({ kind: "refuse", reason: "tenant_monthly" });
-        expect(Budget.admit({ ...NO_SPEND, contactSessionsToday: 5 }, LIMITS, null, T0)).toEqual({ kind: "refuse", reason: "contact_daily" });
-    });
+/**
+ * Run turns through check + record the way the turn engine will, returning each verdict.
+ */
+function turns(assessments: readonly TurnAssessment[], now = T0, costThisMonth = 0): BudgetVerdict[] {
+    let meter = SessionMeter.start(T0);
+    const verdicts: BudgetVerdict[] = [];
+    for (const assessment of assessments) {
+        const verdict = Budget.check(meter, DEFAULT_SESSION_LIMITS, costThisMonth, PLAN, now);
+        verdicts.push(verdict);
+        meter = SessionMeter.record(meter, verdict, assessment, 0.001);
+    }
+    verdicts.push(Budget.check(meter, DEFAULT_SESSION_LIMITS, costThisMonth, PLAN, now));
+    return verdicts;
+}
 
-    it("admits once a block has expired", () => {
-        expect(Budget.admit(NO_SPEND, LIMITS, new Date("2026-10-20T00:00:00Z"), T0)).toEqual({ kind: "ok" });
-    });
-});
-
-describe("Budget.check", () => {
-    it("warns on the last allowed unproductive turn, then ends", () => {
-        let meter = SessionMeter.start(T0);
-        meter = SessionMeter.record(meter, "off_topic", 0.01);
-        meter = SessionMeter.record(meter, "off_topic", 0.01);
-        expect(Budget.check(meter, NO_SPEND, LIMITS, T0)).toEqual({ kind: "warn", reason: "unproductive" });
-        meter = SessionMeter.record(meter, "abusive", 0.01);
-        expect(Budget.check(meter, NO_SPEND, LIMITS, T0)).toEqual({ kind: "end", reason: "unproductive" });
+describe("Budget.check wind-down", () => {
+    it("gives three polite closing turns after three off-topic turns, then ends", () => {
+        const kinds = turns(["off_topic", "off_topic", "off_topic", "off_topic", "off_topic", "off_topic"])
+            .map(v => v.kind === "closing" ? `closing:${v.turnsLeft}` : v.kind);
+        expect(kinds).toEqual(["ok", "ok", "ok", "closing:3", "closing:2", "closing:1", "end"]);
     });
 
     it("forgives off-topic turns once the conversation gets back on track", () => {
-        let meter = SessionMeter.start(T0);
-        meter = SessionMeter.record(meter, "off_topic", 0.01);
-        meter = SessionMeter.record(meter, "off_topic", 0.01);
-        meter = SessionMeter.record(meter, "productive", 0.01);
-        expect(meter.unproductiveTurns).toBe(0);
-        expect(Budget.check(meter, NO_SPEND, LIMITS, T0)).toEqual({ kind: "ok" });
+        const verdicts = turns(["off_topic", "off_topic", "productive", "off_topic"]);
+        expect(verdicts.every(v => v.kind === "ok")).toBe(true);
     });
 
-    it("ends on session cost, duration and the contact's daily cost", () => {
-        const meter = SessionMeter.start(T0);
-        expect(Budget.check({ ...meter, costUsd: 0.5 }, NO_SPEND, LIMITS, T0)).toMatchObject({ reason: "session_cost" });
-        expect(Budget.check(meter, NO_SPEND, LIMITS, new Date(T0.getTime() + 900_000))).toMatchObject({ reason: "duration" });
-        expect(Budget.check({ ...meter, costUsd: 0.2 }, { ...NO_SPEND, contactCostToday: 0.8 }, LIMITS, T0)).toMatchObject({ reason: "contact_daily" });
+    it("starts closing right after an abusive turn", () => {
+        expect(turns(["abusive"])[1]).toEqual({ kind: "closing", reason: "abusive", turnsLeft: 3 });
+    });
+
+    it("starts closing two minutes before the session limit", () => {
+        expect(turns([], minutes(27))[0]).toEqual({ kind: "ok" });
+        expect(turns([], minutes(28))[0]).toEqual({ kind: "closing", reason: "duration", turnsLeft: 3 });
+    });
+
+    it("starts closing when the tenant reaches its monthly cap mid-session", () => {
+        expect(turns([], T0, 40)[0]).toMatchObject({ kind: "closing", reason: "tenant_cap" });
+    });
+});
+
+describe("Budget.admit", () => {
+    it("refuses blocked contacts and tenants over their cap", () => {
+        const block = { until: minutes(60), source: "auto" as const, reason: "", createdAt: T0 };
+        expect(Budget.admit(block, 0, PLAN, T0)).toEqual({ kind: "refuse", reason: "blocked" });
+        expect(Budget.admit({ ...block, until: null }, 0, PLAN, minutes(10_000))).toEqual({ kind: "refuse", reason: "blocked" });
+        expect(Budget.admit(block, 0, PLAN, minutes(61))).toEqual({ kind: "admit" });
+        expect(Budget.admit(null, 40, PLAN, T0)).toEqual({ kind: "refuse", reason: "tenant_cap" });
+    });
+
+    it("warns at 80% of the cap", () => {
+        expect(Budget.capStatus(31, PLAN)).toBe("ok");
+        expect(Budget.capStatus(32, PLAN)).toBe("warning");
+        expect(Budget.capStatus(40, PLAN)).toBe("exceeded");
+    });
+});
+
+describe("Abuse.strike", () => {
+    const contact = { abuseStrikes: [], block: null } as unknown as Contact;
+
+    it("blocks for 24 hours on the second strike", () => {
+        const first = Abuse.strike(contact, DEFAULT_ABUSE_POLICY, T0);
+        expect(first.block).toBeUndefined();
+        const second = Abuse.strike({ ...contact, ...first }, DEFAULT_ABUSE_POLICY, minutes(5));
+        expect(second.block).toMatchObject({ source: "auto", until: minutes(5 + 24 * 60) });
+    });
+
+    it("forgets strikes older than the window", () => {
+        const old = { ...contact, abuseStrikes: [new Date("2026-08-01T00:00:00Z")] };
+        expect(Abuse.strike(old, DEFAULT_ABUSE_POLICY, T0)).toEqual({ abuseStrikes: [T0] });
+    });
+
+    it("never replaces a staff block", () => {
+        const banned = { ...contact, abuseStrikes: [T0], block: { until: null, source: "staff", reason: "", createdAt: T0 } } as Contact;
+        expect(Abuse.strike(banned, DEFAULT_ABUSE_POLICY, minutes(1)).block).toBeUndefined();
     });
 });

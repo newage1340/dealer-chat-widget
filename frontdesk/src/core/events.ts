@@ -7,10 +7,10 @@
  */
 
 import type { Appointment } from "./appointment.ts";
-import type { BudgetReason, TurnAssessment } from "./budget.ts";
+import type { CapStatus, ClosingReason, TurnAssessment } from "./budget.ts";
 import type { CallEndReason } from "./call.ts";
 import type { Address, Channel } from "./channel.ts";
-import type { ContactChanges } from "./contact.ts";
+import type { Block, ContactChanges } from "./contact.ts";
 import type { AppointmentId, ContactId, ConversationId, EventId, MessageId, SessionId, TenantId } from "./ids.ts";
 import type { Variant } from "./lang.ts";
 import type { Classification } from "./transcript.ts";
@@ -74,13 +74,18 @@ export type EventBody =
 		readonly assessment: TurnAssessment;
 		readonly note: string
 	}
-    | { readonly kind: "budget_exceeded";
-		readonly reason: BudgetReason
+    | { readonly kind: "session_closing";
+		readonly reason: ClosingReason
+	}
+    | { readonly kind: "tenant_cap";
+		readonly status: CapStatus
 	}
     | { readonly kind: "contact_blocked";
 		readonly contactId: ContactId;
-		readonly until: Date;
-		readonly reason: BudgetReason
+		readonly block: Block
+	}
+    | { readonly kind: "contact_unblocked";
+		readonly contactId: ContactId
 	}
     | { readonly kind: "session_closed";
 		readonly reason: SessionCloseReason;

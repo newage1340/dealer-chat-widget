@@ -2,11 +2,11 @@
  * A business using the system, and which domain it belongs to.
  */
 
+import type { AbusePolicy, SessionLimits } from "./budget.ts";
 import type { Address, Channel, PhoneNumber } from "./channel.ts";
-import type { Limits } from "./budget.ts";
 import type { DomainId, TenantId } from "./ids.ts";
 import type { ValueOf } from "./lang.ts";
-import type { Language } from "./language.ts";
+import type { Language, LocalizedText } from "./language.ts";
 
 export type Branding = {
     readonly color:   string;
@@ -41,18 +41,32 @@ export const NotifyVia = {
 export type NotifyVia = ValueOf<typeof NotifyVia>;
 
 /**
- * Paid add-ons. Settings may ask for a feature the plan does not include;
- * the plan wins (e.g. SMS notices fall back to email).
+ * What the tenant pays for, and what we let them spend.
+ * `monthlyCostCapUsd` caps our service costs (models, telephony, texts) for the tenant each month,
+ * keeping the plan profitable; once reached, the assistant stops answering until the month rolls over.
+ * `smsNotifications` is the paid add-on for staff texts. Settings may ask for SMS without it;
+ * the plan wins and those notices go by email.
  */
 export type Plan = {
-    readonly smsNotifications: boolean;
+    readonly priceUsd:          number;
+    readonly monthlyCostCapUsd: number;
+    readonly smsNotifications:  boolean;
+};
+
+/**
+ * A spoken or written notice that conversations are recorded and transcribed,
+ * for places that require consent from everyone on a call. Off unless the tenant turns it on.
+ */
+export type RecordingDisclosure = {
+    readonly enabled: boolean;
+    readonly text:    LocalizedText;
 };
 
 /**
  * Options every tenant can set, regardless of domain.
  * `coldFollowupMinutes` null means the tenant does not send cold follow-ups.
  * `notifications` lists, per notice, how staff want to receive it (email by default).
- * `limits` are the tenant's budgets, with system defaults already applied.
+ * `limits` and `abuse` have system defaults applied; tenants adjust them from the web app.
  */
 export type TenantSettings = {
     readonly skipProfileGate:     boolean;
@@ -60,7 +74,9 @@ export type TenantSettings = {
     readonly coldFollowupMinutes: number | null;
     readonly links:               readonly TenantLink[];
     readonly notifications:       Readonly<Record<StaffNotice, readonly NotifyVia[]>>;
-    readonly limits:              Limits;
+    readonly limits:              SessionLimits;
+    readonly abuse:               AbusePolicy;
+    readonly recordingDisclosure: RecordingDisclosure;
 };
 
 /**
@@ -69,29 +85,30 @@ export type TenantSettings = {
  * `profile` holds the tenant's answers to that domain's questions
  * (e.g. "do you offer financing?"); its keys are defined by the pack, not by core.
  * `agentName` / `voiceAgentName` override the pack's default persona names when set.
- * `languages` are the languages the assistant may converse in, the first being the default;
+ * `defaultLanguage` greets callers the system knows nothing about;
+ * customers can switch to any supported language by asking, or just by speaking it.
  * `staffLanguage` is the language transcript gists and staff notices are written in.
  */
 export type Tenant = {
-    readonly id:             TenantId;
-    readonly slug:           string;
-    readonly name:           string;
-    readonly domain:         DomainId;
-    readonly timezone:       string;
-    readonly phone:          PhoneNumber | null;
-    readonly address:        string;
-    readonly website:        string;
-    readonly agentName:      string;
-    readonly voiceAgentName: string;
-    readonly endpoints:      Readonly<Partial<Record<Channel, readonly Address[]>>>;
-    readonly staffContacts:  readonly Address[];
-    readonly branding:       Branding;
-    readonly hoursText:      string;
-    readonly languages:      readonly [Language, ...Language[]];
-    readonly staffLanguage:  Language;
-    readonly profile:        Readonly<Record<string, string>>;
-    readonly plan:           Plan;
-    readonly settings:       TenantSettings;
+    readonly id:              TenantId;
+    readonly slug:            string;
+    readonly name:            string;
+    readonly domain:          DomainId;
+    readonly timezone:        string;
+    readonly phone:           PhoneNumber | null;
+    readonly address:         string;
+    readonly website:         string;
+    readonly agentName:       string;
+    readonly voiceAgentName:  string;
+    readonly endpoints:       Readonly<Partial<Record<Channel, readonly Address[]>>>;
+    readonly staffContacts:   readonly Address[];
+    readonly branding:        Branding;
+    readonly hoursText:       string;
+    readonly defaultLanguage: Language;
+    readonly staffLanguage:   Language;
+    readonly profile:         Readonly<Record<string, string>>;
+    readonly plan:            Plan;
+    readonly settings:        TenantSettings;
 };
 
 export const Tenant = {
@@ -112,10 +129,6 @@ export const Tenant = {
         return allowed.length > 0
             ? allowed
             : ["email"];
-    },
-
-    speaks(tenant: Tenant, language: Language): boolean {
-        return tenant.languages.includes(language);
     },
 
     staffPhones(tenant: Tenant): PhoneNumber[] {

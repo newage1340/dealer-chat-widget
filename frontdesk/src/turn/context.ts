@@ -10,14 +10,13 @@ import type {
     Inbound,
     Message,
     Session,
-    Spend,
     Tenant,
 } from "../core/index.ts";
 
 /**
  * `now` is the instant the turn started; tenant-local rendering happens where it is needed.
  * `appointment` is the conversation's latest confirmed appointment, if any.
- * `spend` is what this contact and tenant have already spent, for budget checks.
+ * `costThisMonth` is the tenant's service cost so far this month, for the monthly cap.
  */
 export type TurnContext = {
     readonly inbound:      Inbound;
@@ -28,6 +27,6 @@ export type TurnContext = {
     readonly session:      Session;
     readonly history:      readonly Message[];
     readonly appointment:  Appointment | null;
-    readonly spend:        Spend;
+    readonly costThisMonth: number;
     readonly now:          Date;
 };

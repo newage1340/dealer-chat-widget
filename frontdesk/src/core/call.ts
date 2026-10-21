@@ -1,7 +1,8 @@
 /**
  * The lifecycle of a phone call, as an explicit state machine.
  * Every voice vendor adapter drives calls through `CallState.next`,
- * so silence limits, turn limits, transfers and hang-ups behave the same on Twilio and Vapi.
+ * so silence limits, transfers and hang-ups behave the same on Twilio and Vapi.
+ * Time limits and the polite wind-down are the budget's job (budget.ts), not the call's.
  */
 
 import type { SessionLimits } from "./budget.ts";
@@ -13,7 +14,6 @@ export const CallEndReason = {
     Completed:    "completed",
     CallerHungUp: "caller_hung_up",
     Silence:      "silence",
-    TurnLimit:    "turn_limit",
     Transferred:  "transferred",
     Budget:       "budget",
     Error:        "error",
@@ -58,7 +58,7 @@ export type CallEvent =
     | { readonly kind: "hung_up" }
     | { readonly kind: "failed" };
 
-export type CallLimits = Pick<SessionLimits, "maxTurns" | "maxSilentTurns">;
+export type CallLimits = Pick<SessionLimits, "maxSilentTurns">;
 
 export type InvalidCallTransition = {
     readonly from:  CallState["status"];
@@ -66,7 +66,6 @@ export type InvalidCallTransition = {
 };
 
 const DEFAULT_LIMITS: CallLimits = {
-    maxTurns:       30,
     maxSilentTurns: 3,
 };
 
@@ -122,9 +121,10 @@ export const CallState = {
         switch (state.status) {
             case "listening":
                 if (event.kind === "heard") {
-                    return Result.ok(turns + 1 > limits.maxTurns
-                        ? { status: "ended", turns, reason: "turn_limit" }
-                        : { status: "responding", turns: turns + 1 });
+                    return Result.ok({
+                        status: "responding",
+                        turns: turns + 1
+                    });
                 }
                 if (event.kind === "silence") {
                     const silentTurns = state.silentTurns + 1;
