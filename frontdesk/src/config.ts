@@ -52,6 +52,19 @@ export type LocalSpeechConfig = {
     readonly ttsLanguages:      readonly string[];
 };
 
+/**
+ * Stripe billing. Prices are created once in the Stripe dashboard (monthly recurring) and referenced by id.
+ * Billing is off while `secretKey` is empty.
+ */
+export type StripeConfig = {
+    readonly secretKey:      string;
+    readonly webhookSecret:  string;
+    readonly priceBase:      string;
+    readonly priceExtraLine: string;
+    readonly priceSmsAlerts: string;
+    readonly topUpAmounts:   readonly number[];
+};
+
 export type Config = {
     readonly port:                 number;
     readonly publicBaseUrl:        string;
@@ -79,6 +92,7 @@ export type Config = {
     readonly onboardingCode:       string;
     readonly onboardingNotifyEmail: string;
     readonly sessionSecret:        string;
+    readonly stripe:               StripeConfig;
     readonly voicePipeline:        "twilio_gather" | "media_streams" | "media_streams_local";
     readonly openaiTtsModel:       string;
     readonly openaiTtsVoice:       string;
@@ -172,6 +186,14 @@ export function loadConfig(): Config {
         runWorker:          flag("RUN_WORKER", true),
         onboardingCode:     env("ONBOARDING_CODE"),
         onboardingNotifyEmail: env("ONBOARDING_NOTIFY_EMAIL"),
+        stripe:             {
+            secretKey:      env("STRIPE_SECRET_KEY"),
+            webhookSecret:  env("STRIPE_WEBHOOK_SECRET"),
+            priceBase:      env("STRIPE_PRICE_BASE"),
+            priceExtraLine: env("STRIPE_PRICE_EXTRA_LINE"),
+            priceSmsAlerts: env("STRIPE_PRICE_SMS_ALERTS"),
+            topUpAmounts:   env("STRIPE_TOPUP_AMOUNTS", "25,50,100").split(",").map(Number).filter(n => n > 0),
+        },
         // Signs business-owner sessions. Derived from the admin token when not set, so it is never empty in practice.
         sessionSecret:      env("SESSION_SECRET") || createHash("sha256").update(`session:${env("ADMIN_TOKEN")}`).digest("hex"),
         voicePipeline:      (["media_streams", "media_streams_local"] as const).find(p => p === env("VOICE_PIPELINE").toLowerCase()) ?? "twilio_gather",

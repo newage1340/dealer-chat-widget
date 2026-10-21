@@ -262,6 +262,17 @@ create table onboarding_submissions (
 );
 `,
     },
+    {
+        version: 5,
+        sql: `
+create table webhook_events (
+    source       text not null,
+    event_id     text not null,
+    received_at  timestamptz not null,
+    primary key (source, event_id)
+);
+`,
+    },
 ];
 
 export async function migrate(db: Db): Promise<number> {

@@ -15,6 +15,10 @@ export type ChannelDeps = {
     readonly services: Services;
     readonly engine:   TurnEngine;
     readonly voice?:   VoicePipeline;
+    /**
+     * For outbound HTTP to vendors called from routes (Stripe); tests pass a fake.
+     */
+    readonly fetch?:   typeof fetch;
 };
 
 /**

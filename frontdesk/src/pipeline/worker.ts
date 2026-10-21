@@ -165,7 +165,12 @@ export class Worker {
         }));
     }
 
-    async #recordFixedCosts(tenant: Tenant, _job: JobOf<"record_fixed_costs">): Promise<void> {
+    async #recordFixedCosts(tenant: Tenant, job: JobOf<"record_fixed_costs">): Promise<void> {
+        // Top-ups only extend the month they were bought in.
+        const sub = tenant.plan.subscription;
+        if (sub.topUpsUsd > 0 && sub.topUpsMonth !== job.month) {
+            await this.#d.services.store.tenants.save({ ...tenant, plan: { ...tenant.plan, subscription: { ...sub, topUpsUsd: 0, topUpsMonth: job.month } } });
+        }
         const numbers = new Set(
             Object.values(tenant.endpoints).flatMap(list => (list ?? []).map(a => a.value))
         );

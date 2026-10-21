@@ -13,6 +13,12 @@ export {
     type Account,
 } from "./account.ts";
 export {
+    Billing,
+    BillingStatus,
+    NO_BILLING,
+    type BillingState,
+} from "./billing.ts";
+export {
     Bound,
     PLATFORM_BOUNDS,
 } from "./bounds.ts";

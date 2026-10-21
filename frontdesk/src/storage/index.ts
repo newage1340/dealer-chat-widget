@@ -26,6 +26,7 @@ export {
     type TurnLog,
     type UsageTotal,
     type VoicemailStore,
+    type WebhookLog,
 } from "./ports.ts";
 export {
     connectEmbedded,

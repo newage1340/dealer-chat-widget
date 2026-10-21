@@ -30,6 +30,7 @@ const INPUT: BudgetInput = {
     textAlwaysOn:  true,
     costThisMonth: 0,
     activeCalls:   0,
+    billingActive: true,
     now:           T0,
 };
 
@@ -100,6 +101,7 @@ describe("Budget.admit", () => {
 
     it("allows one call at a time unless extra lines are bought", () => {
         expect(Budget.admit(null, { ...INPUT, activeCalls: 1 })).toEqual({ kind: "refuse", reason: "line_busy" });
+        expect(Budget.admit(null, { ...INPUT, billingActive: false })).toEqual({ kind: "refuse", reason: "billing_inactive" });
         const twoLines = { ...PLAN, subscription: { ...PLAN.subscription, extraLines: 1 } };
         expect(Budget.admit(null, { ...INPUT, activeCalls: 1, plan: twoLines })).toEqual({ kind: "admit" });
     });

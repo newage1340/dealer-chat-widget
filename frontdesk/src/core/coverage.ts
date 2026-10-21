@@ -82,6 +82,7 @@ export const Coverage = {
         const chosen = (() => {
             switch (reason) {
                 case "blocked":        return "reject";
+                case "billing_inactive": return "reject";
                 case "tenant_cap":     return "reject";
                 case "allowance_used": return "voicemail";
                 case "off_schedule":   return fallbacks.offSchedule;

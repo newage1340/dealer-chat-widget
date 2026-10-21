@@ -27,12 +27,14 @@ export type PlanPricing = {
 /**
  * What one tenant has bought for the current billing month.
  * `extraLines` allow simultaneous AI calls beyond the first.
- * `topUpsUsd` are one-off purchases this month that extend the allowance.
+ * `topUpsUsd` are one-off purchases that extend the allowance for `topUpsMonth` ("YYYY-MM" in the tenant's
+ * timezone); the monthly job clears them when a new month starts.
  */
 export type Subscription = {
     readonly extraLines:       number;
     readonly smsNotifications: boolean;
     readonly topUpsUsd:        number;
+    readonly topUpsMonth?:     string;
 };
 
 export type Plan = {

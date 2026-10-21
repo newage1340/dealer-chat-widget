@@ -28,6 +28,7 @@ import {
     type Weekday,
 } from "../../core/index.ts";
 import { lintTenant } from "../../tenants/lint.ts";
+import { StripeClient } from "../../providers/stripe.ts";
 import { LoginThrottle, Session, Viewer } from "./auth.ts";
 import { fromTenant, parseTenant, type TenantDraft } from "../../tenants/schema.ts";
 import { previewPrompt, SAMPLE_MESSAGE } from "../admin.ts";
@@ -104,6 +105,8 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
     const { services, config } = deps;
     const { store, registry } = services;
     const throttle = new LoginThrottle();
+    const stripe = config.stripe.secretKey ? new StripeClient(config.stripe.secretKey, deps.fetch) : null;
+    const origin = (c: Context) => config.publicBaseUrl || new URL(c.req.url).origin;
 
     /**
      * Who the session cookie belongs to, or null when nobody valid is signed in.
@@ -161,6 +164,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
             warnings:    lintTenant(tenant, pack, items),
             viewer:      c.get("viewer"),
             accounts:    await store.accounts.forTenant(tenant.id),
+            billing:     stripe === null ? null : { topUpAmounts: config.stripe.topUpAmounts },
         });
         return c.html(html, problems.length > 0 ? 400 : 200);
     };
@@ -562,6 +566,64 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
         }
         await store.blocks.unblock(contact.id);
         return back(c, tenant.slug, "blocks", "Unblocked.");
+    });
+
+    // --- billing ---------------------------------------------------------------------------
+
+    const billing = (name: string, start: (tenant: Tenant, c: Context<Env>, body: Body) => Promise<string>) => {
+        app.post(`/settings/:slug/billing/${name}`, auth, async c => {
+            const tenant = await tenantOr404(c);
+            if (tenant === null || stripe === null) {
+                return c.notFound();
+            }
+            try {
+                return c.redirect(await start(tenant, c, await c.req.parseBody({ all: true })), 303);
+            } catch (e) {
+                console.error(`stripe ${name} failed for ${tenant.slug}:`, e);
+                return render(c, tenant, "", ["Billing isn't available right now. Please try again in a few minutes."]);
+            }
+        });
+    };
+    const email = (tenant: Tenant) => tenant.staffContacts.find(a => a.kind === "email")?.value ?? null;
+    const returnTo = (c: Context, tenant: Tenant, notice: string) => `${origin(c)}/settings/${tenant.slug}?notice=${encodeURIComponent(notice)}#billing`;
+
+    billing("subscribe", async (tenant, c) => {
+        const p = config.stripe;
+        const sub = tenant.plan.subscription;
+        return stripe!.subscriptionCheckout({
+            tenantId:   tenant.id,
+            email:      email(tenant),
+            customerId: tenant.billing.customerId,
+            lines:      [
+                { price: p.priceBase, quantity: 1 },
+                ...(p.priceExtraLine ? [{ price: p.priceExtraLine, quantity: sub.extraLines }] : []),
+                ...(p.priceSmsAlerts ? [{ price: p.priceSmsAlerts, quantity: sub.smsNotifications ? 1 : 0 }] : []),
+            ],
+            successUrl: returnTo(c, tenant, "Thanks! Your subscription is being set up."),
+            cancelUrl:  returnTo(c, tenant, "Checkout canceled."),
+        });
+    });
+
+    billing("topup", async (tenant, c, body) => {
+        const amount = Number(one(body, "amount"));
+        if (!config.stripe.topUpAmounts.includes(amount)) {
+            throw new Error(`top-up amount ${amount} not offered`);
+        }
+        return stripe!.topUpCheckout({
+            tenantId:   tenant.id,
+            customerId: tenant.billing.customerId,
+            email:      email(tenant),
+            amountUsd:  amount,
+            successUrl: returnTo(c, tenant, `Thanks! $${amount} will be added to this month's allowance.`),
+            cancelUrl:  returnTo(c, tenant, "Top-up canceled."),
+        });
+    });
+
+    billing("portal", async (tenant, c) => {
+        if (tenant.billing.customerId === null) {
+            throw new Error("no Stripe customer yet");
+        }
+        return stripe!.portal(tenant.billing.customerId, `${origin(c)}/settings/${tenant.slug}#billing`);
     });
 
     // --- logins ----------------------------------------------------------------------------

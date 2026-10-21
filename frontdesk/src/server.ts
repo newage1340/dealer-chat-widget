@@ -12,6 +12,7 @@ import type { Config, LlmConfig } from "./config.ts";
 import { DomainRegistry } from "./domains/index.ts";
 import { adminRoutes } from "./http/admin.ts";
 import type { ChannelDeps } from "./http/context.ts";
+import { billingRoutes } from "./http/billing.ts";
 import { onboardingRoutes } from "./http/onboarding.ts";
 import { settingsRoutes } from "./http/settings/routes.ts";
 import { smsRoutes } from "./http/sms.ts";
@@ -51,6 +52,7 @@ import { openStore, type Store } from "./storage/index.ts";
 
 export type Overrides = {
     readonly voice?:          VoicePipeline;
+    readonly fetch?:          typeof fetch;
     readonly store?:          Store;
     readonly llm?:            LlmProvider;
     readonly messaging?:      MessagingProvider;
@@ -211,7 +213,7 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
     if (voice.kind !== "twilio_gather") {
         console.info(`voice pipeline: ${voice.kind} (listening with ${voice.stt.name}; voices ${voice.voices.map(v => v.name).join(", ")})`);
     }
-    const deps: ChannelDeps = { config, services, engine, voice };
+    const deps: ChannelDeps = { config, services, engine, voice, ...(overrides.fetch !== undefined ? { fetch: overrides.fetch } : {}) };
     const http = new Hono();
     const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app: http });
     http.onError((e, c) => {
@@ -221,6 +223,7 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
     http.route("/", adminRoutes(deps));
     http.route("/", settingsRoutes(deps));
     http.route("/", onboardingRoutes(deps));
+    http.route("/", billingRoutes(deps));
     http.route("/", smsRoutes(deps));
     http.route("/", voiceRoutes(deps));
     http.route("/", vapiRoutes(deps));

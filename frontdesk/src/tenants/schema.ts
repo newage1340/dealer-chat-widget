@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import {
     Address,
+    BillingStatus,
     Tenant,
     DEFAULT_ABUSE_POLICY,
     DEFAULT_CALL_FALLBACKS,
@@ -118,6 +119,13 @@ export const TenantFile = z.strictObject({
         extraLines:       z.number().int().min(0).default(0),
         smsNotifications: z.boolean().default(false),
         topUpsUsd:        z.number().min(0).default(0),
+        topUpsMonth:      z.string().regex(/^(\d{4}-\d{2})?$/).default(""),
+    }).prefault({}),
+    billing:         z.strictObject({
+        status:           z.enum(Object.values(BillingStatus) as [BillingStatus, ...BillingStatus[]]).default("none"),
+        customerId:       z.string().nullable().default(null),
+        subscriptionId:   z.string().nullable().default(null),
+        currentPeriodEnd: z.string().nullable().default(null),
     }).prefault({}),
     schedule:        z.union([
         z.literal("always"),
@@ -214,6 +222,7 @@ export function toTenant(file: z.output<typeof TenantFile>): Tenant {
         profile:         file.profile,
         options:         file.options,
         plan:            { pricing: DEFAULT_PRICING, subscription: file.plan },
+        billing:         file.billing,
         schedule:        file.schedule === "always"
             ? ServiceSchedule.always
             : { kind: "windows", windows: file.schedule.map(w => ({ ...w, day: w.day as 0 | 1 | 2 | 3 | 4 | 5 | 6 })) },
@@ -267,6 +276,7 @@ export function fromTenant(tenant: Tenant) {
         profile:         { ...tenant.profile },
         options:         { ...tenant.options },
         plan:            { ...tenant.plan.subscription },
+        billing:         { ...tenant.billing },
         schedule:        tenant.schedule.kind === "always"
             ? "always"
             : tenant.schedule.windows.map(w => ({ ...w })),

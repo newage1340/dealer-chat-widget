@@ -11,6 +11,7 @@ import { Hono, type Context } from "hono";
 
 import {
     Address,
+    Billing,
     Budget,
     CallState,
     Coverage,
@@ -118,6 +119,7 @@ export async function startCall(services: Services, tenant: Tenant, caller: Addr
         textAlwaysOn:  tenant.settings.textAlwaysOn,
         costThisMonth: await store.spend.monthToDate(tenant, now),
         activeCalls:   await store.conversations.activeCalls(tenant.id, null),
+        billingActive: Billing.serves(tenant.billing),
         now,
     });
     const language = Tenant.startLanguage(tenant, contact.preferredLanguage);

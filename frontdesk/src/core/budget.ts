@@ -109,10 +109,11 @@ export type BudgetVerdict =
  * Calls then get the fallback `Coverage.fallbackFor` picks (voicemail, forward or reject);
  * texts get a canned reply, or none for blocked contacts.
  * `allowance_used` means the assistant's share of the cap is gone but the voicemail reserve is not;
- * `tenant_cap` means the whole cap is gone.
+ * `tenant_cap` means the whole cap is gone; `billing_inactive` that the tenant's subscription lapsed.
  */
 export const RefusalReason = {
-    Blocked:       "blocked",
+    Blocked:         "blocked",
+    BillingInactive: "billing_inactive",
     AllowanceUsed: "allowance_used",
     TenantCap:     "tenant_cap",
     OffSchedule:   "off_schedule",
@@ -138,6 +139,7 @@ export type BudgetInput = {
     readonly textAlwaysOn:  boolean;
     readonly costThisMonth: number;
     readonly activeCalls:   number;
+    readonly billingActive: boolean;
     readonly now:           Date;
 };
 
@@ -212,6 +214,9 @@ export const Budget = {
     admit(block: Block | null, input: BudgetInput): Admission {
         if (block !== null && (block.until === null || block.until > input.now)) {
             return { kind: "refuse", reason: "blocked" };
+        }
+        if (!input.billingActive) {
+            return { kind: "refuse", reason: "billing_inactive" };
         }
         const cap = Budget.capStatus(input.costThisMonth, input.plan);
         if (cap === "exceeded") {

@@ -63,6 +63,7 @@ import type {
     TurnLog,
     UsageTotal,
     VoicemailStore,
+    WebhookLog,
 } from "./ports.ts";
 
 const json = (value: unknown) => JSON.stringify(value);
@@ -240,6 +241,7 @@ export class PostgresStore implements Store {
     readonly blocks:        BlockStore;
     readonly quality:       QualityLog;
     readonly accounts:      AccountStore;
+    readonly webhooks:      WebhookLog;
     readonly #db: Db;
     readonly #prices: PriceTable;
 
@@ -262,6 +264,12 @@ export class PostgresStore implements Store {
         this.blocks        = this.#blocks();
         this.quality       = this.#quality();
         this.accounts      = this.#accounts();
+        this.webhooks      = {
+            claim: async (source, eventId, at) => (await db.query(
+                "insert into webhook_events (source, event_id, received_at) values ($1, $2, $3) on conflict do nothing returning event_id",
+                [source, eventId, at],
+            )).length > 0,
+        };
     }
 
     async close(): Promise<void> {

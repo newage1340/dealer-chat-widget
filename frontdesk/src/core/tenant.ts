@@ -2,6 +2,7 @@
  * A business using the system, and which domain it belongs to.
  */
 
+import { NO_BILLING, type BillingState } from "./billing.ts";
 import { Bound, PLATFORM_BOUNDS } from "./bounds.ts";
 import type { AbusePolicy, SessionLimits } from "./budget.ts";
 import { DEFAULT_CATALOG_SETTINGS, type CatalogSettings } from "./catalog.ts";
@@ -133,6 +134,7 @@ export type TenantSettings = {
  * `defaultLanguage` greets callers the system knows nothing about;
  * customers can switch to any supported language by asking, or just by speaking it.
  * `staffLanguage` is the language transcript gists and staff notices are written in.
+ * `billing` is the subscription as the payment provider reports it ("none" until the tenant subscribes).
  * `schedule` is when the assistant answers the calls that reach us (always, unless the tenant narrows it);
  * outside it they get the off-schedule fallback.
  */
@@ -156,6 +158,7 @@ export type Tenant = {
     readonly profile:         Readonly<Record<string, string>>;
     readonly options:         Readonly<Record<string, string | number | boolean>>;
     readonly plan:            Plan;
+    readonly billing:         BillingState;
     readonly schedule:        ServiceSchedule;
     readonly settings:        TenantSettings;
 };
@@ -168,6 +171,7 @@ export const Tenant = {
         const s: Partial<TenantSettings> = stored.settings;
         return {
             ...stored,
+            billing:  stored.billing ?? NO_BILLING,
             settings: {
                 ...stored.settings,
                 languages: s.languages ?? Object.values(Language),

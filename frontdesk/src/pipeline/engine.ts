@@ -7,6 +7,7 @@
  */
 
 import {
+    Billing,
     Budget,
     CallState,
     Crisis,
@@ -28,6 +29,7 @@ import {
     type Inbound,
     type Job,
     type Language,
+    type RefusalReason,
     type Session,
 } from "../core/index.ts";
 import { STRINGS, say } from "../prompts/strings.ts";
@@ -232,6 +234,7 @@ export class TurnEngine {
             textAlwaysOn:  tenant.settings.textAlwaysOn,
             costThisMonth: ctx.costThisMonth,
             activeCalls:   0,
+            billingActive: Billing.serves(tenant.billing),
             now,
         };
         if (inbound.channel !== "voice" && session.meter.turns === 0) {
@@ -559,13 +562,14 @@ export class TurnEngine {
         return TurnOutcome.reply(say(STRINGS.goodbye, ctx.session.language, this.#values(ctx)), ctx.session.language);
     }
 
-    #refusal(ctx: TurnContext, reason: "blocked" | "tenant_cap" | "allowance_used" | "off_schedule" | "line_busy"): TurnOutcome {
+    #refusal(ctx: TurnContext, reason: RefusalReason): TurnOutcome {
         const language = ctx.session.language;
         switch (reason) {
             case "blocked":
                 return TurnOutcome.reply("", language);
             case "tenant_cap":
             case "allowance_used":
+            case "billing_inactive":
                 return TurnOutcome.reply(say(STRINGS.unavailableText, language, this.#values(ctx)), language);
             case "off_schedule":
             case "line_busy":

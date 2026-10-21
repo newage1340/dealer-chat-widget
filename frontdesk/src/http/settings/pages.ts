@@ -68,6 +68,7 @@ export type TenantPageData = {
     readonly warnings:    readonly string[];
     readonly viewer:      Viewer;
     readonly accounts:    readonly Account[];
+    readonly billing:     { readonly topUpAmounts: readonly number[] } | null;
 };
 
 function clock(minute: number): string {
@@ -154,6 +155,7 @@ export function tenantPage(d: TenantPageData): string {
         ["blocks", "Blocked callers"],
         ["logins", "Logins"],
         ["usage", "Usage"],
+        ...(d.billing !== null ? [["billing", "Billing"] as [string, string]] : []),
         ["conversations", "Conversations"],
     ];
     return page(`${tenant.name} settings`, html`
@@ -182,6 +184,7 @@ ${notifications(d)}
 ${blocks(d)}
 ${logins(d)}
 ${usage(d)}
+${billingSection(d)}
 ${conversations(d)}
 </main>`);
 }
@@ -556,6 +559,37 @@ ${field("Email", input("email", "", "email"))}
 ${field("Name", input("name", ""))}
 ${field("Password", input("password", "", "password", "autocomplete=\"new-password\""), `at least ${MIN_PASSWORD_LENGTH} characters; share it with them privately`)}
 `, "Add login")}
+`);
+}
+
+function billingSection(d: TenantPageData): Html {
+    if (d.billing === null) {
+        return html``;
+    }
+    const b = d.tenant.billing;
+    const label = {
+        none:               "Not subscribed yet.",
+        active:             "Active.",
+        trialing:           "In a free trial.",
+        past_due:           "Payment failed; we're retrying the card. The assistant keeps working for now.",
+        incomplete:         "Waiting for the first payment.",
+        incomplete_expired: "The first payment didn't go through. The assistant is paused.",
+        unpaid:             "Unpaid. The assistant is paused until the balance is paid.",
+        canceled:           "Canceled. The assistant is paused.",
+        paused:             "Paused.",
+    }[b.status];
+    const subscribed = b.subscriptionId !== null && b.status !== "canceled";
+    return section("billing", "Billing", html`
+<dl>
+<dt>Subscription</dt><dd>${label}</dd>
+${b.currentPeriodEnd !== null ? html`<dt>Current period ends</dt><dd>${when(new Date(b.currentPeriodEnd), d.tenant)}</dd>` : ""}
+<dt>Top-ups this month</dt><dd>$${(d.tenant.plan.subscription.topUpsUsd ?? 0).toFixed(2)}</dd>
+</dl>
+${subscribed
+        ? form(action(d, "billing/portal"), raw(""), "Manage billing (cards, invoices, cancel)")
+        : form(action(d, "billing/subscribe"), html`<p>$${Plan.monthlyRevenueUsd({ ...d.tenant.plan, subscription: { ...d.tenant.plan.subscription, topUpsUsd: 0 } }).toFixed(2)} a month, including the add-ons above.</p>`, "Subscribe")}
+<h3>Add to this month's allowance</h3>
+${form(action(d, "billing/topup"), field("Amount", select("amount", d.billing.topUpAmounts.map(a => [String(a), `$${a}`] as const), String(d.billing.topUpAmounts[0] ?? ""))), "Buy top-up")}
 `);
 }
 

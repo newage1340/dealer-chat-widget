@@ -268,6 +268,16 @@ export interface AccountStore {
     unreviewed(): Promise<readonly TenantId[]>;
 }
 
+/**
+ * Webhook deliveries already handled, so a retried delivery is applied once.
+ */
+export interface WebhookLog {
+    /**
+     * True the first time an event id is seen for a source, false on repeats.
+     */
+    claim(source: string, eventId: string, at: Date): Promise<boolean>;
+}
+
 export interface Store {
     readonly tenants:       TenantDirectory;
     readonly conversations: ConversationStore;
@@ -282,5 +292,6 @@ export interface Store {
     readonly blocks:        BlockStore;
     readonly quality:       QualityLog;
     readonly accounts:      AccountStore;
+    readonly webhooks:      WebhookLog;
     close(): Promise<void>;
 }

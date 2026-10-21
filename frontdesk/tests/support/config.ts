@@ -11,6 +11,7 @@ export const TEST_CONFIG: Config = {
     twilioAccountSid: "", twilioAuthToken: "", twilioMessagingSid: "", twilioDefaultFrom: "", validateTwilio: false,
     resendApiKey: "", smtp: { host: "", port: 587, user: "", password: "" }, emailFrom: "test@example.com", deepgramApiKey: "", termsUrl: "https://t", privacyUrl: "https://p",
     defaultSlug: "", dashboardUrl: "", sessionIdleMinutes: 30, runWorker: false, onboardingCode: "", onboardingNotifyEmail: "", sessionSecret: "test-secret",
+    stripe: { secretKey: "", webhookSecret: "", priceBase: "", priceExtraLine: "", priceSmsAlerts: "", topUpAmounts: [25, 50, 100] },
     voicePipeline: "twilio_gather", openaiTtsModel: "tts", openaiTtsVoice: "coral",
     localSpeech: {
         sttBaseUrl: "", sttApiKey: "", sttModel: "whisper", sttMaxConcurrency: 1, sttTimeoutMs: 1000,
