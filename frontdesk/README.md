@@ -179,6 +179,21 @@ and the same `search_catalog` tool. Adding another source (Square, Shopify, an M
   `crisisSupport` is **off by default**: when a business turns it on, messages that suggest self-harm get 988/911
   guidance and staff get an urgent alert. When it's off, nothing in the prompts mentions crisis handling.
 
+## Voice pipelines and local hosting
+
+`VOICE_PIPELINE` picks how calls are heard and spoken:
+
+- `twilio_gather` (default): Twilio `<Gather>` listens and `<Say>` speaks.
+- `media_streams`: Twilio streams the audio to `/voice/stream`; Deepgram transcribes live, and Deepgram Aura or
+  OpenAI speaks sentence by sentence. Callers can interrupt.
+- `media_streams_local`: Whisper on our GPU machine (any OpenAI-compatible server, e.g. speaches) transcribes,
+  with Deepgram as the backup. A local voice server (e.g. Kokoro-FastAPI) speaks when configured.
+
+`LLM_PRIMARY=local` (with `LOCAL_LLM_BASE_URL`, e.g. Ollama or vLLM) runs AI replies on the GPU machine, with
+OpenAI as overflow and fallback; the default is OpenAI. `docs/voice-costs.md` (generated with `pnpm cost-model`)
+has per-minute costs for each option and when the local machine pays for itself.
+The settings are listed in `.env.example`.
+
 ## Quality and evals
 
 - `pnpm eval` runs the hand-written scenarios in `evals/`; `pnpm eval:packs` runs checks generated from every demo
