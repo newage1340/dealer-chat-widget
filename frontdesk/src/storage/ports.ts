@@ -1,18 +1,24 @@
 /**
  * What the application needs from storage, independent of the database behind it.
- * Postgres implements these in production; an in-memory version backs the tests.
+ * Postgres implements these (postgres.ts); tests run the same code against an in-process Postgres.
  */
 
 import type {
-	Address, Appointment, Block, CallVendor, CatalogItem, Channel, Classification,
-	Contact, ContactChanges, ContactId, Conversation, ConversationId, DomainEvent,
-	Job, JobId, Message, Session, SessionId, SessionOutcome,
-	Tenant, TenantId, Transcript } from "../core/index.ts";
+	Address, Appointment, AppointmentId, AppointmentNotice, Block, CallHandling, CallVendor,
+	CatalogItem, Channel, Classification, Contact, ContactChanges, ContactId, Conversation,
+	ConversationId, DomainEvent, Job, JobId, Language, Message, Session, SessionId,
+	SessionOutcome, Tenant, TenantId, Transcript, Voicemail } from "../core/index.ts";
 import type { UsageSink } from "../providers/index.ts";
 
 export interface TenantDirectory {
+    byId(id: TenantId): Promise<Tenant | null>;
     bySlug(slug: string): Promise<Tenant | null>;
     byEndpoint(channel: Channel, address: Address): Promise<Tenant | null>;
+    all(): Promise<readonly Tenant[]>;
+    /**
+     * Create or replace a tenant, including its endpoint index.
+     */
+    save(tenant: Tenant): Promise<void>;
     catalog(tenantId: TenantId): Promise<readonly CatalogItem[]>;
     replaceCatalog(tenantId: TenantId, items: readonly CatalogItem[]): Promise<void>;
 }
@@ -29,7 +35,8 @@ export type SessionKey =
     | { readonly channel: "sms" }
     | { readonly channel: "voice";
         readonly externalId: string;
-        readonly vendor: CallVendor
+        readonly vendor: CallVendor;
+        readonly handling: CallHandling
     };
 
 export type Participants = {
@@ -37,14 +44,60 @@ export type Participants = {
     readonly conversation: Conversation;
 };
 
+/**
+ * `language` is what a new session starts in; `smsIdleMs` is how long an SMS session stays open.
+ */
+export type SessionDefaults = {
+    readonly language:  Language;
+    readonly smsIdleMs: number;
+};
+
 export interface ConversationStore {
     /**
      * The contact and conversation for a sender, created on first contact.
+     * A phone sender's number is recorded as the contact's reachable phone.
      */
-    resolve(tenantId: TenantId, sender: Address): Promise<Participants>;
-    session(conversation: Conversation, key: SessionKey, now: Date): Promise<Session>;
+    resolve(tenantId: TenantId, sender: Address, now: Date): Promise<Participants>;
+    /**
+     * The open session for `key`, or a new one.
+     */
+    session(conversation: Conversation, key: SessionKey, defaults: SessionDefaults, now: Date): Promise<Session>;
+    sessionById(id: SessionId): Promise<Session | null>;
+    findSession(tenantId: TenantId, key: SessionKey): Promise<Session | null>;
+    saveSession(session: Session): Promise<void>;
+    /**
+     * Mark a session ended. Returns the session if this call closed it, null if it was already closed.
+     */
+    closeSession(id: SessionId, at: Date): Promise<Session | null>;
+    /**
+     * Open web and SMS sessions with no activity since `before`, for the idle sweep.
+     */
+    idleSessions(before: Date, limit: number): Promise<readonly Session[]>;
+    /**
+     * Voice sessions the assistant is handling right now for a tenant (for the line limit).
+     */
+    activeCalls(tenantId: TenantId, excluding: SessionId | null): Promise<number>;
     history(conversationId: ConversationId, limit: number): Promise<readonly Message[]>;
-    latestAppointment(conversationId: ConversationId): Promise<Appointment | null>;
+    sessionMessages(sessionId: SessionId): Promise<readonly Message[]>;
+    lastMessage(conversationId: ConversationId): Promise<Message | null>;
+    conversation(id: ConversationId): Promise<Conversation | null>;
+    contact(id: ContactId): Promise<Contact | null>;
+    contactByAddress(tenantId: TenantId, address: Address): Promise<Contact | null>;
+    updateContact(id: ContactId, changes: ContactChanges): Promise<Contact>;
+    /**
+     * Link another address (e.g. a phone given in the web widget) to a contact.
+     */
+    addAddress(contactId: ContactId, address: Address): Promise<void>;
+    /**
+     * Remove a contact and everything about them (web widget "clear session", privacy requests).
+     */
+    deleteContact(id: ContactId): Promise<void>;
+}
+
+export interface AppointmentStore {
+    latest(conversationId: ConversationId): Promise<Appointment | null>;
+    byId(id: AppointmentId): Promise<Appointment | null>;
+    markNotice(id: AppointmentId, notice: AppointmentNotice): Promise<void>;
 }
 
 export type NewMessage = Omit<Message, "id" | "createdAt">;
@@ -53,29 +106,41 @@ export type NewMessage = Omit<Message, "id" | "createdAt">;
  * Everything one turn writes, applied atomically.
  * `dedupeKey` and `reply` are recorded so a retried webhook gets the same answer without re-running the turn.
  * `jobs` are the subscribers' reactions to `events`, enqueued in the same transaction.
+ * Appointments booked during the turn are saved from their `appointment_booked` events.
  */
 export type TurnCommit = {
     readonly dedupeKey:      string;
     readonly reply:          string;
-    readonly contact:        Contact;
+    readonly contactId:      ContactId;
     readonly contactChanges: ContactChanges;
     readonly session:        Session;
     readonly messages:       readonly NewMessage[];
     readonly events:         readonly DomainEvent[];
     readonly jobs:           readonly Job[];
+    readonly at:             Date;
 };
 
 /**
  * A previously committed turn, found by its dedupe key.
  */
 export type CommittedTurn = {
-    readonly reply:   string;
-    readonly session: Session;
+    readonly reply:     string;
+    readonly sessionId: SessionId;
 };
 
 export interface TurnLog {
     find(dedupeKey: string): Promise<CommittedTurn | null>;
-    commit(turn: TurnCommit): Promise<void>;
+    /**
+     * Returns false (and writes nothing) when a turn with the same dedupe key was already committed.
+     */
+    commit(turn: TurnCommit): Promise<boolean>;
+}
+
+/**
+ * Events and jobs recorded outside a turn (webhook callbacks, sweeps, workers), atomically.
+ */
+export interface Outbox {
+    publish(events: readonly DomainEvent[], jobs: readonly Job[]): Promise<void>;
 }
 
 export type ClaimedJob = Job & {
@@ -88,13 +153,17 @@ export type ClaimedJob = Job & {
  * a lease that is neither completed nor failed expires and the job is claimed again.
  */
 export interface JobQueue {
-    claim(limit: number, leaseMs: number): Promise<readonly ClaimedJob[]>;
+    enqueue(jobs: readonly Job[]): Promise<void>;
+    claim(limit: number, leaseMs: number, now: Date): Promise<readonly ClaimedJob[]>;
     complete(id: JobId): Promise<void>;
+    /**
+     * `retryAt` null gives up on the job for good.
+     */
     fail(id: JobId, error: string, retryAt: Date | null): Promise<void>;
 }
 
 /**
- * Filters for listing transcripts (the future staff web app, metrics).
+ * Filters for listing transcripts (the staff web app, metrics).
  */
 export type TranscriptQuery = {
     readonly tenantId: TenantId;
@@ -110,6 +179,18 @@ export interface TranscriptStore {
     saveClassification(classification: Classification): Promise<void>;
 }
 
+export interface VoicemailStore {
+    save(voicemail: Voicemail): Promise<void>;
+    bySession(sessionId: SessionId): Promise<Voicemail | null>;
+}
+
+export type UsageTotal = {
+    readonly provider: string;
+    readonly purpose:  string;
+    readonly calls:    number;
+    readonly costUsd:  number;
+};
+
 /**
  * Spend aggregated from the usage table.
  */
@@ -118,6 +199,10 @@ export interface SpendLedger {
      * The tenant's estimated service cost since the start of the current month, in its timezone.
      */
     monthToDate(tenant: Tenant, now: Date): Promise<number>;
+    /**
+     * Totals per provider and purpose since `since`, for the usage report.
+     */
+    summary(tenantId: TenantId | null, since: Date): Promise<readonly UsageTotal[]>;
 }
 
 /**
@@ -132,10 +217,14 @@ export interface BlockStore {
 export interface Store {
     readonly tenants:       TenantDirectory;
     readonly conversations: ConversationStore;
+    readonly appointments:  AppointmentStore;
     readonly turns:         TurnLog;
+    readonly outbox:        Outbox;
     readonly transcripts:   TranscriptStore;
+    readonly voicemails:    VoicemailStore;
     readonly jobs:          JobQueue;
     readonly usage:         UsageSink;
     readonly spend:         SpendLedger;
     readonly blocks:        BlockStore;
+    close(): Promise<void>;
 }

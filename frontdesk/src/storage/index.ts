@@ -1,15 +1,18 @@
 /**
- * Storage ports. Implementations (Postgres, in-memory) live beside this file.
+ * Storage ports and their Postgres implementation.
  */
 
 export {
+    type AppointmentStore,
     type BlockStore,
     type ClaimedJob,
     type CommittedTurn,
     type ConversationStore,
     type JobQueue,
     type NewMessage,
+    type Outbox,
     type Participants,
+    type SessionDefaults,
     type SessionKey,
     type SpendLedger,
     type Store,
@@ -18,4 +21,20 @@ export {
     type TranscriptStore,
     type TurnCommit,
     type TurnLog,
+    type UsageTotal,
+    type VoicemailStore,
 } from "./ports.ts";
+export {
+    connectEmbedded,
+    connectServer,
+    type Db,
+} from "./db.ts";
+export {
+    migrate,
+} from "./migrations.ts";
+export {
+    PostgresStore,
+} from "./postgres.ts";
+export {
+    openStore,
+} from "./open.ts";
