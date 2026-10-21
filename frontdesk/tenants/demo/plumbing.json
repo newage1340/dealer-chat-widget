@@ -1,0 +1,42 @@
+{
+  "id": "demo-plumbing",
+  "slug": "demo-plumbing",
+  "name": "Circle City Plumbing",
+  "domain": "plumbing",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0142",
+  "address": "1200 N Meridian St, Indianapolis, IN 46202",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Friday: 7am to 6pm, Saturday: 8am to 2pm, Sunday: closed",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "service_area": "Indianapolis and anywhere within about 25 miles: Carmel, Fishers, Greenwood, Plainfield, Avon, Lawrence, Beech Grove.",
+    "emergency": "Yes - 24/7 emergency service for active leaks, burst pipes, sewage backups and no-water situations. After-hours calls have a $95 after-hours fee on top of the normal trip charge.",
+    "pricing": "$79 trip/diagnostic charge, waived if you go ahead with the repair. Flat-rate pricing quoted on site before any work starts. Free estimates on water heater replacements and repipes.",
+    "guarantees": "1-year labor warranty on all repairs; manufacturer warranty on parts and water heaters (6-12 years depending on model).",
+    "credentials": "Licensed Indiana plumbing contractor, fully insured.",
+    "policies": "We accept cash, card, and check. We install Bradford White and Rheem water heaters and Navien tankless. We don't do septic pumping or well pumps."
+  },
+  "options": {
+    "free_estimates": true
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en",
+      "es"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "plumbing.json"
+      }
+    }
+  }
+}

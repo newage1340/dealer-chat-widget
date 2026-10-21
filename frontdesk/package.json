@@ -15,7 +15,9 @@
     "migrate": "node src/main.ts migrate",
     "import-tenants": "node src/main.ts import-tenants",
     "prompt": "node src/main.ts prompt",
-    "eval": "node src/main.ts eval"
+    "eval": "node src/main.ts eval",
+    "check-demo": "node src/cli/check-demo.ts",
+    "seed-demo": "node src/main.ts seed-demo"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.10",

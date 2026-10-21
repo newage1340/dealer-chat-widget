@@ -1,0 +1,119 @@
+[
+  {
+    "code": "DRN-1",
+    "name": "Drain cleaning (sink, tub, shower)",
+    "category": "Drain",
+    "price_range": "$129-$249",
+    "duration": "about 1 hour",
+    "description": "Clear a clogged fixture drain with a hand auger or machine; includes a flow test afterward.",
+    "keywords": "clog clogged slow drain backed up sink tub shower"
+  },
+  {
+    "code": "DRN-2",
+    "name": "Main sewer line cleaning",
+    "category": "Drain",
+    "price_range": "$249-$449",
+    "duration": "1-2 hours",
+    "description": "Clear the main line from a cleanout with a cable machine. Recommended when several drains back up at once.",
+    "keywords": "sewer main line backup basement floor drain"
+  },
+  {
+    "code": "DRN-3",
+    "name": "Sewer camera inspection",
+    "category": "Drain",
+    "price_range": "$199-$299",
+    "duration": "about 1 hour",
+    "description": "Camera inspection of the sewer line with a recording to find roots, breaks, or bellies.",
+    "keywords": "camera scope video inspection roots"
+  },
+  {
+    "code": "DRN-4",
+    "name": "Hydro jetting",
+    "category": "Drain",
+    "price_range": "$399-$799",
+    "duration": "2-3 hours",
+    "description": "High-pressure water jetting to scour grease and roots out of drain and sewer lines.",
+    "keywords": "jetting jet grease roots"
+  },
+  {
+    "code": "WH-1",
+    "name": "Water heater repair",
+    "category": "Water heater",
+    "price_range": "$149-$449",
+    "duration": "1-2 hours",
+    "description": "Diagnose and repair tank or tankless water heaters: thermocouples, elements, gas valves, leaks at fittings.",
+    "keywords": "no hot water pilot light element thermostat tankless"
+  },
+  {
+    "code": "WH-2",
+    "name": "Water heater replacement (tank)",
+    "category": "Water heater",
+    "price_range": "$1,400-$2,600",
+    "duration": "half a day",
+    "description": "Remove the old tank and install a new 40 or 50 gallon gas or electric water heater, including haul-away and code updates. Free estimate.",
+    "keywords": "new water heater install replace 40 gallon 50 gallon"
+  },
+  {
+    "code": "WH-3",
+    "name": "Tankless water heater install",
+    "category": "Water heater",
+    "price_range": "$3,200-$5,500",
+    "duration": "1 day",
+    "description": "Install a Navien tankless unit including venting and gas line sizing. Free estimate.",
+    "keywords": "tankless on demand navien"
+  },
+  {
+    "code": "LK-1",
+    "name": "Leak repair",
+    "category": "Leak repair",
+    "price_range": "$149-$399",
+    "duration": "1-2 hours",
+    "description": "Find and fix leaks at supply lines, valves, and accessible pipes.",
+    "keywords": "leak leaking drip dripping pipe water on floor ceiling stain"
+  },
+  {
+    "code": "LK-2",
+    "name": "Burst or frozen pipe repair",
+    "category": "Leak repair",
+    "price_range": "$249-$799",
+    "duration": "1-3 hours",
+    "description": "Emergency repair of burst or frozen pipes, including thawing and replacing damaged sections.",
+    "keywords": "burst frozen pipe flooding emergency"
+  },
+  {
+    "code": "FX-1",
+    "name": "Toilet repair or replacement",
+    "category": "Fixture",
+    "price_range": "$129-$549",
+    "duration": "1-2 hours",
+    "description": "Fix running, leaking, or clogged toilets, or install a new toilet (customer-supplied or ours).",
+    "keywords": "toilet running wobbly leaking base flapper"
+  },
+  {
+    "code": "FX-2",
+    "name": "Faucet repair or replacement",
+    "category": "Fixture",
+    "price_range": "$129-$399",
+    "duration": "about 1 hour",
+    "description": "Repair dripping faucets or install new kitchen and bath faucets.",
+    "keywords": "faucet drip dripping tap kitchen bathroom"
+  },
+  {
+    "code": "FX-3",
+    "name": "Garbage disposal install",
+    "category": "Fixture",
+    "price_range": "$249-$499",
+    "duration": "about 1 hour",
+    "description": "Replace a jammed or leaking disposal with a new InSinkErator unit.",
+    "keywords": "disposal garbage disposer jammed humming"
+  },
+  {
+    "code": "SP-1",
+    "name": "Sump pump replacement",
+    "category": "Repair",
+    "price_range": "$449-$899",
+    "duration": "2-3 hours",
+    "description": "Replace a failed sump pump and check valve; battery backup available.",
+    "keywords": "sump pump basement flooding backup"
+  }
+]

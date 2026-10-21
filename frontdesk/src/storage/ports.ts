@@ -5,7 +5,7 @@
 
 import type {
 	Address, Appointment, AppointmentId, AppointmentNotice, Block, CallHandling, CallVendor,
-	CatalogItem, Channel, Classification, Contact, ContactChanges, ContactId, Conversation,
+	CatalogItem, CatalogSyncStatus, Channel, Classification, Contact, ContactChanges, ContactId, Conversation,
 	ConversationId, DomainEvent, Job, JobId, Language, Message, Session, SessionId,
 	SessionOutcome, Tenant, TenantId, Transcript, Voicemail } from "../core/index.ts";
 import type { UsageSink } from "../providers/index.ts";
@@ -21,6 +21,11 @@ export interface TenantDirectory {
     save(tenant: Tenant): Promise<void>;
     catalog(tenantId: TenantId): Promise<readonly CatalogItem[]>;
     replaceCatalog(tenantId: TenantId, items: readonly CatalogItem[]): Promise<void>;
+    /**
+     * How the latest fetch from the tenant's catalog source went, or null if it never ran.
+     */
+    syncStatus(tenantId: TenantId): Promise<CatalogSyncStatus | null>;
+    recordSync(tenantId: TenantId, status: CatalogSyncStatus): Promise<void>;
 }
 
 /**

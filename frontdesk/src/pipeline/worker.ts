@@ -1,6 +1,6 @@
 /**
  * Runs queued jobs: texts, emails, staff notices, follow-ups, voicemail transcription,
- * classification and transcript delivery. Also sweeps idle sessions closed.
+ * classification and transcript delivery. Also sweeps idle sessions closed and refreshes catalog feeds.
  *
  * Failed jobs retry with backoff; a job that keeps failing is given up after a few attempts
  * and left in the table with its last error.
@@ -26,6 +26,7 @@ import {
     type SessionId,
     type Transcript,
 } from "../core/index.ts";
+import { syncDueCatalogs } from "../catalogs/index.ts";
 import { DomainPack, type FollowupKind } from "../domains/index.ts";
 import { Style } from "../prompts/style.ts";
 import {
@@ -105,6 +106,7 @@ export class Worker {
             this.#lastSweep = now.getTime();
             await sweepIdleSessions(this.#d.services);
             await this.#scheduleFixedCosts(now);
+            await syncDueCatalogs(this.#d.services);
         }
         let ran = 0;
         for (;;) {

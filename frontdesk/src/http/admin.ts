@@ -21,7 +21,7 @@ import {
     type SessionOutcome,
     type Tenant,
 } from "../core/index.ts";
-import { Catalog } from "../domains/index.ts";
+import { importRows, syncCatalog } from "../catalogs/index.ts";
 import { parseTenant } from "../tenants/schema.ts";
 import type { TurnContext } from "../turn/index.ts";
 import { adminOnly, type ChannelDeps } from "./context.ts";
@@ -76,16 +76,45 @@ export function adminRoutes(deps: ChannelDeps): Hono {
         if (!Array.isArray(rows) || rows.length === 0) {
             return c.json({ error: "no items - refusing to wipe the existing catalog" }, 400);
         }
-        const spec = registry.get(tenant.domain).catalog;
-        const now = services.clock();
-        const items = rows
-            .filter((r): r is Record<string, unknown> => typeof r === "object" && r !== null)
-            .map((r, i) => Catalog.normalize(r, spec, tenant.id, i, now));
-        await store.tenants.replaceCatalog(tenant.id, items);
-        return c.json({ ok: true, tenant: tenant.id, items: items.length });
+        const result = await importRows(services, tenant, rows.filter((r): r is Record<string, unknown> => typeof r === "object" && r !== null));
+        return result.ok
+            ? c.json({ ok: true, tenant: tenant.id, items: result.value })
+            : c.json({ error: result.error }, 400);
     };
     app.post("/admin/catalog-upload", c => upload(c));
     app.post("/admin/inventory-upload", c => upload(c));
+
+    /**
+     * A tenant's catalog as the assistant sees it, and how the latest sync from its source went.
+     */
+    app.get("/admin/tenants/:slug/catalog", admin, async c => {
+        const tenant = await store.tenants.bySlug(c.req.param("slug"));
+        if (tenant === null) {
+            return c.notFound();
+        }
+        return c.json({
+            source: tenant.settings.catalog.source,
+            status: await store.tenants.syncStatus(tenant.id),
+            items:  await store.tenants.catalog(tenant.id),
+        });
+    });
+
+    /**
+     * Fetch the tenant's catalog from its source now (instead of waiting for the refresh interval).
+     */
+    app.post("/admin/tenants/:slug/catalog/sync", admin, async c => {
+        const tenant = await store.tenants.bySlug(c.req.param("slug"));
+        if (tenant === null) {
+            return c.notFound();
+        }
+        const result = await syncCatalog(services, tenant);
+        if (result === null) {
+            return c.json({ error: "this catalog is managed by hand; upload rows instead" }, 400);
+        }
+        return result.ok
+            ? c.json({ ok: true, items: result.value })
+            : c.json({ error: result.error }, 502);
+    });
 
     // --- usage and prompts ------------------------------------------------------------
 

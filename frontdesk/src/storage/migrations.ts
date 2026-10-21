@@ -186,6 +186,17 @@ create table usage (
 create index usage_tenant on usage (tenant_id, occurred_at);
 `,
     },
+    {
+        version: 2,
+        sql: `
+create table catalog_syncs (
+    tenant_id   text primary key references tenants(id) on delete cascade,
+    synced_at   timestamptz not null,
+    items       integer not null,
+    error       text
+);
+`,
+    },
 ];
 
 export async function migrate(db: Db): Promise<number> {

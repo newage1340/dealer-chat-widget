@@ -301,6 +301,19 @@ export class PostgresStore implements Store {
                 fields:    parsed<Record<string, FieldValue>>(r["fields"]),
                 updatedAt: date(r["updated_at"]),
             })),
+            syncStatus: async tenantId => {
+                const row = (await db.query("select * from catalog_syncs where tenant_id = $1", [tenantId]))[0];
+                return row === undefined
+                    ? null
+                    : { syncedAt: date(row["synced_at"]), items: Number(row["items"]), error: row["error"] === null ? null : str(row["error"]) };
+            },
+            recordSync: async (tenantId, status) => {
+                await db.query(
+                    `insert into catalog_syncs (tenant_id, synced_at, items, error) values ($1, $2, $3, $4)
+                     on conflict (tenant_id) do update set synced_at = excluded.synced_at, items = excluded.items, error = excluded.error`,
+                    [tenantId, status.syncedAt, status.items, status.error],
+                );
+            },
             replaceCatalog: (tenantId, items) => db.transaction(async tx => {
                 await tx.query("delete from catalog_items where tenant_id = $1", [tenantId]);
                 const seen = new Set<string>();
