@@ -66,7 +66,12 @@ export type ResponseFormat =
         readonly schema: Readonly<Record<string, unknown>>
     };
 
+/**
+ * `cacheKey` groups requests that share a prompt prefix (e.g. one business type on one channel),
+ * so providers that route by it (OpenAI's prompt_cache_key) hit their prompt cache more often.
+ */
 export type LlmRequest = {
+    readonly cacheKey?:   string;
     readonly messages:    readonly ChatMessage[];
     readonly tools:       readonly ToolDefinition[];
     readonly format:      ResponseFormat;

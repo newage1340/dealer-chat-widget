@@ -16,17 +16,18 @@ import {
     LANGUAGE_NAMES,
     LocalTime,
     PhoneNumber,
+    Language,
     Tenant,
-    type Language,
     WEEKDAY_NAMES,
     type Appointment,
     type ContactChanges,
 } from "../core/index.ts";
 import { Catalog, DomainPack } from "../domains/index.ts";
-import { FULL_CATALOG_LIMIT } from "../prompts/composer.ts";
 import { Hours } from "../prompts/hours.ts";
 import type { ToolDefinition } from "../providers/index.ts";
 import { Tool, ToolResult, type TurnContext } from "../turn/index.ts";
+
+const LANGUAGES = Object.values(Language) as [Language, ...Language[]];
 
 // --- Contact details ---------------------------------------------------------------
 
@@ -215,8 +216,11 @@ function linkOptions(ctx: TurnContext): LinkOption[] {
     ];
 }
 
+/**
+ * The link names are listed in the prompt, not in the schema, so every tenant of a type shares one tool definition
+ * (and the prompt cache that covers it).
+ */
 function sendLink(ctx: TurnContext, options: readonly LinkOption[]): Tool {
-    const labels = options.map(o => o.label) as [string, ...string[]];
     const spec = ctx.pack.catalog;
     return Tool.define({
         name:        "send_link",
@@ -224,11 +228,16 @@ function sendLink(ctx: TurnContext, options: readonly LinkOption[]): Tool {
         description: "Send the customer a real link. Say you're sending it; never write the URL yourself.",
         followUp:    false,
         parameters:  z.object({
-            link: z.enum(labels).describe("Which link"),
+            link: z.string().describe("Which link: one of the names under LINKS YOU CAN SEND"),
             item: z.string().optional().describe(`For ${spec.itemNoun} links: which ${spec.itemNoun}, by name`),
         }),
         run: (args: { link: string; item?: string | undefined }) => {
-            const option = options.find(o => o.label === args.link)!;
+            const option = options.find(o => o.label.toLowerCase() === args.link.trim().toLowerCase());
+            if (option === undefined) {
+                return ToolResult.error(options.length === 0
+                    ? "This business has no links to send. Give the information directly instead."
+                    : `There's no link called '${args.link}'. The links are: ${options.map(o => o.label).join(", ")}.`);
+            }
             let url: string;
             let label: string;
             if (option.kind === "tenant") {
@@ -284,15 +293,22 @@ function searchCatalog(ctx: TurnContext): Tool {
 // --- Conversation control ----------------------------------------------------------
 
 /**
- * Only the tenant's offered languages can be chosen; a business that offers one language gets no tool.
+ * The schema lists every language so all tenants share one definition; the tenant's offered languages
+ * are in the prompt, and asking for another one gets an error the model passes on politely.
  */
-function switchLanguage(offered: readonly [Language, ...Language[]]): Tool {
+function switchLanguage(ctx: TurnContext): Tool {
     return Tool.define({
         name:        "switch_language",
-        description: "The customer wants to (or started to) talk in another of our languages. Continue in it, completely, from this reply on.",
+        description: "The customer wants to (or started to) talk in another language we offer (see LANGUAGE). Continue in it, completely, from this reply on.",
         followUp:    false,
-        parameters:  z.object({ language: z.enum(offered).describe(offered.map(l => `${l}=${LANGUAGE_NAMES[l]}`).join(", ")) }),
-        run: (args: { language: Language }) => ToolResult.output({ language: args.language }, { language: args.language }),
+        parameters:  z.object({ language: z.enum(LANGUAGES).describe(LANGUAGES.map(l => `${l}=${LANGUAGE_NAMES[l]}`).join(", ")) }),
+        run: (args: { language: Language }) => {
+            if (!Tenant.offers(ctx.tenant, args.language)) {
+                const offered = ctx.tenant.settings.languages.filter(l => Tenant.offers(ctx.tenant, l)).map(l => LANGUAGE_NAMES[l]);
+                return ToolResult.error(`We don't offer ${LANGUAGE_NAMES[args.language]}. Say kindly that we can help in ${offered.join(" or ")}, and continue in ${LANGUAGE_NAMES[ctx.tenant.defaultLanguage]}.`);
+            }
+            return ToolResult.output({ language: args.language }, { language: args.language });
+        },
     });
 }
 
@@ -366,15 +382,14 @@ function endCall(): Tool {
 
 export function toolsFor(ctx: TurnContext): Tool[] {
     const voice = ctx.inbound.channel === "voice";
-    const links = linkOptions(ctx);
-    const offered = ctx.tenant.settings.languages.filter(l => Tenant.offers(ctx.tenant, l));
+    // The same tools, in the same order, for every tenant of a type on a channel: tool definitions are part of the cached prefix.
     return [
         saveCustomerDetails(ctx),
         bookAppointment(ctx),
-        ...(links.length > 0 ? [sendLink(ctx, links)] : []),
-        ...(ctx.catalog.length > FULL_CATALOG_LIMIT ? [searchCatalog(ctx)] : []),
+        sendLink(ctx, linkOptions(ctx)),
+        searchCatalog(ctx),
         requestCallback(),
-        ...(offered.length > 1 ? [switchLanguage(offered as [Language, ...Language[]])] : []),
+        switchLanguage(ctx),
         flagConversation(),
         ...(voice ? [transferCall(ctx), endCall()] : []),
     ];

@@ -154,6 +154,10 @@ export class OpenAiCompatibleLlm implements LlmProvider {
             stream:         true,
             stream_options: { include_usage: true },
         };
+        // Local OpenAI-compatible servers may refuse fields they don't know, so only OpenAI gets the cache key.
+        if (request.cacheKey !== undefined && this.name === "openai") {
+            params.prompt_cache_key = request.cacheKey;
+        }
         if (request.tools.length > 0) {
             params.tools = request.tools.map((t): ChatCompletionTool => ({
                 type:     "function",

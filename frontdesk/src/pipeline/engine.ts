@@ -314,6 +314,7 @@ export class TurnEngine {
                 let roundText = "";
                 const calls: ToolCall[] = [];
                 const stream = this.#s.llm.stream({
+                    cacheKey:    `turn:${ctx.pack.id}:${ctx.inbound.channel}`,
                     messages,
                     tools:       defs,
                     format:      { kind: "text" },

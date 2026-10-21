@@ -33,15 +33,22 @@ describe("conversation language", () => {
         const h = await harness([plumber({ settings: { languages: ["en", "es"] } })], script);
         const result = await h.turn({ text: "parlez-vous français?" });
         expect(result.session.language).toBe("en");
-        const tools = h.llm.requests.at(-1)?.tools?.find(t => t.name === "switch_language");
-        expect(JSON.stringify(tools?.parameters)).not.toContain("\"fr\"");
         expect(h.llm.requests.at(-1)?.messages[0]).toMatchObject({ text: expect.stringContaining("Languages we offer: English, Spanish") });
     });
 
-    it("drops the language tool for a single-language business", async () => {
-        const h = await harness([plumber({ settings: { languages: ["en"] } })], script);
-        await h.turn({ text: "hello" });
-        expect(h.llm.requests.at(-1)?.tools?.some(t => t.name === "switch_language")).toBe(false);
+    it("gives every tenant of a type the same tools and the same opening prompt, for the prompt cache", async () => {
+        const a = await harness([plumber({ settings: { languages: ["en"] } })], script);
+        const b = await harness([plumber({ id: "other", slug: "other", name: "Other Plumbing Co", agentName: "Rita", settings: { languages: ["en", "es", "vi"], links: [{ label: "Coupons", url: "https://x.example/c", trigger: "coupon" }] } })], script);
+        await a.turn({ text: "hello" });
+        await b.turn({ text: "hello" });
+        const [ra, rb] = [a.llm.requests.at(-1)!, b.llm.requests.at(-1)!];
+        expect(JSON.stringify(ra.tools)).toBe(JSON.stringify(rb.tools));
+        expect(ra.cacheKey).toBe("turn:plumbing:sms");
+        const [sa, sb] = [ra.messages[0]!, rb.messages[0]!].map(m => "text" in m ? m.text : "");
+        const shared = sa!.slice(0, sa!.indexOf("=== YOUR IDENTITY ==="));
+        expect(shared.length).toBeGreaterThan(3000);
+        expect(sb!.startsWith(shared)).toBe(true);
+        expect(shared).not.toContain("Circle City");
     });
 });
 

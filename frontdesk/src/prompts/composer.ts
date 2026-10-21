@@ -43,6 +43,13 @@ function truthy(value: string | undefined): boolean {
         && !["", "0", "false", "no", "none", "off"].includes(value.trim().toLowerCase());
 }
 
+/**
+ * Names of the links a tenant's assistant may send: the pack's per-item links and the tenant's own.
+ */
+export function linkLabels(ctx: TurnContext): string[] {
+    return [...ctx.pack.catalog.sendables.map(s => s.label), ...ctx.tenant.settings.links.map(l => l.label)];
+}
+
 export class PromptComposer {
     readonly #baseChat:  string;
     readonly #baseVoice: string;
@@ -155,27 +162,20 @@ export class PromptComposer {
         };
     }
 
-    #base(ctx: TurnContext, largeCatalog: boolean): string {
-        const { tenant, pack } = ctx;
+    /**
+     * The universal rules for this business type and channel. Nothing tenant-specific goes in here,
+     * so every tenant of the same type shares this prefix (and the provider's prompt cache for it).
+     */
+    #base(ctx: TurnContext): string {
+        const { pack } = ctx;
         const channel = ctx.inbound.channel;
         const voice = channel === "voice";
-        const shared = this.values(tenant, pack, channel);
-        const style = Style.resolve(tenant, pack);
-        const role = shared["agent_role"] ?? "";
         const values: Values = {
-            ...shared,
+            ...this.#packValues(pack, channel),
             ...this.#bookingValues(pack, voice),
-            agent_article:       /^[aeiou]/i.test(role) ? "an" : "a",
-            persona_rule:        Template.render(Style.persona(style, voice), shared),
-            style_rules:         Style.rules(style, voice),
-            privacy_rules:       Style.privacy(style),
-            language_rules:      Style.languages(tenant, voice),
             channel_label:       { sms: "SMS", web: "web chat", voice: "phone" }[channel],
             catalog_heading:     pack.catalog.heading,
-            phone_or_unlisted:   tenant.phone === null
-                ? "(phone not listed)"
-                : PhoneNumber.display(tenant.phone),
-            goal:                Template.render(pack.goal, this.values(tenant, pack, channel)),
+            goal:                pack.goal,
             upsell_clause:       pack.upsellTopics
                 ? ` - ${pack.upsellTopics} -`
                 : "",
@@ -183,14 +183,54 @@ export class PromptComposer {
             phone_detail:        channel === "web"
                 ? ", or phone number"
                 : "",
-            catalog_lookup_rule: largeCatalog
-                ? `-   The ${pack.catalog.heading} list is too long to show here; call \`search_catalog\` before saying we do or don't have something.`
-                : `-   The ${pack.catalog.heading} list below is complete. Scan all of it before saying we don't have something.`,
-            extra_tools:         largeCatalog
-                ? `-   \`search_catalog\`: look up ${pack.catalog.itemNounPlural} by what the customer describes.`
-                : "",
         };
         return Template.render(voice ? this.#baseVoice : this.#baseChat, values);
+    }
+
+    /**
+     * Placeholder values that come from the pack alone (no tenant names, phone or settings).
+     */
+    #packValues(pack: DomainPack, channel: Channel): Values {
+        const voice = channel === "voice";
+        return {
+            business_noun:    pack.businessNoun,
+            agent_role:       voice ? pack.voiceAgentRole : pack.agentRole,
+            staff_noun:       pack.staffNoun,
+            item_noun:        pack.catalog.itemNoun,
+            item_noun_plural: pack.catalog.itemNounPlural,
+            spoken_item_noun: pack.catalog.spokenNoun,
+            visit_noun:       pack.booking.visitNoun,
+            general_subject:  pack.booking.generalSubject,
+            subject_label:    pack.booking.subjectLabel,
+        };
+    }
+
+    /**
+     * Who the assistant is, its languages, tone and privacy rules: everything about the persona that the tenant sets.
+     */
+    #identity(ctx: TurnContext): string {
+        const { tenant, pack } = ctx;
+        const voice = ctx.inbound.channel === "voice";
+        const values = this.values(tenant, pack, ctx.inbound.channel);
+        const style = Style.resolve(tenant, pack);
+        const role = values["agent_role"] ?? "";
+        const intro = voice
+            ? ""
+            : `You are ${values["agent_name"]}, ${/^[aeiou]/i.test(role) ? "an" : "a"} ${role} representing ${tenant.name}, on behalf of the ${pack.businessNoun}.\n`
+                + `If a customer asks your name, you are ${values["agent_name"]}.\n`;
+        return [
+            `=== YOUR IDENTITY ===\n${intro}${Template.render(Style.persona(style, voice), values)}`,
+            `=== LANGUAGE ===\n${Style.languages(tenant, voice)}`,
+            `=== STYLE ===\n${Style.rules(style, voice)}`,
+            Style.privacy(style).trim(),
+        ].filter(Boolean).join("\n\n");
+    }
+
+    #links(ctx: TurnContext): string {
+        const labels = linkLabels(ctx);
+        return labels.length > 0
+            ? `=== LINKS YOU CAN SEND (with \`send_link\`) ===\n${labels.map(l => `-   ${l}`).join("\n")}`
+            : "=== LINKS YOU CAN SEND ===\n(None. Never offer to send a link; give the information directly or point to the phone number.)";
     }
 
     // --- per-tenant and per-turn blocks ----------------------------------------------
@@ -220,6 +260,9 @@ export class PromptComposer {
             head.push(spec.intro);
         }
         head.push(`THERE ARE EXACTLY ${count} ${spec.itemNounPlural.toUpperCase()} LISTED. If asked how many, say ${count} - don't count the list yourself.`);
+        head.push(largeCatalog
+            ? `The list is too long to show here; call \`search_catalog\` before saying we do or don't have something.`
+            : `The list below is complete. Scan all of it before saying we don't have something; \`search_catalog\` gives exact details.`);
         const body = largeCatalog
             ? "(Too many to list - use `search_catalog`.)"
             : Catalog.overview(ctx.catalog, spec);
@@ -377,10 +420,13 @@ export class PromptComposer {
         const voice = ctx.inbound.channel === "voice";
         const largeCatalog = ctx.catalog.length > FULL_CATALOG_LIMIT;
         const values = this.values(tenant, pack, ctx.inbound.channel);
+        // Shared by every tenant of this type first, then this tenant's parts, so the cacheable prefix is as long as possible.
         const stable = [
-            this.#base(ctx, largeCatalog),
+            this.#base(ctx),
+            this.#identity(ctx),
             this.domainSection(tenant, pack, values, voice),
             this.#businessInfo(tenant, pack),
+            this.#links(ctx),
             this.#catalog(ctx, largeCatalog),
         ].join("\n\n");
         const perTurn = [

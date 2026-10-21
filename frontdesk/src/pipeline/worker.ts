@@ -398,6 +398,7 @@ export class Worker {
             classification = { ...rule, sessionId: job.sessionId, model: "rule", classifiedAt: clock() };
         } else {
             const response = await LlmProvider.complete(llm, {
+                cacheKey:    `classify:${pack.id}`,
                 messages:    composer.classify(tenant, pack, transcriptText(transcript, pack)),
                 tools:       [],
                 format:      { kind: "json_schema", name: "classification", schema: classificationSchema(pack) },
