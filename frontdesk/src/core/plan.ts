@@ -11,14 +11,17 @@
  * Our price list. Comes from configuration, not from the tenant.
  * `costShare` is the largest fraction of a tenant's monthly payment their service costs may use;
  * the rest covers payment fees, hosting and profit.
+ * `voicemailReserveShare` of that allowance is held back from the assistant,
+ * so callers can still leave a voicemail after the assistant's share is used up.
  */
 export type PlanPricing = {
-    readonly basePriceUsd:        number;
-    readonly includedWeeklyHours: number;
-    readonly extraWeeklyHourUsd:  number;
-    readonly extraLineUsd:        number;
-    readonly smsNotificationsUsd: number;
-    readonly costShare:           number;
+    readonly basePriceUsd:          number;
+    readonly includedWeeklyHours:   number;
+    readonly extraWeeklyHourUsd:    number;
+    readonly extraLineUsd:          number;
+    readonly smsNotificationsUsd:   number;
+    readonly costShare:             number;
+    readonly voicemailReserveShare: number;
 };
 
 /**
@@ -39,12 +42,13 @@ export type Plan = {
 };
 
 export const DEFAULT_PRICING: PlanPricing = {
-    basePriceUsd:        99,
-    includedWeeklyHours: 40,
-    extraWeeklyHourUsd:  5,
-    extraLineUsd:        25,
-    smsNotificationsUsd: 10,
-    costShare:           0.4,
+    basePriceUsd:          99,
+    includedWeeklyHours:   40,
+    extraWeeklyHourUsd:    5,
+    extraLineUsd:          25,
+    smsNotificationsUsd:   10,
+    costShare:             0.4,
+    voicemailReserveShare: 0.05,
 };
 
 export const Plan = {
@@ -63,6 +67,13 @@ export const Plan = {
      */
     costCapUsd(plan: Plan): number {
         return Plan.monthlyRevenueUsd(plan) * plan.pricing.costShare;
+    },
+
+    /**
+     * The part of the cost cap the assistant itself may use; the rest is the voicemail reserve.
+     */
+    assistantCapUsd(plan: Plan): number {
+        return Plan.costCapUsd(plan) * (1 - plan.pricing.voicemailReserveShare);
     },
 
     weeklyHours(plan: Plan): number {

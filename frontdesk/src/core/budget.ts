@@ -106,15 +106,17 @@ export type BudgetVerdict =
 
 /**
  * Why a new session may not use the assistant.
- * Channels fall back without the model:
- * `off_schedule` and `line_busy` calls forward to the business (still within the cost cap);
- * `tenant_cap` and `blocked` calls are rejected, which costs nothing; texts get a canned reply or none.
+ * Calls then get the fallback `Coverage.fallbackFor` picks (voicemail, forward or reject);
+ * texts get a canned reply, or none for blocked contacts.
+ * `allowance_used` means the assistant's share of the cap is gone but the voicemail reserve is not;
+ * `tenant_cap` means the whole cap is gone.
  */
 export const RefusalReason = {
-    Blocked:     "blocked",
-    TenantCap:   "tenant_cap",
-    OffSchedule: "off_schedule",
-    LineBusy:    "line_busy",
+    Blocked:       "blocked",
+    AllowanceUsed: "allowance_used",
+    TenantCap:     "tenant_cap",
+    OffSchedule:   "off_schedule",
+    LineBusy:      "line_busy",
 } as const;
 export type RefusalReason = ValueOf<typeof RefusalReason>;
 
@@ -140,11 +142,13 @@ export type BudgetInput = {
 };
 
 /**
- * Where a tenant stands against its monthly cap; `warning` starts at 80%.
+ * Where a tenant stands against its monthly cap.
+ * `warning` starts at 80% of the assistant's share; `assistant_used` leaves only the voicemail reserve.
  */
 export type CapStatus =
     | "ok"
     | "warning"
+    | "assistant_used"
     | "exceeded";
 
 const CAP_WARNING_SHARE = 0.8;
@@ -190,11 +194,14 @@ export const SessionMeter = {
 
 export const Budget = {
     capStatus(costThisMonth: number, plan: Plan): CapStatus {
-        const cap = Plan.costCapUsd(plan);
-        if (costThisMonth >= cap) {
+        const assistantCap = Plan.assistantCapUsd(plan);
+        if (costThisMonth >= Plan.costCapUsd(plan)) {
             return "exceeded";
         }
-        return costThisMonth >= cap * CAP_WARNING_SHARE
+        if (costThisMonth >= assistantCap) {
+            return "assistant_used";
+        }
+        return costThisMonth >= assistantCap * CAP_WARNING_SHARE
             ? "warning"
             : "ok";
     },
@@ -206,8 +213,12 @@ export const Budget = {
         if (block !== null && (block.until === null || block.until > input.now)) {
             return { kind: "refuse", reason: "blocked" };
         }
-        if (Budget.capStatus(input.costThisMonth, input.plan) === "exceeded") {
+        const cap = Budget.capStatus(input.costThisMonth, input.plan);
+        if (cap === "exceeded") {
             return { kind: "refuse", reason: "tenant_cap" };
+        }
+        if (cap === "assistant_used") {
+            return { kind: "refuse", reason: "allowance_used" };
         }
         if (
             scheduled(input)
@@ -260,7 +271,7 @@ function closingReason(
 ): ClosingReason | null
 {
     const elapsed = (input.now.getTime() - meter.startedAt.getTime()) / 1000;
-    if (input.costThisMonth + meter.costUsd >= Plan.costCapUsd(input.plan)) {
+    if (input.costThisMonth + meter.costUsd >= Plan.assistantCapUsd(input.plan)) {
         return "tenant_cap";
     }
     if (meter.abusiveTurns > 0) {

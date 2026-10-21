@@ -7,9 +7,9 @@
  */
 
 import type { Appointment } from "./appointment.ts";
-import type { CapStatus, ClosingReason, TurnAssessment } from "./budget.ts";
+import type { CapStatus, ClosingReason, RefusalReason, TurnAssessment } from "./budget.ts";
 import type { CallEndReason } from "./call.ts";
-import type { Address, Channel } from "./channel.ts";
+import type { Address, Channel, PhoneNumber } from "./channel.ts";
 import type { Block, ContactChanges } from "./contact.ts";
 import type { AppointmentId, ContactId, ConversationId, EventId, MessageId, SessionId, TenantId } from "./ids.ts";
 import type { Variant } from "./lang.ts";
@@ -69,6 +69,14 @@ export type EventBody =
 	}
     | { readonly kind: "call_started";
 		readonly from: Address
+	}
+    | { readonly kind: "voicemail_left";
+		readonly recordingUrl: string;
+		readonly durationSeconds: number
+	}
+    | { readonly kind: "call_forwarded";
+		readonly to: PhoneNumber;
+		readonly reason: RefusalReason
 	}
     | { readonly kind: "turn_flagged";
 		readonly assessment: TurnAssessment;

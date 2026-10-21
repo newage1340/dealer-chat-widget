@@ -56,6 +56,14 @@ export {
     type Session,
 } from "./conversation.ts";
 export {
+    CallFallback,
+    CallHandling,
+    Coverage,
+    CoverageMode,
+    DEFAULT_CALL_FALLBACKS,
+    type CallFallbacks,
+} from "./coverage.ts";
+export {
     type DomainEvent,
     type EventBody,
     type EventKind,
@@ -136,3 +144,7 @@ export {
     UsageUnit,
     type UsageRecord,
 } from "./usage.ts";
+export {
+    MAX_VOICEMAIL_SECONDS,
+    type Voicemail,
+} from "./voicemail.ts";

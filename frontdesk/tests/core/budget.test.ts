@@ -70,8 +70,8 @@ describe("Budget.check wind-down", () => {
         expect(turns([], { now: minutes(28) })[0]).toEqual({ kind: "closing", reason: "duration", turnsLeft: 3 });
     });
 
-    it("starts closing when the tenant reaches its monthly cap mid-session", () => {
-        expect(turns([], { costThisMonth: 39.6 })[0]).toMatchObject({ kind: "closing", reason: "tenant_cap" });
+    it("starts closing when the assistant's share of the cap runs out mid-session", () => {
+        expect(turns([], { costThisMonth: 37.62 })[0]).toMatchObject({ kind: "closing", reason: "tenant_cap" });
     });
 
     it("starts closing two minutes before the schedule ends", () => {
@@ -87,6 +87,7 @@ describe("Budget.admit", () => {
         expect(Budget.admit(block, INPUT)).toEqual({ kind: "refuse", reason: "blocked" });
         expect(Budget.admit({ ...block, until: null }, INPUT)).toEqual({ kind: "refuse", reason: "blocked" });
         expect(Budget.admit(block, { ...INPUT, now: minutes(61) })).toEqual({ kind: "admit" });
+        expect(Budget.admit(null, { ...INPUT, costThisMonth: 37.62 })).toEqual({ kind: "refuse", reason: "allowance_used" });
         expect(Budget.admit(null, { ...INPUT, costThisMonth: 39.6 })).toEqual({ kind: "refuse", reason: "tenant_cap" });
     });
 
@@ -103,9 +104,11 @@ describe("Budget.admit", () => {
         expect(Budget.admit(null, { ...INPUT, activeCalls: 1, plan: twoLines })).toEqual({ kind: "admit" });
     });
 
-    it("warns at 80% of the cap", () => {
-        expect(Budget.capStatus(31, PLAN)).toBe("ok");
-        expect(Budget.capStatus(32, PLAN)).toBe("warning");
+    it("warns at 80% of the assistant's share, then keeps a voicemail reserve", () => {
+        // cap $39.60; assistant share 95% = $37.62; warning from 80% of that = $30.10
+        expect(Budget.capStatus(30, PLAN)).toBe("ok");
+        expect(Budget.capStatus(30.2, PLAN)).toBe("warning");
+        expect(Budget.capStatus(37.62, PLAN)).toBe("assistant_used");
         expect(Budget.capStatus(39.6, PLAN)).toBe("exceeded");
     });
 });

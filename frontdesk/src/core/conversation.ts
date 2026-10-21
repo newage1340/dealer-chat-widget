@@ -9,6 +9,7 @@
 
 import type { SessionMeter } from "./budget.ts";
 import type { CallState } from "./call.ts";
+import type { CallHandling } from "./coverage.ts";
 import type { Channel } from "./channel.ts";
 import type { ContactId, ConversationId, MessageId, SessionId, TenantId } from "./ids.ts";
 import type { ValueOf } from "./lang.ts";
@@ -57,6 +58,7 @@ export type Session = SessionBase & (
     | { readonly channel: "voice";
 		readonly externalId: string;
 		readonly vendor: CallVendor;
+		readonly handling: CallHandling;
 		readonly call: CallState
 	}
 );

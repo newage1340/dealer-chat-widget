@@ -4,6 +4,7 @@
 
 import type { AbusePolicy, SessionLimits } from "./budget.ts";
 import type { Address, Channel, PhoneNumber } from "./channel.ts";
+import type { CallFallbacks, CoverageMode } from "./coverage.ts";
 import type { DomainId, TenantId } from "./ids.ts";
 import type { ValueOf } from "./lang.ts";
 import type { Language, LocalizedText } from "./language.ts";
@@ -56,6 +57,7 @@ export type RecordingDisclosure = {
  * `coldFollowupMinutes` null means the tenant does not send cold follow-ups.
  * `notifications` lists, per notice, how staff want to receive it (email by default).
  *   SMS needs the plan's add-on; without it those notices go by email.
+ * `callFallbacks` say what calls get when the assistant cannot take them (our voicemail by default).
  * `textAlwaysOn` keeps web chat and SMS answering outside the call schedule (they cost far less than calls).
  * `limits` and `abuse` have system defaults applied; tenants adjust them from the web app.
  */
@@ -65,6 +67,7 @@ export type TenantSettings = {
     readonly coldFollowupMinutes: number | null;
     readonly links:               readonly TenantLink[];
     readonly textAlwaysOn:        boolean;
+    readonly callFallbacks:       CallFallbacks;
     readonly notifications:       Readonly<Record<StaffNotice, readonly NotifyVia[]>>;
     readonly limits:              SessionLimits;
     readonly abuse:               AbusePolicy;
@@ -80,7 +83,8 @@ export type TenantSettings = {
  * `defaultLanguage` greets callers the system knows nothing about;
  * customers can switch to any supported language by asking, or just by speaking it.
  * `staffLanguage` is the language transcript gists and staff notices are written in.
- * `schedule` is when the assistant answers calls; outside it calls go to the business directly.
+ * `coverage` is how calls reach us (after hours, overflow, or always); it shapes greetings and fallbacks.
+ * `schedule` is when the assistant answers the calls that reach us; outside it they get the off-schedule fallback.
  */
 export type Tenant = {
     readonly id:              TenantId;
@@ -101,6 +105,7 @@ export type Tenant = {
     readonly staffLanguage:   Language;
     readonly profile:         Readonly<Record<string, string>>;
     readonly plan:            Plan;
+    readonly coverage:        CoverageMode;
     readonly schedule:        ServiceSchedule;
     readonly settings:        TenantSettings;
 };

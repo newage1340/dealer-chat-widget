@@ -27,6 +27,10 @@ export type JobBody =
         readonly subject: string;
         readonly text: string
     }
+    | { readonly kind: "transcribe_voicemail";
+        readonly sessionId: SessionId;
+        readonly recordingUrl: string
+    }
     | { readonly kind: "classify_session";
         readonly sessionId: SessionId
     }

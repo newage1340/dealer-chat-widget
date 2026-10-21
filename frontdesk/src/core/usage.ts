@@ -41,6 +41,8 @@ export const Purpose = {
     Link:                "link",
     Classification:      "classification",
     Transcript:          "transcript",
+    Voicemail:           "voicemail",
+    Forwarding:          "forwarding",
     Authoring:           "authoring",
 } as const;
 export type Purpose = ValueOf<typeof Purpose>;
