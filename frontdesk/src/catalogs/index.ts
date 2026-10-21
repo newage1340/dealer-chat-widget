@@ -11,6 +11,7 @@ export {
 } from "./connectors.ts";
 export {
     parseCsv,
+    parsePastedRows,
 } from "./csv.ts";
 export {
     importRows,

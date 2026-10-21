@@ -14,7 +14,7 @@ const CONFIG: Config = {
     pricesFile: new URL("../../prices.json", import.meta.url).pathname,
     twilioAccountSid: "", twilioAuthToken: "", twilioMessagingSid: "", twilioDefaultFrom: "", validateTwilio: false,
     resendApiKey: "", emailFrom: "test@example.com", deepgramApiKey: "", termsUrl: "https://t", privacyUrl: "https://p",
-    defaultSlug: "", dashboardUrl: "", sessionIdleMinutes: 30, runWorker: false,
+    defaultSlug: "", dashboardUrl: "", sessionIdleMinutes: 30, runWorker: false, onboardingCode: "",
 };
 
 function script(request: LlmRequest): ScriptedReply | string {

@@ -12,7 +12,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
-import { DATASETS_DIR, importRows, parseCsv, syncCatalog, type RawRow } from "../../catalogs/index.ts";
+import { DATASETS_DIR, importRows, parsePastedRows, syncCatalog } from "../../catalogs/index.ts";
 import {
     Address,
     ContactId,
@@ -79,27 +79,6 @@ function optionValue(raw: string): string | number | boolean {
         return false;
     }
     return /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw;
-}
-
-/**
- * Rows from pasted text: a JSON list (or an object holding one), otherwise CSV with a header row.
- */
-function pastedRows(text: string): RawRow[] | string {
-    const trimmed = text.trim();
-    if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-        try {
-            const data: unknown = JSON.parse(trimmed);
-            const list = Array.isArray(data)
-                ? data
-                : Object.values(data as Record<string, unknown>).find(Array.isArray);
-            return Array.isArray(list)
-                ? list.filter((r): r is RawRow => typeof r === "object" && r !== null)
-                : "the JSON has no list of rows";
-        } catch {
-            return "that isn't valid JSON";
-        }
-    }
-    return parseCsv(trimmed);
 }
 
 /**
@@ -405,7 +384,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
         if (tenant === null) {
             return c.notFound();
         }
-        const rows = pastedRows(String((await c.req.parseBody())["rows"] ?? ""));
+        const rows = parsePastedRows(String((await c.req.parseBody())["rows"] ?? ""));
         if (typeof rows === "string") {
             return render(c, tenant, "", [rows]);
         }

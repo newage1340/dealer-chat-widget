@@ -11,6 +11,7 @@ import type { Config, LlmConfig } from "./config.ts";
 import { DomainRegistry } from "./domains/index.ts";
 import { adminRoutes } from "./http/admin.ts";
 import type { ChannelDeps } from "./http/context.ts";
+import { onboardingRoutes } from "./http/onboarding.ts";
 import { settingsRoutes } from "./http/settings/routes.ts";
 import { smsRoutes } from "./http/sms.ts";
 import { vapiRoutes } from "./http/vapi.ts";
@@ -136,6 +137,7 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
     });
     http.route("/", adminRoutes(deps));
     http.route("/", settingsRoutes(deps));
+    http.route("/", onboardingRoutes(deps));
     http.route("/", smsRoutes(deps));
     http.route("/", voiceRoutes(deps));
     http.route("/", vapiRoutes(deps));

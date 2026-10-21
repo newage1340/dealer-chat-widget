@@ -7,6 +7,12 @@ import { fileURLToPath } from "node:url";
 export const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 /**
+ * A dated snapshot, not the moving "gpt-4o-mini" alias, so behavior only changes when we upgrade on purpose
+ * (after the evals pass on the new one).
+ */
+export const PINNED_OPENAI_MODEL = "gpt-4o-mini-2024-07-18";
+
+/**
  * `primary` picks which route is tried first: "openai" or "local".
  * The local route is any OpenAI-compatible server (Ollama, llama.cpp, vLLM) at `localBaseUrl`;
  * `localMaxConcurrency` caps in-flight requests so overflow spills to OpenAI.
@@ -52,10 +58,11 @@ export type Config = {
     readonly dashboardUrl:         string;
     readonly sessionIdleMinutes:   number;
     readonly runWorker:            boolean;
+    readonly onboardingCode:       string;
 };
 
 function env(name: string, fallback = ""): string {
-    return (process.env[name] ?? fallback).trim();
+    return (process.env[name] || fallback).trim();
 }
 
 function int(name: string, fallback: number): number {
@@ -104,9 +111,9 @@ export function loadConfig(): Config {
 				: "openai",
             openaiApiKey: env("OPENAI_API_KEY"),
             openaiModels: {
-                small:   env("OPENAI_MODEL_SMALL", "gpt-4o-mini"),
-                fast:    env("OPENAI_MODEL_FAST", "gpt-4o-mini"),
-                capable: env("OPENAI_MODEL_CAPABLE", "gpt-4o-mini"),
+                small:   env("OPENAI_MODEL_SMALL", PINNED_OPENAI_MODEL),
+                fast:    env("OPENAI_MODEL_FAST", PINNED_OPENAI_MODEL),
+                capable: env("OPENAI_MODEL_CAPABLE", PINNED_OPENAI_MODEL),
             },
             localBaseUrl: env("LOCAL_LLM_BASE_URL"),
             localApiKey:  env("LOCAL_LLM_API_KEY"),
@@ -132,5 +139,6 @@ export function loadConfig(): Config {
         dashboardUrl:       env("DASHBOARD_URL").replace(/\/$/, ""),
         sessionIdleMinutes: int("SESSION_IDLE_MINUTES", 30),
         runWorker:          flag("RUN_WORKER", true),
+        onboardingCode:     env("ONBOARDING_CODE"),
     };
 }

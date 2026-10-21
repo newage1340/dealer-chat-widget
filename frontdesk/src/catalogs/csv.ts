@@ -60,3 +60,24 @@ export function parseCsv(text: string): Row[] {
         names.map((name, i) => [name, (cells[i] ?? "").trim()]).filter(([name]) => name !== "")
     ));
 }
+
+/**
+ * Rows from pasted text: a JSON list (or an object holding one), otherwise CSV with a header row.
+ */
+export function parsePastedRows(text: string): Readonly<Record<string, unknown>>[] | string {
+    const trimmed = text.trim();
+    if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+        try {
+            const data: unknown = JSON.parse(trimmed);
+            const list = Array.isArray(data)
+                ? data
+                : Object.values(data as Record<string, unknown>).find(Array.isArray);
+            return Array.isArray(list)
+                ? list.filter((r): r is Readonly<Record<string, unknown>> => typeof r === "object" && r !== null)
+                : "the JSON has no list of rows";
+        } catch {
+            return "that isn't valid JSON";
+        }
+    }
+    return parseCsv(trimmed);
+}
