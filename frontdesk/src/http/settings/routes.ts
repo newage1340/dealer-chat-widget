@@ -28,7 +28,7 @@ import {
 } from "../../core/index.ts";
 import { lintTenant } from "../../tenants/lint.ts";
 import { fromTenant, parseTenant, type TenantDraft } from "../../tenants/schema.ts";
-import { previewPrompt } from "../admin.ts";
+import { previewPrompt, SAMPLE_MESSAGE } from "../admin.ts";
 import type { ChannelDeps } from "../context.ts";
 import { indexPage, loginPage, promptPage, qualityPage, tenantPage, transcriptPage } from "./pages.ts";
 
@@ -214,7 +214,8 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
             return c.notFound();
         }
         const channel = (["sms", "web", "voice"] as const).find(ch => ch === c.req.query("channel")) ?? "sms";
-        return c.html(promptPage(tenant, channel, await previewPrompt(deps, tenant, channel, "Hi, what do you have?")));
+        const message = (c.req.query("message") ?? "").trim().slice(0, 500) || SAMPLE_MESSAGE;
+        return c.html(promptPage(tenant, channel, message, await previewPrompt(deps, tenant, channel, message)));
     });
 
     app.get("/settings/:slug/conversations/:sessionId", auth, async c => {

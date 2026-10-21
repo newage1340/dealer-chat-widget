@@ -23,7 +23,7 @@ import { Catalog } from "./domains/index.ts";
 import { authoringPrompt, generatePack, savePack } from "./domains/authoring.ts";
 import { generatedScenarios } from "./evals/generate.ts";
 import { loadScenarios, runScenario } from "./evals/run.ts";
-import { previewPrompt } from "./http/admin.ts";
+import { previewPrompt, SAMPLE_MESSAGE } from "./http/admin.ts";
 import { buildApp, buildLlm, loadPrices } from "./server.ts";
 import { fromLegacy } from "./tenants/legacy.ts";
 import { parseTenant } from "./tenants/schema.ts";
@@ -243,7 +243,7 @@ switch (command) {
         await seedDemo(args[0] ?? join(ROOT, "tenants", "demo"));
         break;
     case "prompt":
-        await printPrompt(args[0] ?? "", args[1] ?? "sms", args.slice(2).join(" ") || "Hi, what do you have?");
+        await printPrompt(args[0] ?? "", args[1] ?? "sms", args.slice(2).join(" ") || SAMPLE_MESSAGE);
         break;
     case "author-prompt":
         console.info(await authoringPrompt(args[0] ?? "", option(args, "--context")));

@@ -178,7 +178,7 @@ export function adminRoutes(deps: ChannelDeps): Hono {
             return c.notFound();
         }
         const channel = (c.req.query("channel") ?? "sms") as Inbound["channel"];
-        return c.text(await previewPrompt(deps, tenant, channel, c.req.query("message") ?? "Hi, what do you have?"));
+        return c.text(await previewPrompt(deps, tenant, channel, c.req.query("message") || SAMPLE_MESSAGE));
     });
 
     /**
@@ -282,6 +282,12 @@ export function adminRoutes(deps: ChannelDeps): Hono {
 
     return app;
 }
+
+/**
+ * The customer message a prompt preview uses when none is given. Part of the prompt (the matching
+ * catalog details) depends on what the customer said, so a preview always needs one.
+ */
+export const SAMPLE_MESSAGE = "Hi, I have a question.";
 
 /**
  * The prompt a turn would get for a sample customer, as text.

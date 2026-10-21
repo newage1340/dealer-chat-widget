@@ -241,14 +241,17 @@ ${d.evals.length === 0 ? html`<p>No eval runs in this period.</p>` : ""}
 </main>`);
 }
 
-export function promptPage(tenant: Tenant, channel: string, text: string): string {
+export function promptPage(tenant: Tenant, channel: string, message: string, text: string): string {
     return page(`Instructions - ${tenant.name}`, html`
 <header>
 <p><a href="/settings/${tenant.slug}">Back to ${tenant.name}</a></p>
 <h1>What the assistant is told</h1>
-<p>${(["sms", "web", "voice"] as const).map(ch => ch === channel
-        ? html`<strong>${ch}</strong> `
-        : html`<a href="/settings/${tenant.slug}/prompt?channel=${ch}">${ch}</a> `)}</p>
+<p>Everything the assistant sees on one turn, for a sample customer message. The matching details near the end change with what the customer says.</p>
+<form method="get" action="/settings/${tenant.slug}/prompt">
+${field("Customer says", input("message", message))}
+${field("Channel", select("channel", [["sms", "Text"], ["web", "Web chat"], ["voice", "Phone call"]], channel))}
+<p><button type="submit">Show</button></p>
+</form>
 </header>
 <main><pre>${text}</pre></main>`);
 }
