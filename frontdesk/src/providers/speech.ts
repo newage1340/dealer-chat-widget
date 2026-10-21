@@ -67,3 +67,23 @@ export interface TextToSpeech {
         signal?: AbortSignal,
     ): AsyncIterable<SpeechChunk>;
 }
+
+/**
+ * A whole recording transcribed at once (voicemails).
+ * `language` is the detected language, or null when it could not be told.
+ */
+export type BatchTranscript = {
+    readonly text:     string;
+    readonly language: Language | null;
+    readonly usage:    UsageRecord;
+};
+
+export interface BatchTranscriber {
+    readonly name: string;
+    transcribe(
+        audio:    Uint8Array,
+        mimeType: string,
+        context:  SpeechContext,
+        signal?:  AbortSignal,
+    ): Promise<BatchTranscript>;
+}

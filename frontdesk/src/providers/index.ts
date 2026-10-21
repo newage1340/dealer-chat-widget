@@ -25,18 +25,31 @@ export {
     type ToolDefinition,
 } from "./llm.ts";
 export {
+    FakeLlm,
+    FakeTranscriber,
+    LoggingEmail,
+    LoggingMessaging,
+    type ScriptedReply,
+} from "./fakes.ts";
+export {
     type MessagingProvider,
     type OutboundSms,
     type SendReceipt,
 } from "./messaging.ts";
 export {
     type AudioFormat,
+    type BatchTranscriber,
+    type BatchTranscript,
     type Recognition,
     type SpeechChunk,
     type SpeechContext,
     type SpeechToText,
     type TextToSpeech,
 } from "./speech.ts";
+export {
+    LlmRouter,
+    type Route,
+} from "./router.ts";
 export {
     PriceTable,
     type UsageSink,
