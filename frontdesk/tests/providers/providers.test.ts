@@ -120,3 +120,13 @@ describe("Twilio", () => {
         expect(plainSms("¿Mañana a las 3?")).toBe("¿Mañana a las 3?");
     });
 });
+
+describe("price lookup", () => {
+    it("prices a pinned snapshot like its model family, preferring the longest match", async () => {
+        const { PriceTable } = await import("../../src/providers/index.ts");
+        const table = { openai: { "gpt-4o": { input_tokens: 2 }, "gpt-4o-mini": { input_tokens: 1 }, "": { input_tokens: 9 } } };
+        expect(PriceTable.lookup(table, "openai", "gpt-4o-mini-2024-07-18")).toEqual({ input_tokens: 1 });
+        expect(PriceTable.lookup(table, "openai", "gpt-4o-2024-08-06")).toEqual({ input_tokens: 2 });
+        expect(PriceTable.lookup(table, "openai", "o9")).toEqual({ input_tokens: 9 });
+    });
+});

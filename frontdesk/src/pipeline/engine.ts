@@ -48,6 +48,10 @@ import { closeSession } from "./sessions.ts";
 import { stamp, type Services } from "./services.ts";
 
 const MAX_TOOL_ROUNDS = 4;
+/**
+ * Low enough that the same question gets the same kind of answer, high enough to not sound canned.
+ */
+const TURN_TEMPERATURE = 0.2;
 const HISTORY_LIMIT = 40;
 const URL_RE = /\b(?:https?:\/\/|www\.)\S+/gi;
 
@@ -315,7 +319,7 @@ export class TurnEngine {
                     format:      { kind: "text" },
                     tier:        voice ? "fast" : "capable",
                     maxTokens:   voice ? 300 : 600,
-                    temperature: 0.4,
+                    temperature: TURN_TEMPERATURE,
                     timeoutMs:   voice ? 15_000 : 40_000,
                     purpose:     "turn",
                     tenantId:    ctx.tenant.id,

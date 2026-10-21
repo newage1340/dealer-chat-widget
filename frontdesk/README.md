@@ -74,7 +74,7 @@ Outside the code, also: bill up front (Stripe, with the web app), and set vendor
 | `DATABASE_URL` | Postgres connection string (production). Unset: embedded database in `EMBEDDED_DB_DIR` (`memory` for none) |
 | `ADMIN_TOKEN` | Enables `/admin/*` (send as `Authorization: Bearer ...`) |
 | `UPLOAD_TOKEN` (or `INVENTORY_UPLOAD_TOKEN`) | Lets the scraper upload catalogs |
-| `OPENAI_API_KEY`, `OPENAI_MODEL_SMALL` / `_FAST` / `_CAPABLE` | OpenAI route (all default to `gpt-4o-mini`) |
+| `OPENAI_API_KEY`, `OPENAI_MODEL_SMALL` / `_FAST` / `_CAPABLE` | OpenAI route (all default to the pinned `gpt-4o-mini-2024-07-18`; upgrade on purpose after evals pass) |
 | `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL` (or `_SMALL` / `_FAST` / `_CAPABLE`), `LOCAL_LLM_API_KEY` | Any OpenAI-compatible server, e.g. Ollama `http://gpu-box:11434/v1` |
 | `LLM_PRIMARY` | `openai` (default) or `local`: which route is tried first. Classification always tries local first |
 | `LOCAL_LLM_MAX_CONCURRENCY` | In-flight cap for the local route; overflow spills to OpenAI (default 2) |
