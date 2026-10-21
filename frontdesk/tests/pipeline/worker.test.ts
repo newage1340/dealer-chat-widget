@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { Address, EventId, TenantId } from "../../src/core/index.ts";
+import { Address, EventId, TenantId, type SessionMeter, type Transcript } from "../../src/core/index.ts";
 import { closeSession } from "../../src/pipeline/sessions.ts";
+import { ruleClassification } from "../../src/pipeline/worker.ts";
 import type { LlmRequest } from "../../src/providers/index.ts";
 import { plumber } from "../support/fixtures.ts";
 import { harness } from "../support/harness.ts";
@@ -94,5 +95,21 @@ describe("fixed costs", () => {
         const tenant = (await h.store.tenants.byId(TenantId("plumber")))!;
         // One number (used for both SMS and voice), charged once.
         expect(await h.store.spend.monthToDate(tenant, h.clock.now)).toBeCloseTo(1.15);
+    });
+});
+
+describe("rule classification", () => {
+    const session = (meter: Partial<SessionMeter> = {}) => ({
+        language: "en", meter: { turns: 0, unproductiveTurns: 0, abusiveTurns: 0, costUsd: 0, startedAt: new Date(), closing: null, ...meter },
+    }) as unknown as Transcript["session"];
+    const msg = (text: string) => ({ role: "user", text }) as unknown as Transcript["messages"][number];
+
+    it("skips the model for empty, one-word and all-flagged sessions", () => {
+        expect(ruleClassification({ session: session(), messages: [], classification: null })?.outcome).toBe("abandoned");
+        expect(ruleClassification({ session: session({ turns: 1 }), messages: [msg("hi")], classification: null })?.outcome).toBe("abandoned");
+        expect(ruleClassification({ session: session({ turns: 2, unproductiveTurns: 2 }), messages: [msg("lol pizza"), msg("bananas forever")], classification: null })?.outcome).toBe("spam");
+        expect(ruleClassification({ session: session({ turns: 2, unproductiveTurns: 2, abusiveTurns: 1 }), messages: [msg("a"), msg("b c d e f")], classification: null })?.outcome).toBe("abusive");
+        expect(ruleClassification({ session: session({ turns: 1 }), messages: [msg("my water heater is leaking")], classification: null })).toBeNull();
+        expect(ruleClassification({ session: session({ turns: 1 }), messages: [msg("My drain is slow")], classification: null })).toBeNull();
     });
 });

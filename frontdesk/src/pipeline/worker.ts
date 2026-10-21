@@ -392,21 +392,10 @@ export class Worker {
             return;
         }
         const pack = registry.get(tenant.domain);
-        const said = transcript.messages.filter(m => m.role === "user" && m.text.trim());
         let classification: Classification;
-        if (said.length === 0) {
-            classification = {
-                sessionId:      job.sessionId,
-                outcome:        "abandoned",
-                topic:          "other",
-                sentiment:      "neutral",
-                urgency:        "low",
-                language:       transcript.session.language,
-                followupNeeded: false,
-                gist:           "The customer left without saying anything.",
-                model:          "rule",
-                classifiedAt:   clock(),
-            };
+        const rule = ruleClassification(transcript);
+        if (rule !== null) {
+            classification = { ...rule, sessionId: job.sessionId, model: "rule", classifiedAt: clock() };
         } else {
             const response = await LlmProvider.complete(llm, {
                 messages:    composer.classify(tenant, pack, transcriptText(transcript, pack)),
@@ -501,6 +490,30 @@ export class Worker {
         ].join("\n");
         await this.#staff(tenant, "transcript", subject, body, `[${tenant.name}] ${urgent}${kind}: ${who}. ${c.gist}`);
     }
+}
+
+/**
+ * Sessions too empty to be worth a model call, classified by rule:
+ * nobody spoke, a single word or two and they left, or every turn was flagged as off-topic or abusive.
+ */
+export function ruleClassification(transcript: Transcript): Omit<Classification, "sessionId" | "model" | "classifiedAt"> | null {
+    const said = transcript.messages.filter(m => m.role === "user" && m.text.trim());
+    const base = { topic: "other", sentiment: "neutral", urgency: "low", language: transcript.session.language, followupNeeded: false } as const;
+    if (said.length === 0) {
+        return { ...base, outcome: "abandoned", gist: "The customer left without saying anything." };
+    }
+    // "hi", "hello?", "test": one or two words and gone. "My drain is slow" is a real request.
+    if (said.length === 1 && said[0]!.text.trim().split(/\s+/).length <= 2) {
+        return { ...base, outcome: "abandoned", gist: `The customer only said "${said[0]!.text.trim()}" and left.` };
+    }
+    const meter = transcript.session.meter;
+    // unproductiveTurns is the current streak of flagged turns (abusive ones included).
+    if (meter.turns > 0 && meter.unproductiveTurns >= meter.turns) {
+        return meter.abusiveTurns > 0
+            ? { ...base, outcome: "abusive", sentiment: "negative", gist: "Every message was flagged as abusive." }
+            : { ...base, outcome: "spam", gist: "Every message was flagged as off-topic (prank, nonsense or spam)." };
+    }
+    return null;
 }
 
 function describeContact(contact: Contact | null): string {
