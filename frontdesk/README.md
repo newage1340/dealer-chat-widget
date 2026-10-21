@@ -179,6 +179,21 @@ and the same `search_catalog` tool. Adding another source (Square, Shopify, an M
   `crisisSupport` is **off by default**: when a business turns it on, messages that suggest self-harm get 988/911
   guidance and staff get an urgent alert. When it's off, nothing in the prompts mentions crisis handling.
 
+## Quality and evals
+
+- `pnpm eval` runs the hand-written scenarios in `evals/`; `pnpm eval:packs` runs checks generated from every demo
+  business's own data (a catalog price, something not offered, a closed day, a prank, switching languages and back);
+  `pnpm eval:all` runs both three times each and reports anything that doesn't pass every time. Add `--variant <id>`
+  to test a prompt variant. Results are stored, so pass rates per model and variant show at `/settings/quality`.
+- Every live turn is metered: prompt variant, model, latency, time to first words, tools, tool errors, corrective
+  rounds, fallbacks, tokens (cached included) and cost. Booking and lead rates come from the session summaries.
+  See `/settings/quality` or `GET /admin/quality?days=7`.
+- Prompt A/B tests: `src/prompts/variants/variants.json`. Each conversation is assigned a variant by a stable hash
+  in proportion to its weight. A variant can swap base templates, temperature or tier.
+- The model is pinned to a dated snapshot (`gpt-4o-mini-2024-07-18`); upgrade by changing it after `pnpm eval:all` passes.
+- `.github/workflows/frontdesk-checks.yml` typechecks, tests and lints on every change, and runs the evals when the
+  repository has an `OPENAI_API_KEY` secret.
+
 ## Admin API
 
 All need `Authorization: Bearer $ADMIN_TOKEN` except `/health` and catalog upload (upload token).

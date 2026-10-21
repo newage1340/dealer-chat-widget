@@ -7,7 +7,7 @@
  *   node src/main.ts prompt <slug> [channel] [message] print the exact prompt a turn would get
  *   node src/main.ts author-prompt "<business type>"   print the pack-authoring prompt leader
  *   node src/main.ts author-domain "<business type>" [--context "..."] [--overwrite]
- *   node src/main.ts eval [file-or-dir] [--repeat N] [--variant id] [--verbose]
+ *   node src/main.ts eval [file-or-dir] [--packs | --all] [--repeat N] [--variant id] [--verbose]
  *                                                      run scripted conversations against the configured model
  *   node src/main.ts seed-demo [dir]                   load the demo businesses (tenants/demo) and their catalogs
  */
@@ -21,6 +21,7 @@ import { loadConfig, ROOT } from "./config.ts";
 import { syncCatalog } from "./catalogs/index.ts";
 import { Catalog } from "./domains/index.ts";
 import { authoringPrompt, generatePack, savePack } from "./domains/authoring.ts";
+import { generatedScenarios } from "./evals/generate.ts";
 import { loadScenarios, runScenario } from "./evals/run.ts";
 import { previewPrompt } from "./http/admin.ts";
 import { buildApp, buildLlm, loadPrices } from "./server.ts";
@@ -145,7 +146,14 @@ async function authorDomain(
  * Run every scenario `repeat` times, print pass rates, and keep the results in the quality log
  * (so pass rates can be compared per model and prompt variant over time, at /settings/quality).
  */
-async function runEvals(path: string, verbose: boolean, repeat: number, variant: string | undefined): Promise<void> {
+async function runEvals(
+    path: string,
+    verbose: boolean,
+    repeat: number,
+    variant: string | undefined,
+    which: "files" | "packs" | "all"
+): Promise<void>
+{
     const config = loadConfig();
     const app = await buildApp(config);
     const prices = await loadPrices(config.pricesFile);
@@ -159,7 +167,13 @@ async function runEvals(path: string, verbose: boolean, repeat: number, variant:
         console.error(`no prompt variant '${variant}' in src/prompts/variants/variants.json`);
         process.exit(1);
     }
-    const scenarios = await loadScenarios(path);
+    const scenarios = [
+        ...(which !== "packs" ? await loadScenarios(path) : []),
+        ...(which !== "files" ? await generatedScenarios(app.store, app.services.registry) : []),
+    ];
+    if (which !== "files" && !scenarios.some(s => s.name.includes("(generated)"))) {
+        console.warn("no demo tenants in the database to generate pack checks from; run `pnpm seed-demo` first");
+    }
     const runId = new Date().toISOString();
     const model = config.llm.primary === "local" ? config.llm.localModels.capable : config.llm.openaiModels.capable;
     let flawless = 0;
@@ -233,6 +247,7 @@ switch (command) {
             args.includes("--verbose"),
             Math.max(1, Number(option(args, "--repeat")) || 1),
             option(args, "--variant") || undefined,
+            args.includes("--all") ? "all" : args.includes("--packs") ? "packs" : "files",
         );
         break;
     default:

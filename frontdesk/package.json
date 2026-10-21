@@ -17,7 +17,9 @@
     "prompt": "node src/main.ts prompt",
     "eval": "node src/main.ts eval",
     "check-demo": "node src/cli/check-demo.ts",
-    "seed-demo": "node src/main.ts seed-demo"
+    "seed-demo": "node src/main.ts seed-demo",
+    "eval:packs": "node src/main.ts eval --packs",
+    "eval:all": "node src/main.ts eval --all --repeat 3"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.10",

@@ -41,7 +41,7 @@ const Scenario = z.strictObject({
     privacy: z.strictObject({ sensitive: z.boolean().optional(), crisisSupport: z.boolean().optional() }).default({}).describe("tenant privacy settings to override for this scenario"),
     turns:   z.array(z.strictObject({ say: z.string(), expect: Expectation.prefault({}) })).min(1),
 });
-type Scenario = z.output<typeof Scenario>;
+export type Scenario = z.output<typeof Scenario>;
 
 export type EvalResult = {
     readonly name:     string;
