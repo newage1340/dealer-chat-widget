@@ -7,6 +7,7 @@
  *   node src/main.ts prompt <slug> [channel] [message] print the exact prompt a turn would get
  *   node src/main.ts author-prompt "<business type>"   print the pack-authoring prompt leader
  *   node src/main.ts author-domain "<business type>" [--context "..."] [--overwrite]
+ *   node src/main.ts eval [file-or-dir]               run scripted conversations against the configured model
  */
 
 import { readdir, readFile } from "node:fs/promises";
@@ -17,6 +18,7 @@ import { serve } from "@hono/node-server";
 import { loadConfig, ROOT } from "./config.ts";
 import { Catalog } from "./domains/index.ts";
 import { authoringPrompt, generatePack, savePack } from "./domains/authoring.ts";
+import { loadScenarios, runScenario } from "./evals/run.ts";
 import { previewPrompt } from "./http/admin.ts";
 import { buildApp, buildLlm, loadPrices } from "./server.ts";
 import { fromLegacy } from "./tenants/legacy.ts";
@@ -94,6 +96,32 @@ async function authorDomain(businessType: string, context: string, overwrite: bo
     console.info("Review it, then restart the server to load it.");
 }
 
+async function runEvals(path: string): Promise<void> {
+    const config = loadConfig();
+    const app = await buildApp(config);
+    const prices = await loadPrices(config.pricesFile);
+    const llm = buildLlm(config.llm, { record: async () => {} }, prices);
+    if (!llm.hasRoutes()) {
+        console.error("Set OPENAI_API_KEY or LOCAL_LLM_BASE_URL to run evals.");
+        process.exit(1);
+    }
+    const scenarios = await loadScenarios(path);
+    let passed = 0;
+    let cost = 0;
+    for (const scenario of scenarios) {
+        const result = await runScenario(scenario, app.store, llm, prices);
+        cost += result.costUsd;
+        passed += result.passed ? 1 : 0;
+        console.info(`${result.passed ? "PASS" : "FAIL"}  ${result.name}  ($${result.costUsd.toFixed(4)})`);
+        for (const failure of result.failures) {
+            console.info(`      - ${failure}`);
+        }
+    }
+    console.info(`\n${passed}/${scenarios.length} passed, $${cost.toFixed(4)} total`);
+    await app.store.close();
+    process.exit(passed === scenarios.length ? 0 : 1);
+}
+
 function option(args: string[], name: string): string {
     const i = args.indexOf(name);
     return i >= 0 ? args[i + 1] ?? "" : "";
@@ -121,6 +149,9 @@ switch (command) {
         break;
     case "author-domain":
         await authorDomain(args[0] ?? "", option(args, "--context"), args.includes("--overwrite"));
+        break;
+    case "eval":
+        await runEvals(args[0] ?? join(ROOT, "evals"));
         break;
     default:
         console.error(`unknown command '${command}'`);

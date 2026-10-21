@@ -1,0 +1,8 @@
+{
+    "name": "plumbing: follows the customer into Spanish",
+    "tenant": "demo-plumber",
+    "channel": "sms",
+    "turns": [
+        { "say": "Hola, ¿hablan español? Mi inodoro no deja de correr agua.", "expect": { "language": "es", "replyMatches": "[áéíóúñ¿¡]|usted|inodoro" } }
+    ]
+}

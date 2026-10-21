@@ -14,7 +14,8 @@
     "dev": "node --watch src/main.ts",
     "migrate": "node src/main.ts migrate",
     "import-tenants": "node src/main.ts import-tenants",
-    "prompt": "node src/main.ts prompt"
+    "prompt": "node src/main.ts prompt",
+    "eval": "node src/main.ts eval"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.10",

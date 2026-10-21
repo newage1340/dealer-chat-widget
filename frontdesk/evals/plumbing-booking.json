@@ -1,0 +1,10 @@
+{
+    "name": "plumbing: books a drain clearing over SMS",
+    "tenant": "demo-plumber",
+    "channel": "sms",
+    "turns": [
+        { "say": "Hi, my name is Alex. My kitchen sink has been clogged since Sunday.", "expect": { "events": ["contact_updated"], "noEvents": ["appointment_booked"], "replyExcludes": ["http"] } },
+        { "say": "It's a house I own, 12 Elm St in Carmel. Can someone come Monday at 10am?", "expect": { "replyExcludes": ["http"] } },
+        { "say": "Yes please book it, no email thanks", "expect": { "events": ["appointment_booked"], "replyMatches": "monday" } }
+    ]
+}

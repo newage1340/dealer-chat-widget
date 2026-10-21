@@ -1,0 +1,11 @@
+{
+    "name": "automotive: answers from inventory and sends a real link",
+    "tenant": "hoosiers",
+    "channel": "sms",
+    "profile": { "firstName": "Jordan" },
+    "turns": [
+        { "say": "How many cars do you have right now?", "expect": { "replyMatches": "\\d", "replyExcludes": ["http"] } },
+        { "say": "Do you have any SUVs?", "expect": { "replyExcludes": ["http", "www."] } },
+        { "say": "Can you send me the link to the first one?", "expect": { "events": ["link_requested"] } }
+    ]
+}

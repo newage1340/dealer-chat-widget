@@ -1,0 +1,9 @@
+{
+    "name": "plumbing: never books a closed day",
+    "tenant": "demo-plumber",
+    "channel": "sms",
+    "profile": { "firstName": "Alex" },
+    "turns": [
+        { "say": "I need my water heater looked at, it's making noise. 40 Oak Ave, Fishers, house I own. Can you come this Sunday at 11am? Book it.", "expect": { "noEvents": ["appointment_booked"], "replyMatches": "closed|sunday|monday|saturday" } }
+    ]
+}
