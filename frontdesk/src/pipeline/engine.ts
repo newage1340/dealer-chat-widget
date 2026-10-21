@@ -289,9 +289,15 @@ export class TurnEngine {
         let text = "";
         let costUsd = 0;
         const results: ToolResult[] = [];
+        const called = new Set<string>();
+        let correcting = false;
+        let corrected = false;
 
         try {
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+                // A corrective round only calls the tool; its text (if any) is not spoken twice.
+                const quiet = correcting;
+                correcting = false;
                 let roundText = "";
                 const calls: ToolCall[] = [];
                 const stream = this.#s.llm.stream({
@@ -307,6 +313,9 @@ export class TurnEngine {
                     channel:     ctx.inbound.channel,
                 });
                 for await (const part of stream) {
+                    if (part.kind === "text" && quiet) {
+                        continue;
+                    }
                     if (part.kind === "text") {
                         const delta = text === "" && roundText === "" && round > 0
                             ? part.delta.trimStart()
@@ -326,8 +335,25 @@ export class TurnEngine {
                     }
                 }
                 text += roundText;
+                calls.forEach(c => called.add(c.name));
                 if (calls.length === 0) {
-                    break;
+                    const broken = tools.filter(t => t.promise !== undefined && !called.has(t.name) && t.promise.test(text));
+                    if (broken.length === 0 || corrected) {
+                        break;
+                    }
+                    corrected = true;
+                    correcting = true;
+                    const names = broken.map(t => `\`${t.name}\``).join(" and ");
+                    messages = [
+                        ...messages,
+                        { role: "assistant", text: roundText, toolCalls: [] },
+                        {
+                            role: "user",
+                            text: `[system note, not from the customer] Your reply said you would do something that only ${names} can do, but you didn't call it. `
+                                + `Words alone do nothing. Call ${names} now and write nothing else. If you didn't really mean that, call no tool and write nothing.`,
+                        },
+                    ];
+                    continue;
                 }
 
                 const roundResults: { call: ToolCall; result: ToolResult; tool: Tool | undefined }[] = [];

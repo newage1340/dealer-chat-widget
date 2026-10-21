@@ -34,12 +34,15 @@ export type ToolResult = {
 /**
  * `followUp` tools return information the model needs before it can reply (a search, a booking check),
  * so the model is called again with the result. Other tools just record something.
+ * `promise` matches words that claim the tool's action ("connecting you now"); a reply that says them
+ * without calling the tool gets one corrective round, because words alone do nothing.
  */
 export interface Tool<Schema extends z.ZodType = z.ZodType> {
     readonly name:        string;
     readonly description: string;
     readonly parameters:  Schema;
     readonly followUp:    boolean;
+    readonly promise?:    RegExp;
     run(args: z.output<Schema>, ctx: TurnContext): ToolResult | Promise<ToolResult>;
 }
 

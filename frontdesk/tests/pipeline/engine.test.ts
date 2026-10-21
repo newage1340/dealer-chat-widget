@@ -128,3 +128,24 @@ describe("TurnEngine", () => {
         expect((await h.turn({ text: "START" })).outcome.reply).toContain("resubscribed");
     });
 });
+
+describe("broken promises", () => {
+    it("runs one corrective round when a reply claims an action without calling its tool", async () => {
+        const h = await harness([plumber({ settings: { transferTo: "317-555-0777" } })], request => {
+            const corrective = request.messages.some(m => m.role === "user" && m.text.startsWith("[system note"));
+            return corrective
+                ? { text: "", tools: [{ name: "transfer_call", arguments: { reason: "flooding" } }] }
+                : "Shut off the main valve. Okay, connecting you now.";
+        });
+        const result = await h.turn({ text: "my basement is flooding", channel: "voice", externalSessionId: "CA1" }, { vendor: "twilio" });
+        expect(result.outcome.directive).toEqual({ kind: "transfer", to: "+13175550777" });
+        expect(result.outcome.reply).toBe("Shut off the main valve. Okay, connecting you now.");
+        expect(h.llm.requests).toHaveLength(2);
+    });
+
+    it("does not nag when the reply makes no claim", async () => {
+        const h = await harness([plumber()], () => "Sure, what's going on?");
+        await h.turn({ text: "hi" });
+        expect(h.llm.requests).toHaveLength(1);
+    });
+});

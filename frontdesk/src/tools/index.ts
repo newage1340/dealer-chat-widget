@@ -124,6 +124,7 @@ function bookAppointment(ctx: TurnContext): Tool {
 
     return Tool.define({
         name:        "book_appointment",
+        promise:     /\b(you'?re (all set|booked)|(is|are) (now )?confirmed|booked you)\b/i,
         description: `Book (or reschedule) the customer's ${pack.booking.visitNoun}. Call it before confirming anything; the result says whether it worked.`,
         followUp:    true,
         parameters:  z.object({
@@ -220,6 +221,7 @@ function sendLink(ctx: TurnContext, options: readonly LinkOption[]): Tool {
     const spec = ctx.pack.catalog;
     return Tool.define({
         name:        "send_link",
+        promise:     /\b(send|text)(ing)?\b[^.!?]{0,40}\b(link|listing|photos?|pictures?|page|report)\b/i,
         description: "Send the customer a real link. Say you're sending it; never write the URL yourself.",
         followUp:    false,
         parameters:  z.object({
@@ -314,6 +316,7 @@ function flagConversation(): Tool {
 function requestCallback(): Tool {
     return Tool.define({
         name:        "request_callback",
+        promise:     /\b(have someone (call|reach|get back)|someone will (call|reach|get back)|pass (this|that|it) (along|on)|let the team know)\b/i,
         description: "The customer wants someone from the team to get back to them. The team is notified right away.",
         followUp:    false,
         parameters:  z.object({ note: z.string().describe("What they want and anything the team should know, in one or two sentences") }),
@@ -327,6 +330,7 @@ function requestCallback(): Tool {
 function transferCall(ctx: TurnContext): Tool {
     return Tool.define({
         name:        "transfer_call",
+        promise:     /\b(connect(ing)? you|transfer(ring)? you|put(ting)? you through|get(ting)? you (to|over to) (someone|a (live|real) person))\b/i,
         description: "Connect the caller to a live person now (emergency, safety, or they insist on a person).",
         followUp:    false,
         parameters:  z.object({ reason: z.string().describe("Why, in a few words") }),

@@ -46,6 +46,7 @@ export type EvalResult = {
     readonly name:     string;
     readonly passed:   boolean;
     readonly failures: readonly string[];
+    readonly log:      readonly string[];
     readonly costUsd:  number;
 };
 
@@ -67,7 +68,7 @@ export async function loadScenarios(path: string): Promise<Scenario[]> {
 export async function runScenario(scenario: Scenario, source: Store, llm: LlmProvider, prices: PriceTable): Promise<EvalResult> {
     const tenant = await source.tenants.bySlug(scenario.tenant);
     if (tenant === null) {
-        return { name: scenario.name, passed: false, failures: [`no tenant '${scenario.tenant}' in the configured database`], costUsd: 0 };
+        return { name: scenario.name, passed: false, failures: [`no tenant '${scenario.tenant}' in the configured database`], log: [], costUsd: 0 };
     }
     const store = await openStore("", null, prices);
     await store.tenants.save(tenant);
@@ -93,6 +94,7 @@ export async function runScenario(scenario: Scenario, source: Store, llm: LlmPro
     });
 
     const failures: string[] = [];
+    const log: string[] = [];
     for (const [i, turn] of scenario.turns.entries()) {
         const inbound: Inbound = {
             channel:           scenario.channel,
@@ -110,6 +112,11 @@ export async function runScenario(scenario: Scenario, source: Store, llm: LlmPro
         const reply = result.outcome.reply;
         const kinds = new Set<string>(result.outcome.events.map(e => e.kind));
         const at = `turn ${i + 1} ("${turn.say.slice(0, 40)}")`;
+        log.push(
+            `customer: ${turn.say}`,
+            `agent:    ${reply}`,
+            `          events: ${[...kinds].join(", ") || "none"}; directive: ${result.outcome.directive.kind}; language: ${result.session.language}`,
+        );
         const e = turn.expect;
         for (const kind of e.events) {
             if (!kinds.has(kind as EventKind) && !(kind === "link_requested" && /https?:\/\//.test(reply))) {
@@ -143,5 +150,5 @@ export async function runScenario(scenario: Scenario, source: Store, llm: LlmPro
     }
     const costUsd = (await store.spend.summary(null, new Date(0))).reduce((sum, r) => sum + r.costUsd, 0);
     await store.close();
-    return { name: scenario.name, passed: failures.length === 0, failures, costUsd };
+    return { name: scenario.name, passed: failures.length === 0, failures, log, costUsd };
 }

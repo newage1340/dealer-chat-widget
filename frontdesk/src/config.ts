@@ -12,12 +12,20 @@ export const ROOT = fileURLToPath(new URL("../", import.meta.url));
  * `localMaxConcurrency` caps in-flight requests so overflow spills to OpenAI.
  */
 export type LlmConfig = {
-    readonly primary:             "openai" | "local";
-    readonly openaiApiKey:        string;
-    readonly openaiModels:        { readonly small: string; readonly fast: string; readonly capable: string };
-    readonly localBaseUrl:        string;
-    readonly localApiKey:         string;
-    readonly localModels:         { readonly small: string; readonly fast: string; readonly capable: string };
+    readonly primary: "openai" | "local";
+    readonly openaiApiKey: string;
+    readonly openaiModels: {
+        readonly small: string;
+        readonly fast: string;
+        readonly capable: string
+    };
+    readonly localBaseUrl: string;
+    readonly localApiKey: string;
+    readonly localModels: {
+        readonly small: string;
+        readonly fast: string;
+        readonly capable: string
+    };
     readonly localMaxConcurrency: number;
 };
 
@@ -80,27 +88,29 @@ function loadEnvFile(): void {
 
 export function loadConfig(): Config {
     loadEnvFile();
-    const localModel = env("LOCAL_LLM_MODEL");
+    const localModel	  = env("LOCAL_LLM_MODEL");
     const twilioAuthToken = env("TWILIO_AUTH_TOKEN");
-    const embedded = env("EMBEDDED_DB_DIR", `${ROOT}data/pglite`);
+    const embedded		  = env("EMBEDDED_DB_DIR", `${ROOT}data/pglite`);
     return {
-        port:               int("PORT", 5001),
-        publicBaseUrl:      env("PUBLIC_BASE_URL").replace(/\/$/, ""),
-        databaseUrl:        env("DATABASE_URL"),
-        embeddedDbDir:      embedded === "memory" ? null : embedded,
-        adminToken:         env("ADMIN_TOKEN"),
-        uploadToken:        env("UPLOAD_TOKEN", env("INVENTORY_UPLOAD_TOKEN")),
+        port:           int("PORT", 5001),
+        publicBaseUrl:  env("PUBLIC_BASE_URL").replace(/\/$/, ""),
+        databaseUrl:    env("DATABASE_URL"),
+        embeddedDbDir:  embedded === "memory" ? null : embedded,
+        adminToken:     env("ADMIN_TOKEN"),
+        uploadToken:    env("UPLOAD_TOKEN", env("INVENTORY_UPLOAD_TOKEN")),
         llm: {
-            primary:             env("LLM_PRIMARY", "openai").toLowerCase() === "local" ? "local" : "openai",
-            openaiApiKey:        env("OPENAI_API_KEY"),
-            openaiModels:        {
+            primary: env("LLM_PRIMARY", "openai").toLowerCase() === "local"
+				? "local"
+				: "openai",
+            openaiApiKey: env("OPENAI_API_KEY"),
+            openaiModels: {
                 small:   env("OPENAI_MODEL_SMALL", "gpt-4o-mini"),
                 fast:    env("OPENAI_MODEL_FAST", "gpt-4o-mini"),
                 capable: env("OPENAI_MODEL_CAPABLE", "gpt-4o-mini"),
             },
-            localBaseUrl:        env("LOCAL_LLM_BASE_URL"),
-            localApiKey:         env("LOCAL_LLM_API_KEY"),
-            localModels:         {
+            localBaseUrl: env("LOCAL_LLM_BASE_URL"),
+            localApiKey:  env("LOCAL_LLM_API_KEY"),
+            localModels: {
                 small:   env("LOCAL_LLM_MODEL_SMALL", localModel),
                 fast:    env("LOCAL_LLM_MODEL_FAST", localModel),
                 capable: env("LOCAL_LLM_MODEL_CAPABLE", localModel),

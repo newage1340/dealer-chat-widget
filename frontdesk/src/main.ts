@@ -62,13 +62,20 @@ async function importTenants(dir: string): Promise<void> {
         const spec = app.services.registry.get(tenant.domain).catalog;
         await app.store.tenants.save(tenant);
         const now = new Date();
-        await app.store.tenants.replaceCatalog(tenant.id, catalog.map((row, i) => Catalog.normalize(row, spec, tenant.id, i, now)));
+        await app.store.tenants.replaceCatalog(
+			tenant.id,
+			catalog.map((row, i) => Catalog.normalize(row, spec, tenant.id, i, now))
+		);
         console.info(`imported ${tenant.slug} (${tenant.domain}, ${catalog.length} catalog items)`);
     }
     await app.store.close();
 }
 
-async function printPrompt(slug: string, channel: string, message: string): Promise<void> {
+async function printPrompt(
+    slug: string,
+    channel: string,
+    message: string
+): Promise<void> {
     const config = loadConfig();
     const app = await buildApp(config);
     const tenant = await app.store.tenants.bySlug(slug);
@@ -76,12 +83,23 @@ async function printPrompt(slug: string, channel: string, message: string): Prom
         console.error(`no tenant '${slug}'`);
         process.exit(1);
     }
-    const ch = channel === "voice" || channel === "web" ? channel : "sms";
-    console.info(await previewPrompt({ config, services: app.services, engine: app.engine }, tenant, ch, message));
+    const ch = channel === "voice" || channel === "web"
+		? channel
+		: "sms";
+    console.info(await previewPrompt({
+		config,
+		services: app.services,
+		engine: app.engine
+	}, tenant, ch, message
+	));
     await app.store.close();
 }
 
-async function authorDomain(businessType: string, context: string, overwrite: boolean): Promise<void> {
+async function authorDomain(
+    businessType: string,
+    context: string,
+    overwrite: boolean
+): Promise<void> {
     const config = loadConfig();
     const prices = await loadPrices(config.pricesFile);
     const llm = buildLlm(config.llm, { record: async () => {} }, prices);
@@ -96,11 +114,12 @@ async function authorDomain(businessType: string, context: string, overwrite: bo
     console.info("Review it, then restart the server to load it.");
 }
 
-async function runEvals(path: string): Promise<void> {
+async function runEvals(path: string, verbose: boolean): Promise<void> {
     const config = loadConfig();
     const app = await buildApp(config);
     const prices = await loadPrices(config.pricesFile);
-    const llm = buildLlm(config.llm, { record: async () => {} }, prices);
+    let spent = 0;
+    const llm = buildLlm(config.llm, { record: async u => { spent += u.costUsd ?? 0; } }, prices);
     if (!llm.hasRoutes()) {
         console.error("Set OPENAI_API_KEY or LOCAL_LLM_BASE_URL to run evals.");
         process.exit(1);
@@ -109,12 +128,17 @@ async function runEvals(path: string): Promise<void> {
     let passed = 0;
     let cost = 0;
     for (const scenario of scenarios) {
+        const before = spent;
         const result = await runScenario(scenario, app.store, llm, prices);
-        cost += result.costUsd;
+        const scenarioCost = spent - before + result.costUsd;
+        cost += scenarioCost;
         passed += result.passed ? 1 : 0;
-        console.info(`${result.passed ? "PASS" : "FAIL"}  ${result.name}  ($${result.costUsd.toFixed(4)})`);
+        console.info(`${result.passed ? "PASS" : "FAIL"}  ${result.name}  ($${scenarioCost.toFixed(4)})`);
         for (const failure of result.failures) {
             console.info(`      - ${failure}`);
+        }
+        if (!result.passed || verbose) {
+            console.info(result.log.map(l => `        ${l}`).join("\n"));
         }
     }
     console.info(`\n${passed}/${scenarios.length} passed, $${cost.toFixed(4)} total`);
@@ -151,7 +175,7 @@ switch (command) {
         await authorDomain(args[0] ?? "", option(args, "--context"), args.includes("--overwrite"));
         break;
     case "eval":
-        await runEvals(args[0] ?? join(ROOT, "evals"));
+        await runEvals(args.find(a => !a.startsWith("--")) ?? join(ROOT, "evals"), args.includes("--verbose"));
         break;
     default:
         console.error(`unknown command '${command}'`);
