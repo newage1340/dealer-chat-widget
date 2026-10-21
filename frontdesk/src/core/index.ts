@@ -13,10 +13,12 @@ export {
     ClosingReason,
     DEFAULT_ABUSE_POLICY,
     DEFAULT_SESSION_LIMITS,
+    RefusalReason,
     SessionMeter,
     TurnAssessment,
     type AbusePolicy,
     type Admission,
+    type BudgetInput,
     type BudgetVerdict,
     type CapStatus,
     type Closing,
@@ -97,14 +99,26 @@ export {
     LocalizedText,
 } from "./language.ts";
 export {
+    DEFAULT_PRICING,
+    Plan,
+    type PlanPricing,
+    type Subscription,
+} from "./plan.ts";
+export {
     Result,
 } from "./result.ts";
+export {
+    LocalClock,
+    ServiceSchedule,
+    type ScheduleProblem,
+    type Weekday,
+    type WeeklyWindow,
+} from "./schedule.ts";
 export {
     NotifyVia,
     StaffNotice,
     Tenant,
     type Branding,
-    type Plan,
     type RecordingDisclosure,
     type TenantLink,
     type TenantSettings,

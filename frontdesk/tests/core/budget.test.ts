@@ -4,30 +4,48 @@ import {
     Abuse,
     Budget,
     DEFAULT_ABUSE_POLICY,
+    DEFAULT_PRICING,
     DEFAULT_SESSION_LIMITS,
     SessionMeter,
+    type BudgetInput,
     type BudgetVerdict,
     type Contact,
     type Plan,
     type TurnAssessment,
 } from "../../src/core/index.ts";
 
-const PLAN: Plan = { priceUsd: 99, monthlyCostCapUsd: 40, smsNotifications: false };
+// Basic plan: $99, cap = 40% = $39.60.
+const PLAN: Plan = {
+    pricing:      DEFAULT_PRICING,
+    subscription: { extraWeeklyHours: 0, extraLines: 0, smsNotifications: false, topUpsUsd: 0 },
+};
+// Wednesday 2026-10-21, 11:00 in Indianapolis; open 9:00-17:00 that day.
 const T0 = new Date("2026-10-21T15:00:00Z");
 const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);
+const INPUT: BudgetInput = {
+    channel:       "voice",
+    plan:          PLAN,
+    schedule:      { windows: [{ day: 3, startMinute: 9 * 60, endMinute: 17 * 60 }] },
+    timeZone:      "America/Indiana/Indianapolis",
+    textAlwaysOn:  true,
+    costThisMonth: 0,
+    activeCalls:   0,
+    now:           T0,
+};
 
 /**
  * Run turns through check + record the way the turn engine will, returning each verdict.
  */
-function turns(assessments: readonly TurnAssessment[], now = T0, costThisMonth = 0): BudgetVerdict[] {
+function turns(assessments: readonly TurnAssessment[], input: Partial<BudgetInput> = {}): BudgetVerdict[] {
+    const at = { ...INPUT, ...input };
     let meter = SessionMeter.start(T0);
     const verdicts: BudgetVerdict[] = [];
     for (const assessment of assessments) {
-        const verdict = Budget.check(meter, DEFAULT_SESSION_LIMITS, costThisMonth, PLAN, now);
+        const verdict = Budget.check(meter, DEFAULT_SESSION_LIMITS, at);
         verdicts.push(verdict);
         meter = SessionMeter.record(meter, verdict, assessment, 0.001);
     }
-    verdicts.push(Budget.check(meter, DEFAULT_SESSION_LIMITS, costThisMonth, PLAN, now));
+    verdicts.push(Budget.check(meter, DEFAULT_SESSION_LIMITS, at));
     return verdicts;
 }
 
@@ -48,28 +66,47 @@ describe("Budget.check wind-down", () => {
     });
 
     it("starts closing two minutes before the session limit", () => {
-        expect(turns([], minutes(27))[0]).toEqual({ kind: "ok" });
-        expect(turns([], minutes(28))[0]).toEqual({ kind: "closing", reason: "duration", turnsLeft: 3 });
+        expect(turns([], { now: minutes(27) })[0]).toEqual({ kind: "ok" });
+        expect(turns([], { now: minutes(28) })[0]).toEqual({ kind: "closing", reason: "duration", turnsLeft: 3 });
     });
 
     it("starts closing when the tenant reaches its monthly cap mid-session", () => {
-        expect(turns([], T0, 40)[0]).toMatchObject({ kind: "closing", reason: "tenant_cap" });
+        expect(turns([], { costThisMonth: 39.6 })[0]).toMatchObject({ kind: "closing", reason: "tenant_cap" });
+    });
+
+    it("starts closing two minutes before the schedule ends", () => {
+        const late = new Date("2026-10-21T20:59:00Z");  // 16:59 local, call started a minute ago
+        const meter = SessionMeter.start(new Date(late.getTime() - 60_000));
+        expect(Budget.check(meter, DEFAULT_SESSION_LIMITS, { ...INPUT, now: late })).toMatchObject({ kind: "closing", reason: "schedule_end" });
     });
 });
 
 describe("Budget.admit", () => {
     it("refuses blocked contacts and tenants over their cap", () => {
         const block = { until: minutes(60), source: "auto" as const, reason: "", createdAt: T0 };
-        expect(Budget.admit(block, 0, PLAN, T0)).toEqual({ kind: "refuse", reason: "blocked" });
-        expect(Budget.admit({ ...block, until: null }, 0, PLAN, minutes(10_000))).toEqual({ kind: "refuse", reason: "blocked" });
-        expect(Budget.admit(block, 0, PLAN, minutes(61))).toEqual({ kind: "admit" });
-        expect(Budget.admit(null, 40, PLAN, T0)).toEqual({ kind: "refuse", reason: "tenant_cap" });
+        expect(Budget.admit(block, INPUT)).toEqual({ kind: "refuse", reason: "blocked" });
+        expect(Budget.admit({ ...block, until: null }, INPUT)).toEqual({ kind: "refuse", reason: "blocked" });
+        expect(Budget.admit(block, { ...INPUT, now: minutes(61) })).toEqual({ kind: "admit" });
+        expect(Budget.admit(null, { ...INPUT, costThisMonth: 39.6 })).toEqual({ kind: "refuse", reason: "tenant_cap" });
+    });
+
+    it("refuses calls outside the schedule but keeps text open when textAlwaysOn", () => {
+        const night = { ...INPUT, now: new Date("2026-10-22T03:00:00Z") };
+        expect(Budget.admit(null, night)).toEqual({ kind: "refuse", reason: "off_schedule" });
+        expect(Budget.admit(null, { ...night, channel: "sms" })).toEqual({ kind: "admit" });
+        expect(Budget.admit(null, { ...night, channel: "sms", textAlwaysOn: false })).toEqual({ kind: "refuse", reason: "off_schedule" });
+    });
+
+    it("allows one call at a time unless extra lines are bought", () => {
+        expect(Budget.admit(null, { ...INPUT, activeCalls: 1 })).toEqual({ kind: "refuse", reason: "line_busy" });
+        const twoLines = { ...PLAN, subscription: { ...PLAN.subscription, extraLines: 1 } };
+        expect(Budget.admit(null, { ...INPUT, activeCalls: 1, plan: twoLines })).toEqual({ kind: "admit" });
     });
 
     it("warns at 80% of the cap", () => {
         expect(Budget.capStatus(31, PLAN)).toBe("ok");
         expect(Budget.capStatus(32, PLAN)).toBe("warning");
-        expect(Budget.capStatus(40, PLAN)).toBe("exceeded");
+        expect(Budget.capStatus(39.6, PLAN)).toBe("exceeded");
     });
 });
 

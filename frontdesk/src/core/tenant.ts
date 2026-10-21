@@ -7,6 +7,8 @@ import type { Address, Channel, PhoneNumber } from "./channel.ts";
 import type { DomainId, TenantId } from "./ids.ts";
 import type { ValueOf } from "./lang.ts";
 import type { Language, LocalizedText } from "./language.ts";
+import type { Plan } from "./plan.ts";
+import type { ServiceSchedule } from "./schedule.ts";
 
 export type Branding = {
     readonly color:   string;
@@ -41,19 +43,6 @@ export const NotifyVia = {
 export type NotifyVia = ValueOf<typeof NotifyVia>;
 
 /**
- * What the tenant pays for, and what we let them spend.
- * `monthlyCostCapUsd` caps our service costs (models, telephony, texts) for the tenant each month,
- * keeping the plan profitable; once reached, the assistant stops answering until the month rolls over.
- * `smsNotifications` is the paid add-on for staff texts. Settings may ask for SMS without it;
- * the plan wins and those notices go by email.
- */
-export type Plan = {
-    readonly priceUsd:          number;
-    readonly monthlyCostCapUsd: number;
-    readonly smsNotifications:  boolean;
-};
-
-/**
  * A spoken or written notice that conversations are recorded and transcribed,
  * for places that require consent from everyone on a call. Off unless the tenant turns it on.
  */
@@ -66,6 +55,8 @@ export type RecordingDisclosure = {
  * Options every tenant can set, regardless of domain.
  * `coldFollowupMinutes` null means the tenant does not send cold follow-ups.
  * `notifications` lists, per notice, how staff want to receive it (email by default).
+ *   SMS needs the plan's add-on; without it those notices go by email.
+ * `textAlwaysOn` keeps web chat and SMS answering outside the call schedule (they cost far less than calls).
  * `limits` and `abuse` have system defaults applied; tenants adjust them from the web app.
  */
 export type TenantSettings = {
@@ -73,6 +64,7 @@ export type TenantSettings = {
     readonly transferTo:          PhoneNumber | null;
     readonly coldFollowupMinutes: number | null;
     readonly links:               readonly TenantLink[];
+    readonly textAlwaysOn:        boolean;
     readonly notifications:       Readonly<Record<StaffNotice, readonly NotifyVia[]>>;
     readonly limits:              SessionLimits;
     readonly abuse:               AbusePolicy;
@@ -88,6 +80,7 @@ export type TenantSettings = {
  * `defaultLanguage` greets callers the system knows nothing about;
  * customers can switch to any supported language by asking, or just by speaking it.
  * `staffLanguage` is the language transcript gists and staff notices are written in.
+ * `schedule` is when the assistant answers calls; outside it calls go to the business directly.
  */
 export type Tenant = {
     readonly id:              TenantId;
@@ -108,6 +101,7 @@ export type Tenant = {
     readonly staffLanguage:   Language;
     readonly profile:         Readonly<Record<string, string>>;
     readonly plan:            Plan;
+    readonly schedule:        ServiceSchedule;
     readonly settings:        TenantSettings;
 };
 
@@ -124,7 +118,7 @@ export const Tenant = {
      */
     notifyVia(tenant: Tenant, notice: StaffNotice): readonly NotifyVia[] {
         const allowed = tenant.settings.notifications[notice].filter(
-            via => via !== "sms" || tenant.plan.smsNotifications
+            via => via !== "sms" || tenant.plan.subscription.smsNotifications
         );
         return allowed.length > 0
             ? allowed

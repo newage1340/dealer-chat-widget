@@ -1,0 +1,75 @@
+/**
+ * What a tenant pays for, and the most we will spend serving them.
+ *
+ * The rule that keeps the business out of the red: a tenant's service costs
+ * (models, speech, telephony, texts) may never exceed a fixed share of what they paid this month.
+ * Everything they buy (extra hours, extra lines, top-ups) raises the allowance in proportion,
+ * so more service is always paid for before it is delivered.
+ */
+
+/**
+ * Our price list. Comes from configuration, not from the tenant.
+ * `costShare` is the largest fraction of a tenant's monthly payment their service costs may use;
+ * the rest covers payment fees, hosting and profit.
+ */
+export type PlanPricing = {
+    readonly basePriceUsd:        number;
+    readonly includedWeeklyHours: number;
+    readonly extraWeeklyHourUsd:  number;
+    readonly extraLineUsd:        number;
+    readonly smsNotificationsUsd: number;
+    readonly costShare:           number;
+};
+
+/**
+ * What one tenant has bought for the current billing month.
+ * `extraLines` allow simultaneous AI calls beyond the first.
+ * `topUpsUsd` are one-off purchases this month that extend the allowance.
+ */
+export type Subscription = {
+    readonly extraWeeklyHours: number;
+    readonly extraLines:       number;
+    readonly smsNotifications: boolean;
+    readonly topUpsUsd:        number;
+};
+
+export type Plan = {
+    readonly pricing:      PlanPricing;
+    readonly subscription: Subscription;
+};
+
+export const DEFAULT_PRICING: PlanPricing = {
+    basePriceUsd:        99,
+    includedWeeklyHours: 40,
+    extraWeeklyHourUsd:  5,
+    extraLineUsd:        25,
+    smsNotificationsUsd: 10,
+    costShare:           0.4,
+};
+
+export const Plan = {
+    monthlyRevenueUsd(plan: Plan): number {
+        const p = plan.pricing;
+        const s = plan.subscription;
+        return p.basePriceUsd
+            + s.extraWeeklyHours * p.extraWeeklyHourUsd
+            + s.extraLines * p.extraLineUsd
+            + (s.smsNotifications ? p.smsNotificationsUsd : 0)
+            + s.topUpsUsd;
+    },
+
+    /**
+     * The most this tenant's service may cost us this month.
+     */
+    costCapUsd(plan: Plan): number {
+        return Plan.monthlyRevenueUsd(plan) * plan.pricing.costShare;
+    },
+
+    weeklyHours(plan: Plan): number {
+        return plan.pricing.includedWeeklyHours + plan.subscription.extraWeeklyHours;
+    },
+
+    maxConcurrentCalls(plan: Plan): number {
+        return 1 + plan.subscription.extraLines;
+    },
+} as const;

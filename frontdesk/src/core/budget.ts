@@ -4,12 +4,15 @@
  * Sessions are never cut off mid-sentence.
  * When a limit is reached the session enters a wind-down: the model gets a few closing turns
  * to wrap up politely (business hours, thanks for calling), and only then does the session end.
- * The tenant's monthly cap is the one hard limit, because it protects the margin on the plan.
+ * The tenant's monthly cost cap (plan.ts) is the one hard limit, because it keeps every tenant profitable.
+ * Calls also only start inside the tenant's schedule and up to the lines they pay for.
  */
 
+import type { Channel } from "./channel.ts";
 import type { Block, Contact, ContactChanges } from "./contact.ts";
 import type { ValueOf } from "./lang.ts";
-import type { Plan } from "./tenant.ts";
+import { Plan } from "./plan.ts";
+import { LocalClock, ServiceSchedule } from "./schedule.ts";
 
 /**
  * `maxSessionSeconds` is how long a call or chat may run; tenants can change it.
@@ -60,6 +63,7 @@ export type TurnAssessment = ValueOf<typeof TurnAssessment>;
 
 export const ClosingReason = {
     Duration:     "duration",
+    ScheduleEnd:  "schedule_end",
     Unproductive: "unproductive",
     Abusive:      "abusive",
     TenantCap:    "tenant_cap",
@@ -101,14 +105,39 @@ export type BudgetVerdict =
 	};
 
 /**
- * Whether a new session may use the model at all.
- * Refused sessions fall back without it: calls forward to the business, texts get a canned reply.
+ * Why a new session may not use the assistant.
+ * Channels fall back without the model:
+ * `off_schedule` and `line_busy` calls forward to the business (still within the cost cap);
+ * `tenant_cap` and `blocked` calls are rejected, which costs nothing; texts get a canned reply or none.
  */
+export const RefusalReason = {
+    Blocked:     "blocked",
+    TenantCap:   "tenant_cap",
+    OffSchedule: "off_schedule",
+    LineBusy:    "line_busy",
+} as const;
+export type RefusalReason = ValueOf<typeof RefusalReason>;
+
 export type Admission =
     | { readonly kind: "admit" }
     | { readonly kind: "refuse";
-		readonly reason: "blocked" | "tenant_cap"
+		readonly reason: RefusalReason
 	};
+
+/**
+ * What admission and per-turn checks need to know about the tenant right now.
+ * `activeCalls` counts the tenant's calls already in progress, not including this one.
+ */
+export type BudgetInput = {
+    readonly channel:       Channel;
+    readonly plan:          Plan;
+    readonly schedule:      ServiceSchedule;
+    readonly timeZone:      string;
+    readonly textAlwaysOn:  boolean;
+    readonly costThisMonth: number;
+    readonly activeCalls:   number;
+    readonly now:           Date;
+};
 
 /**
  * Where a tenant stands against its monthly cap; `warning` starts at 80%.
@@ -161,27 +190,38 @@ export const SessionMeter = {
 
 export const Budget = {
     capStatus(costThisMonth: number, plan: Plan): CapStatus {
-        if (costThisMonth >= plan.monthlyCostCapUsd) {
+        const cap = Plan.costCapUsd(plan);
+        if (costThisMonth >= cap) {
             return "exceeded";
         }
-        return costThisMonth >= plan.monthlyCostCapUsd * CAP_WARNING_SHARE
+        return costThisMonth >= cap * CAP_WARNING_SHARE
             ? "warning"
             : "ok";
     },
 
-    admit(
-        block: Block | null,
-        costThisMonth: number,
-        plan: Plan,
-        now: Date
-    ): Admission
-    {
-        if (block !== null && (block.until === null || block.until > now)) {
+    /**
+     * Whether a new session may use the assistant at all.
+     */
+    admit(block: Block | null, input: BudgetInput): Admission {
+        if (block !== null && (block.until === null || block.until > input.now)) {
             return { kind: "refuse", reason: "blocked" };
         }
-        return Budget.capStatus(costThisMonth, plan) === "exceeded"
-            ? { kind: "refuse", reason: "tenant_cap" }
-            : { kind: "admit" };
+        if (Budget.capStatus(input.costThisMonth, input.plan) === "exceeded") {
+            return { kind: "refuse", reason: "tenant_cap" };
+        }
+        if (
+            scheduled(input)
+            && !ServiceSchedule.isOpen(input.schedule, LocalClock.of(input.now, input.timeZone))
+        ) {
+            return { kind: "refuse", reason: "off_schedule" };
+        }
+        if (
+            input.channel === "voice"
+            && input.activeCalls >= Plan.maxConcurrentCalls(input.plan)
+        ) {
+            return { kind: "refuse", reason: "line_busy" };
+        }
+        return { kind: "admit" };
     },
 
     /**
@@ -190,9 +230,7 @@ export const Budget = {
     check(
         meter: SessionMeter,
         limits: SessionLimits,
-        costThisMonth: number,
-        plan: Plan,
-        now: Date
+        input: BudgetInput
     ): BudgetVerdict
     {
         if (meter.closing !== null) {
@@ -200,23 +238,29 @@ export const Budget = {
                 ? { kind: "closing", ...meter.closing }
                 : { kind: "end", reason: meter.closing.reason };
         }
-        const reason = closingReason(meter, limits, costThisMonth, plan, now);
+        const reason = closingReason(meter, limits, input);
         return reason === null
             ? { kind: "ok" }
             : { kind: "closing", reason, turnsLeft: limits.closingTurns };
     },
 } as const;
 
+/**
+ * Whether the call schedule applies to this channel.
+ */
+function scheduled(input: BudgetInput): boolean {
+    return input.channel === "voice"
+        || !input.textAlwaysOn;
+}
+
 function closingReason(
     meter: SessionMeter,
     limits: SessionLimits,
-    costThisMonth: number,
-    plan: Plan,
-    now: Date
+    input: BudgetInput
 ): ClosingReason | null
 {
-    const elapsed = (now.getTime() - meter.startedAt.getTime()) / 1000;
-    if (costThisMonth + meter.costUsd >= plan.monthlyCostCapUsd) {
+    const elapsed = (input.now.getTime() - meter.startedAt.getTime()) / 1000;
+    if (input.costThisMonth + meter.costUsd >= Plan.costCapUsd(input.plan)) {
         return "tenant_cap";
     }
     if (meter.abusiveTurns > 0) {
@@ -227,6 +271,12 @@ function closingReason(
     }
     if (elapsed >= limits.maxSessionSeconds - limits.closingLeadSeconds) {
         return "duration";
+    }
+    if (scheduled(input)) {
+        const left = ServiceSchedule.minutesLeft(input.schedule, LocalClock.of(input.now, input.timeZone));
+        if (left === null || left * 60 <= limits.closingLeadSeconds) {
+            return "schedule_end";
+        }
     }
     return null;
 }
