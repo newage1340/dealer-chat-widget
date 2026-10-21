@@ -265,7 +265,7 @@ export class DeepgramTts implements TextToSpeech {
                     method:  "POST",
                     headers: { Authorization: `Token ${this.#apiKey}`, "Content-Type": "application/json" },
                     body:    JSON.stringify({ text: piece }),
-                    signal:  signal ?? AbortSignal.timeout(15_000),
+                    signal:  signal === undefined ? AbortSignal.timeout(8_000) : AbortSignal.any([signal, AbortSignal.timeout(8_000)]),
                 });
             } catch (e) {
                 throw new ProviderError(this.name, "unavailable", String(e), { cause: e });

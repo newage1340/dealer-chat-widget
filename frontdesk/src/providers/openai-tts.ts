@@ -10,6 +10,7 @@ import { ProviderError } from "./errors.ts";
 import type { AudioFormat, SpeechChunk, SpeechContext, TextToSpeech } from "./speech.ts";
 
 const SOURCE_RATE = 24_000;
+const TIMEOUT_MS = 8_000;
 
 export type OpenAiTtsOptions = {
     readonly name:      string;
@@ -52,7 +53,8 @@ export class OpenAiCompatibleTts implements TextToSpeech {
                     method:  "POST",
                     headers: { Authorization: `Bearer ${this.#o.apiKey || "none"}`, "Content-Type": "application/json" },
                     body:    JSON.stringify({ model: this.#o.model, voice: voice || this.#o.voice, input: piece, response_format: "pcm" }),
-                    signal:  signal ?? AbortSignal.timeout(20_000),
+                    // On a call a slow voice must fail fast so the next one takes over; barge-in can cancel sooner.
+                    signal:  signal === undefined ? AbortSignal.timeout(TIMEOUT_MS) : AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
                 });
             } catch (e) {
                 throw new ProviderError(this.name, "unavailable", String(e), { cause: e });

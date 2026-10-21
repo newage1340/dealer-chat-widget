@@ -134,5 +134,16 @@
         "": {
             "audio_seconds": 0
         }
+    },
+    "openai-stt": {
+        "gpt-4o-mini-transcribe": {
+            "audio_seconds": 5e-05
+        },
+        "whisper-1": {
+            "audio_seconds": 0.0001
+        },
+        "": {
+            "audio_seconds": 0.0001
+        }
     }
 }

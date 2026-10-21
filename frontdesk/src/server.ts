@@ -39,6 +39,7 @@ import {
 import type { Language } from "./core/index.ts";
 import { streamUpgrade } from "./http/stream.ts";
 import { DeepgramStreamingStt, DeepgramTranscriber, DeepgramTts } from "./providers/deepgram.ts";
+import { OpenAiTranscriber } from "./providers/openai-stt.ts";
 import { OpenAiCompatibleTts } from "./providers/openai-tts.ts";
 import { LocalWhisperStt } from "./providers/whisper.ts";
 import { VoicePipeline } from "./voice/pipeline.ts";
@@ -181,8 +182,10 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
         transcriber:    overrides.transcriber !== undefined
             ? overrides.transcriber
             : config.deepgramApiKey
-				? new DeepgramTranscriber(config.deepgramApiKey)
-				: null,
+                ? new DeepgramTranscriber(config.deepgramApiKey)
+                : config.llm.openaiApiKey
+                    ? new OpenAiTranscriber({ apiKey: config.llm.openaiApiKey })
+                    : null,
         fetchRecording: overrides.fetchRecording !== undefined
             ? overrides.fetchRecording
             : twilio !== null

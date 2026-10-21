@@ -130,3 +130,20 @@ describe("price lookup", () => {
         expect(PriceTable.lookup(table, "openai", "o9")).toEqual({ input_tokens: 9 });
     });
 });
+
+describe("OpenAI transcription", () => {
+    it("estimates voicemail length from the audio when the API doesn't say", async () => {
+        const { Pcm } = await import("../../src/providers/audio.ts");
+        const { OpenAiTranscriber } = await import("../../src/providers/openai-stt.ts");
+        const wav = Pcm.wav(new Int16Array(8000 * 3), 8000);
+        const original = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({ text: "call me back" }))) as typeof fetch;
+        try {
+            const r = await new OpenAiTranscriber({ apiKey: "k" }).transcribe(wav, "audio/wav", { tenantId: null as never, purpose: "voicemail", languages: ["en"], hints: [] });
+            expect(r.text).toBe("call me back");
+            expect(r.usage.units.audio_seconds).toBeCloseTo(3, 1);
+        } finally {
+            globalThis.fetch = original;
+        }
+    });
+});
