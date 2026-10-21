@@ -44,9 +44,17 @@ type SessionBase = {
  * used to find the session again on the next webhook.
  */
 export type Session = SessionBase & (
-    | { readonly channel: "web";   readonly externalId: string }
-    | { readonly channel: "sms";   readonly externalId: null }
-    | { readonly channel: "voice"; readonly externalId: string; readonly vendor: CallVendor; readonly call: CallState }
+    | { readonly channel: "web";
+		readonly externalId: string
+	}
+    | { readonly channel: "sms";
+		readonly externalId: null
+	}
+    | { readonly channel: "voice";
+		readonly externalId: string;
+		readonly vendor: CallVendor;
+		readonly call: CallState
+	}
 );
 
 export const Role = {

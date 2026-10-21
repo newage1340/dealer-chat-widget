@@ -4,23 +4,9 @@
  */
 
 import type {
-    Address,
-    Appointment,
-    CallVendor,
-    CatalogItem,
-    Channel,
-    Contact,
-    ContactChanges,
-    Conversation,
-    ConversationId,
-    DomainEvent,
-    Job,
-    JobId,
-    Message,
-    Session,
-    Tenant,
-    TenantId,
-} from "../core/index.ts";
+	Address, Appointment, CallVendor, CatalogItem, Channel, Contact,
+	ContactChanges, Conversation, ConversationId, DomainEvent,
+	Job, JobId, Message, Session, Tenant, TenantId } from "../core/index.ts";
 import type { UsageSink } from "../providers/index.ts";
 
 export interface TenantDirectory {
@@ -36,9 +22,14 @@ export interface TenantDirectory {
  * SMS reuses the conversation's open SMS session until it goes idle.
  */
 export type SessionKey =
-    | { readonly channel: "web";   readonly externalId: string }
+    | { readonly channel: "web";
+        readonly externalId: string
+    }
     | { readonly channel: "sms" }
-    | { readonly channel: "voice"; readonly externalId: string; readonly vendor: CallVendor };
+    | { readonly channel: "voice";
+        readonly externalId: string;
+        readonly vendor: CallVendor
+    };
 
 export type Participants = {
     readonly contact:      Contact;

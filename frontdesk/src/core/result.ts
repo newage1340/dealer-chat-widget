@@ -4,8 +4,12 @@
  */
 
 export type Result<T, E> =
-    | { readonly ok: true;  readonly value: T }
-    | { readonly ok: false; readonly error: E };
+    | { readonly ok: true;
+        readonly value: T
+    }
+    | { readonly ok: false;
+        readonly error: E
+    };
 
 export const Result = {
     ok<T>(value: T): Result<T, never> {
@@ -17,14 +21,20 @@ export const Result = {
     },
 
     map<T, U, E>(result: Result<T, E>, f: (value: T) => U): Result<U, E> {
-        return result.ok ? Result.ok(f(result.value)) : result;
+        return result.ok
+			? Result.ok(f(result.value))
+			: result;
     },
 
     andThen<T, U, E>(result: Result<T, E>, f: (value: T) => Result<U, E>): Result<U, E> {
-        return result.ok ? f(result.value) : result;
+        return result.ok
+			? f(result.value)
+			: result;
     },
 
     unwrapOr<T, E>(result: Result<T, E>, fallback: T): T {
-        return result.ok ? result.value : fallback;
+        return result.ok
+			? result.value
+			: fallback;
     },
 } as const;

@@ -20,7 +20,8 @@ export type ValueOf<T> = T[keyof T];
 /**
  * The member of a tagged union whose `kind` is `K`.
  */
-export type Variant<U extends { readonly kind: string }, K extends U["kind"]> = Extract<U, { readonly kind: K }>;
+export type Variant<
+	U extends { readonly kind: string }, K extends U["kind"]> = Extract<U, { readonly kind: K }>;
 
 /**
  * Marks a branch the compiler has proven unreachable.

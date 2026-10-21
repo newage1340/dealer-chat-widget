@@ -45,6 +45,8 @@ export const CatalogItem = {
 
     text(item: CatalogItem, name: string): string {
         const value = item.fields[name];
-        return value === null || value === undefined ? "" : String(value);
+        return value === null || value === undefined
+			? ""
+			: String(value);
     },
 } as const;

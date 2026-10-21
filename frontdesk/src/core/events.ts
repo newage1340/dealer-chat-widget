@@ -22,17 +22,47 @@ export type HandoffReason =
     | "missed_call";
 
 export type EventBody =
-    | { readonly kind: "message_received";      readonly messageId: MessageId; readonly channel: Channel }
-    | { readonly kind: "reply_sent";            readonly messageId: MessageId; readonly channel: Channel }
-    | { readonly kind: "contact_updated";       readonly contactId: ContactId; readonly changes: ContactChanges }
-    | { readonly kind: "opted_out";             readonly contactId: ContactId }
-    | { readonly kind: "opted_in";              readonly contactId: ContactId }
-    | { readonly kind: "appointment_booked";    readonly appointment: Appointment; readonly replaces: AppointmentId | null }
-    | { readonly kind: "appointment_cancelled"; readonly appointmentId: AppointmentId }
-    | { readonly kind: "link_requested";        readonly to: Address; readonly label: string; readonly url: string }
-    | { readonly kind: "handoff_requested";     readonly reason: HandoffReason; readonly note: string }
-    | { readonly kind: "call_started";          readonly from: Address }
-    | { readonly kind: "call_ended";            readonly reason: CallEndReason; readonly turns: number };
+    | { readonly kind: "message_received";
+		readonly messageId: MessageId;
+		readonly channel: Channel
+	}
+    | { readonly kind: "reply_sent";
+		readonly messageId: MessageId;
+		readonly channel: Channel
+	}
+    | { readonly kind: "contact_updated";
+		readonly contactId: ContactId;
+		readonly changes: ContactChanges
+	}
+    | { readonly kind: "opted_out";
+		readonly contactId: ContactId
+	}
+    | { readonly kind: "opted_in";
+		readonly contactId: ContactId
+	}
+    | { readonly kind: "appointment_booked";
+		readonly appointment: Appointment;
+		readonly replaces: AppointmentId | null
+	}
+    | { readonly kind: "appointment_cancelled";
+		readonly appointmentId: AppointmentId
+	}
+    | { readonly kind: "link_requested";
+		readonly to: Address;
+		readonly label: string;
+		readonly url: string
+	}
+    | { readonly kind: "handoff_requested";
+		readonly reason: HandoffReason;
+		readonly note: string
+	}
+    | { readonly kind: "call_started";
+		readonly from: Address
+	}
+    | { readonly kind: "call_ended";
+		readonly reason: CallEndReason;
+		readonly turns: number
+	};
 
 export type EventKind = EventBody["kind"];
 

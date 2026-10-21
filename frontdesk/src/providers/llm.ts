@@ -26,10 +26,21 @@ export type ToolCall = {
  * (base rules, domain pack, business info), so providers that support explicit caching can mark it.
  */
 export type ChatMessage =
-    | { readonly role: "system";    readonly text: string; readonly cacheable: boolean }
-    | { readonly role: "user";      readonly text: string }
-    | { readonly role: "assistant"; readonly text: string; readonly toolCalls: readonly ToolCall[] }
-    | { readonly role: "tool";      readonly toolCallId: string; readonly output: string };
+    | { readonly role: "system";
+        readonly text: string;
+        readonly cacheable: boolean
+    }
+    | { readonly role: "user";
+        readonly text: string
+    }
+    | { readonly role: "assistant";
+        readonly text: string;
+        readonly toolCalls: readonly ToolCall[]
+    }
+    | { readonly role: "tool";
+        readonly toolCallId: string;
+        readonly output: string
+    };
 
 /**
  * A tool as the model sees it. `parameters` is a JSON Schema object.
@@ -88,7 +99,12 @@ export type LlmResponse = {
 };
 
 export const LlmProvider = {
-    async complete(provider: LlmProvider, request: LlmRequest, signal?: AbortSignal): Promise<LlmResponse> {
+    async complete(
+        provider: LlmProvider,
+        request: LlmRequest,
+        signal?: AbortSignal
+    ): Promise<LlmResponse>
+	{
         let text = "";
         const toolCalls: ToolCall[] = [];
         for await (const part of provider.stream(request, signal)) {
@@ -100,7 +116,12 @@ export const LlmProvider = {
                     toolCalls.push(part.call);
                     break;
                 case "finish":
-                    return { text, toolCalls, reason: part.reason, usage: part.usage };
+                    return {
+                        text,
+                        toolCalls,
+                        reason: part.reason,
+                        usage: part.usage
+                    };
             }
         }
         throw new Error(`${provider.name}: stream ended without a finish part`);

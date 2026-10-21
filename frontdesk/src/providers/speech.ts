@@ -15,9 +15,16 @@ export type AudioFormat = {
  * `final` transcripts end a caller utterance; interim ones may still change.
  */
 export type Transcript =
-    | { readonly kind: "interim"; readonly text: string }
-    | { readonly kind: "final";   readonly text: string; readonly confidence: number }
-    | { readonly kind: "usage";   readonly usage: UsageRecord };
+    | { readonly kind: "interim";
+        readonly text: string
+    }
+    | { readonly kind: "final";
+        readonly text: string;
+        readonly confidence: number
+    }
+    | { readonly kind: "usage";
+        readonly usage: UsageRecord
+    };
 
 export type SpeechContext = {
     readonly tenantId: TenantId;
@@ -36,8 +43,12 @@ export interface SpeechToText {
 }
 
 export type SpeechChunk =
-    | { readonly kind: "audio"; readonly bytes: Uint8Array }
-    | { readonly kind: "usage"; readonly usage: UsageRecord };
+    | { readonly kind: "audio";
+        readonly bytes: Uint8Array
+    }
+    | { readonly kind: "usage";
+        readonly usage: UsageRecord
+    };
 
 export interface TextToSpeech {
     readonly name: string;

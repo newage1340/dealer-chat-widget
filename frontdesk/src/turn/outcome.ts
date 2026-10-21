@@ -18,8 +18,12 @@ export type TurnOutcome = {
  * Channels that cannot stream (SMS, Twilio <Say>) wait for `done`.
  */
 export type TurnPart =
-    | { readonly kind: "text"; readonly delta: string }
-    | { readonly kind: "done"; readonly outcome: TurnOutcome };
+    | { readonly kind: "text";
+        readonly delta: string
+    }
+    | { readonly kind: "done";
+        readonly outcome: TurnOutcome
+    };
 
 export const TurnOutcome = {
     reply(text: string): TurnOutcome {

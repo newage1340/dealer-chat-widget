@@ -24,7 +24,12 @@ export class ProviderError extends Error {
     readonly provider: string;
     readonly failure:  ProviderFailure;
 
-    constructor(provider: string, failure: ProviderFailure, message: string, options?: ErrorOptions) {
+    constructor(
+        provider: string,
+        failure: ProviderFailure,
+        message: string,
+        options?: ErrorOptions
+    ) {
         super(`${provider}: ${message}`, options);
         this.name     = "ProviderError";
         this.provider = provider;

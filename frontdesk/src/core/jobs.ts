@@ -10,11 +10,25 @@ import type { Variant } from "./lang.ts";
 import type { Purpose } from "./usage.ts";
 
 export type JobBody =
-    | { readonly kind: "send_sms";       readonly to: PhoneNumber; readonly text: string; readonly purpose: Purpose }
-    | { readonly kind: "notify_staff";   readonly text: string; readonly reason: string }
-    | { readonly kind: "summarize_call"; readonly sessionId: SessionId; readonly headline: string }
-    | { readonly kind: "send_reminder";  readonly appointmentId: AppointmentId }
-    | { readonly kind: "cold_followup";  readonly conversationId: ConversationId };
+    | { readonly kind: "send_sms";
+        readonly to: PhoneNumber;
+        readonly text: string;
+        readonly purpose: Purpose
+    }
+    | { readonly kind: "notify_staff";
+        readonly text: string;
+        readonly reason: string
+    }
+    | { readonly kind: "summarize_call";
+        readonly sessionId: SessionId;
+        readonly headline: string
+    }
+    | { readonly kind: "send_reminder";
+        readonly appointmentId: AppointmentId
+    }
+    | { readonly kind: "cold_followup";
+        readonly conversationId: ConversationId
+    };
 
 export type JobKind = JobBody["kind"];
 

@@ -20,18 +20,39 @@ describe("CallState", () => {
             { kind: "heard", text: "hi" },
             { kind: "replied", directive: { kind: "continue" } },
         ]);
-        expect(state).toEqual({ status: "listening", turns: 1, silentTurns: 0 });
+        expect(state).toEqual({
+            status: "listening",
+            turns: 1,
+            silentTurns: 0
+        });
     });
 
     it("ends after too much silence", () => {
-        const state = run([{ kind: "silence" }, { kind: "silence" }, { kind: "silence" }]);
-        expect(state).toMatchObject({ status: "ended", reason: "silence" });
+        const state = run([
+			{ kind: "silence" },
+			{ kind: "silence" },
+			{ kind: "silence" }
+		]);
+        expect(state).toMatchObject({
+			status: "ended",
+			reason: "silence"
+		});
     });
 
     it("ends at the turn limit", () => {
-        const turn: CallEvent[] = [{ kind: "heard", text: "x" }, { kind: "replied", directive: { kind: "continue" } }];
-        const state = run([...turn, ...turn, { kind: "heard", text: "x" }], { maxTurns: 2, maxSilentTurns: 3 });
-        expect(state).toMatchObject({ status: "ended", reason: "turn_limit", turns: 2 });
+        const turn: CallEvent[] = [
+			{ kind: "heard", text: "x" },
+			{ kind: "replied", directive: { kind: "continue" }}
+		];
+        const state = run(
+			[ ...turn, ...turn, { kind: "heard", text: "x" } ],
+			{ maxTurns: 2, maxSilentTurns: 3 }
+		);
+        expect(state).toMatchObject({
+			status: "ended",
+			reason: "turn_limit",
+			turns: 2
+		});
     });
 
     it("records a hang-up during a transfer as transferred", () => {
@@ -41,12 +62,21 @@ describe("CallState", () => {
             { kind: "replied", directive: { kind: "transfer", to } },
             { kind: "hung_up" },
         ]);
-        expect(state).toMatchObject({ status: "ended", reason: "transferred" });
+        expect(state).toMatchObject({
+            status: "ended",
+            reason: "transferred"
+        });
     });
 
     it("rejects events that make no sense in the current state", () => {
-        const result = CallState.next(CallState.start(), { kind: "replied", directive: { kind: "end" } });
-        expect(result).toEqual({ ok: false, error: { from: "listening", event: "replied" } });
+        const result = CallState.next(CallState.start(), {
+            kind: "replied",
+            directive: { kind: "end" }
+        });
+        expect(result).toEqual({
+            ok: false,
+			error: { from: "listening", event: "replied" }
+        });
     });
 });
 

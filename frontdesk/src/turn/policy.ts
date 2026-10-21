@@ -14,7 +14,10 @@ import type { TurnOutcome } from "./outcome.ts";
  */
 export type PolicyDecision =
     | { readonly kind: "continue" }
-    | { readonly kind: "answer";  readonly outcome: TurnOutcome; readonly ephemeral: boolean }
+    | { readonly kind: "answer";
+        readonly outcome: TurnOutcome;
+        readonly ephemeral: boolean
+    }
     | { readonly kind: "silence" };
 
 export interface Policy {

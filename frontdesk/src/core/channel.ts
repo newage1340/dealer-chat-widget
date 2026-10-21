@@ -32,7 +32,11 @@ export const PhoneNumber = {
         if (digits.length === 11 && digits.startsWith("1")) {
             return `+${digits}` as PhoneNumber;
         }
-        if (trimmed.startsWith("+") && digits.length >= 8 && digits.length <= 15) {
+        if (
+			trimmed.startsWith("+")
+			&& digits.length >= 8
+			&& digits.length <= 15
+		) {
             return `+${digits}` as PhoneNumber;
         }
         return null;
@@ -45,19 +49,29 @@ export const PhoneNumber = {
  * so two Addresses for the same destination compare equal by `Address.key`.
  */
 export type Address =
-    | { readonly kind: "phone";       readonly value: PhoneNumber }
-    | { readonly kind: "email";       readonly value: string }
-    | { readonly kind: "web_session"; readonly value: string };
+    | { readonly kind: "phone";
+		readonly value: PhoneNumber
+	}
+    | { readonly kind: "email";
+		readonly value: string
+	}
+    | { readonly kind: "web_session";
+		readonly value: string
+	};
 
 export const Address = {
     phone(raw: string): Address | null {
         const value = PhoneNumber.parse(raw);
-        return value === null ? null : { kind: "phone", value };
+        return value === null
+			? null
+			: { kind: "phone", value };
     },
 
     email(raw: string): Address | null {
         const value = raw.trim().toLowerCase();
-        return value.includes("@") ? { kind: "email", value } : null;
+        return value.includes("@")
+			? { kind: "email", value }
+			: null;
     },
 
     webSession(id: string): Address {
@@ -72,6 +86,7 @@ export const Address = {
     },
 
     equals(a: Address, b: Address): boolean {
-        return a.kind === b.kind && a.value === b.value;
+        return a.kind === b.kind
+			&& a.value === b.value;
     },
 } as const;

@@ -66,6 +66,10 @@ export const Tenant = {
     },
 
     staffPhones(tenant: Tenant): PhoneNumber[] {
-        return tenant.staffContacts.flatMap(a => a.kind === "phone" ? [a.value] : []);
+        return tenant.staffContacts.flatMap(
+			a => a.kind === "phone"
+				? [a.value]
+				: []
+		);
     },
 } as const;

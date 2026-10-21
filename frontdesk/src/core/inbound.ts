@@ -11,8 +11,12 @@ import type { Address, Channel } from "./channel.ts";
  * phone channels by the number that was texted or called, the web widget by its slug.
  */
 export type TenantRef =
-    | { readonly kind: "endpoint"; readonly address: Address }
-    | { readonly kind: "slug";     readonly slug: string };
+    | { readonly kind: "endpoint";
+		readonly address: Address
+	}
+    | { readonly kind: "slug";
+		readonly slug: string
+	};
 
 /**
  * `dedupeKey` is unique per delivery attempt's underlying message
