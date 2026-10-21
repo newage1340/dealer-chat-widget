@@ -38,6 +38,8 @@ function valid(): Record<string, string | string[]> {
         "website":               "https://bobs.example",
         "timezone":              "America/Chicago",
         "email":                 "owner@bobs.example",
+        "password":              "correct horse battery",
+        "password2":             "correct horse battery",
         "opens.Monday":          "08:00",  "closes.Monday":    "17:30",
         "opens.Tuesday":         "08:00",  "closes.Tuesday":   "17:30",
         "opens.Wednesday":       "08:00",  "closes.Wednesday": "17:30",
@@ -119,8 +121,21 @@ describe("onboarding pages", () => {
 
     it("gives a taken name the next free web address", async () => {
         await post(valid());
-        const res = await post(valid());
+        const res = await post({ ...valid(), email: "second@bobs.example" });
         expect(res.headers.get("location")).toBe("/onboarding/done?slug=bob-s-pipes-and-drains-2");
+    });
+
+    it("creates the owner's login, flags the business for review, and refuses a reused email", async () => {
+        await post(valid());
+        const saved = (await app.store.tenants.bySlug("bob-s-pipes-and-drains"))!;
+        const account = await app.store.accounts.byEmail("OWNER@bobs.example");
+        expect(account?.tenantId).toBe(saved.id);
+        expect(await app.store.accounts.unreviewed()).toEqual([saved.id]);
+        const again = await post(valid());
+        expect(again.status).toBe(400);
+        expect(await again.text()).toContain("already has a login");
+        const mismatch = await post({ ...valid(), email: "x@bobs.example", password2: "something else entirely" });
+        expect(await mismatch.text()).toContain("don&#39;t match");
     });
 
     it("re-renders missing answers with problems, keeping what was entered", async () => {

@@ -27,6 +27,7 @@ import {
     type Contact,
     type ContactChanges,
     type Conversation,
+    type Account,
     type DomainEvent,
     type EvalSummary,
     type FieldValue,
@@ -41,6 +42,7 @@ import {
 import { PriceTable } from "../providers/usage.ts";
 import type { Db, Row } from "./db.ts";
 import type {
+    AccountStore,
     AppointmentStore,
     BlockStore,
     ClaimedJob,
@@ -237,6 +239,7 @@ export class PostgresStore implements Store {
     readonly spend:         SpendLedger;
     readonly blocks:        BlockStore;
     readonly quality:       QualityLog;
+    readonly accounts:      AccountStore;
     readonly #db: Db;
     readonly #prices: PriceTable;
 
@@ -258,6 +261,7 @@ export class PostgresStore implements Store {
         this.spend         = this.#spend();
         this.blocks        = this.#blocks();
         this.quality       = this.#quality();
+        this.accounts      = this.#accounts();
     }
 
     async close(): Promise<void> {
@@ -762,6 +766,54 @@ export class PostgresStore implements Store {
                 calls:    Number(r["calls"]),
                 costUsd:  Number(r["cost"]),
             })),
+        };
+    }
+
+    #accounts(): AccountStore {
+        const db = this.#db;
+        const toAccount = (r: Row): Account => ({
+            id:           str(r["id"]),
+            tenantId:     TenantId(str(r["tenant_id"])),
+            email:        str(r["email"]),
+            name:         str(r["name"]),
+            passwordHash: str(r["password_hash"]),
+            createdAt:    date(r["created_at"]),
+            lastLoginAt:  r["last_login_at"] === null ? null : date(r["last_login_at"]),
+        });
+        const one = async (sql: string, params: unknown[]) => {
+            const row = (await db.query(sql, params))[0];
+            return row === undefined ? null : toAccount(row);
+        };
+        return {
+            byEmail:   email => one("select * from accounts where email = $1", [email.trim().toLowerCase()]),
+            byId:      id => one("select * from accounts where id = $1", [id]),
+            forTenant: async tenantId => (await db.query("select * from accounts where tenant_id = $1 order by created_at", [tenantId])).map(toAccount),
+            create:    async a => (await db.query(
+                `insert into accounts (id, tenant_id, email, name, password_hash, created_at) values ($1, $2, $3, $4, $5, $6)
+                 on conflict (email) do nothing returning id`,
+                [a.id, a.tenantId, a.email.trim().toLowerCase(), a.name, a.passwordHash, a.createdAt],
+            )).length > 0,
+            setPassword: async (id, hash) => {
+                await db.query("update accounts set password_hash = $2 where id = $1", [id, hash]);
+            },
+            touchLogin: async (id, at) => {
+                await db.query("update accounts set last_login_at = $2 where id = $1", [id, at]);
+            },
+            remove: async id => {
+                await db.query("delete from accounts where id = $1", [id]);
+            },
+            markSubmitted: async (tenantId, at) => {
+                await db.query(
+                    "insert into onboarding_submissions (tenant_id, submitted_at) values ($1, $2) on conflict (tenant_id) do nothing",
+                    [tenantId, at],
+                );
+            },
+            markReviewed: async (tenantId, at) => {
+                await db.query("update onboarding_submissions set reviewed_at = $2 where tenant_id = $1", [tenantId, at]);
+            },
+            unreviewed: async () => (await db.query(
+                "select tenant_id from onboarding_submissions where reviewed_at is null order by submitted_at",
+            )).map(r => TenantId(str(r["tenant_id"]))),
         };
     }
 

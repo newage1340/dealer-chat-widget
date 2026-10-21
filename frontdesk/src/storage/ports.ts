@@ -8,7 +8,7 @@ import type {
 	CatalogItem, CatalogSyncStatus, Channel, Classification, Contact, ContactChanges, ContactId, Conversation,
 	ConversationId, DomainEvent, Job, JobId, Language, Message, Session, SessionId,
 	SessionOutcome, Tenant, TenantId, Transcript, Voicemail,
-	EvalRecord, EvalSummary, QualityRow, TurnMetric } from "../core/index.ts";
+	EvalRecord, EvalSummary, QualityRow, TurnMetric, Account } from "../core/index.ts";
 import type { UsageSink } from "../providers/index.ts";
 
 export interface TenantDirectory {
@@ -246,6 +246,28 @@ export interface QualityLog {
     evals(since: Date): Promise<readonly EvalSummary[]>;
 }
 
+/**
+ * Business-owner logins, and which onboarded businesses still need a look from the platform team.
+ */
+export interface AccountStore {
+    byEmail(email: string): Promise<Account | null>;
+    byId(id: string): Promise<Account | null>;
+    forTenant(tenantId: TenantId): Promise<readonly Account[]>;
+    /**
+     * Returns false when the email is already taken.
+     */
+    create(account: Account): Promise<boolean>;
+    setPassword(id: string, passwordHash: string): Promise<void>;
+    touchLogin(id: string, at: Date): Promise<void>;
+    remove(id: string): Promise<void>;
+    markSubmitted(tenantId: TenantId, at: Date): Promise<void>;
+    markReviewed(tenantId: TenantId, at: Date): Promise<void>;
+    /**
+     * Tenants that came in through onboarding and haven't been marked reviewed.
+     */
+    unreviewed(): Promise<readonly TenantId[]>;
+}
+
 export interface Store {
     readonly tenants:       TenantDirectory;
     readonly conversations: ConversationStore;
@@ -259,5 +281,6 @@ export interface Store {
     readonly spend:         SpendLedger;
     readonly blocks:        BlockStore;
     readonly quality:       QualityLog;
+    readonly accounts:      AccountStore;
     close(): Promise<void>;
 }

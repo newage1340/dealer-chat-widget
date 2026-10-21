@@ -59,7 +59,7 @@ describe("fixed lines", () => {
             for (const language of Object.values(Language)) {
                 if (text[language] === undefined) {
                     problems.push(`${key} has no ${language}`);
-                } else if (placeholders(text[language]!).join() !== placeholders(text.en!).join()) {
+                } else if (placeholders(text[language]!).join() !== placeholders(text["en"]!).join()) {
                     problems.push(`${key}.${language} placeholders differ from English`);
                 }
             }

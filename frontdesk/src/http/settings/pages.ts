@@ -14,6 +14,8 @@ import {
     Professionalism,
     Tenant,
     WEEKDAY_NAMES,
+    MIN_PASSWORD_LENGTH,
+    type Account,
     type Bound,
     type CatalogItem,
     type CatalogSyncStatus,
@@ -26,6 +28,7 @@ import {
 } from "../../core/index.ts";
 import { Catalog, DomainPack } from "../../domains/index.ts";
 import { Style } from "../../prompts/style.ts";
+import type { Viewer } from "./auth.ts";
 import { check, field, form, html, input, page, raw, select, textarea, type Html } from "./html.ts";
 
 const LANGUAGE_OPTIONS = Object.entries(LANGUAGE_NAMES) as [Language, string][];
@@ -63,6 +66,8 @@ export type TenantPageData = {
     readonly notice:      string;
     readonly problems:    readonly string[];
     readonly warnings:    readonly string[];
+    readonly viewer:      Viewer;
+    readonly accounts:    readonly Account[];
 };
 
 function clock(minute: number): string {
@@ -88,11 +93,21 @@ export function loginPage(error: string): string {
 <header><h1>Front desk settings</h1></header>
 <main>
 ${error ? html`<p><strong>${error}</strong></p>` : ""}
-${form("/settings/login", field("Admin token", input("token", "", "password", "autocomplete=\"current-password\"")), "Sign in")}
+${form("/settings/login", html`
+${field("Email", input("email", "", "email", "autocomplete=\"username\""))}
+${field("Password", input("password", "", "password", "autocomplete=\"current-password\""))}
+<p><small>Platform admin: leave the email blank and enter the admin token as the password.</small></p>
+`, "Sign in")}
 </main>`);
 }
 
-export function indexPage(tenants: readonly Tenant[], domains: readonly (readonly [string, string])[], problems: readonly string[]): string {
+export function indexPage(
+    tenants: readonly Tenant[],
+    domains: readonly (readonly [string, string])[],
+    problems: readonly string[],
+    unreviewed: readonly string[] = []
+): string
+{
     const names = Object.fromEntries(domains);
     return page("Businesses", html`
 <header>
@@ -104,9 +119,11 @@ ${form("/settings/logout", raw(""), "Sign out")}
 <section id="businesses">
 <h2>All businesses</h2>
 <table>
-<thead><tr><th>Name</th><th>Type</th><th>Phone numbers</th></tr></thead>
+<thead><tr><th>Name</th><th>Type</th><th>Phone numbers</th><th>Status</th></tr></thead>
 <tbody>
-${tenants.map(t => html`<tr><td><a href="/settings/${t.slug}">${t.name}</a></td><td>${names[t.domain] ?? t.domain}</td><td>${[...(t.endpoints.voice ?? [])].map(a => a.value).join(", ")}</td></tr>\n`)}
+${tenants.map(t => html`<tr><td><a href="/settings/${t.slug}">${t.name}</a></td><td>${names[t.domain] ?? t.domain}</td><td>${[...(t.endpoints.voice ?? [])].map(a => a.value).join(", ")}</td><td>${unreviewed.includes(t.id)
+        ? html`<strong>New from onboarding, not reviewed</strong> ${form(`/settings/${t.slug}/reviewed`, raw(""), "Mark reviewed")}`
+        : ""}</td></tr>\n`)}
 </tbody>
 </table>
 </section>
@@ -135,12 +152,16 @@ export function tenantPage(d: TenantPageData): string {
         ["details", "Business details"],
         ["notifications", "Notifications"],
         ["blocks", "Blocked callers"],
+        ["logins", "Logins"],
         ["usage", "Usage"],
         ["conversations", "Conversations"],
     ];
     return page(`${tenant.name} settings`, html`
 <header>
-<p><a href="/settings">All businesses</a></p>
+${d.viewer.kind === "admin"
+        ? html`<p><a href="/settings">All businesses</a></p>`
+        : html`<p>Signed in as ${d.viewer.account.email}</p>`}
+${form("/settings/logout", raw(""), "Sign out")}
 <h1>${tenant.name}</h1>
 <p>${pack.name} &middot; <a href="/widget/${tenant.slug}">Open web chat</a> &middot; <a href="/settings/${tenant.slug}/prompt">See the assistant's instructions</a></p>
 <nav><ul>${sections.map(([id, label]) => html`<li><a href="#${id}">${label}</a></li>`)}</ul></nav>
@@ -159,6 +180,7 @@ ${catalog(d)}
 ${details(d)}
 ${notifications(d)}
 ${blocks(d)}
+${logins(d)}
 ${usage(d)}
 ${conversations(d)}
 </main>`);
@@ -277,7 +299,9 @@ function business(d: TenantPageData): Html {
     const t = d.tenant;
     return section("business", "Business", form(action(d, "business"), html`
 ${field("Name", input("name", t.name))}
-${field("Business type", select("domain", d.domains, t.domain))}
+${d.viewer.kind === "admin"
+        ? field("Business type", select("domain", d.domains, t.domain))
+        : html`<p><strong>Business type</strong> ${d.pack.name}</p>`}
 ${field("Main phone", input("phone", t.phone === null ? "" : PhoneNumber.display(t.phone), "tel"))}
 ${field("Address", input("address", t.address))}
 ${field("Website", input("website", t.website, "url"))}
@@ -290,6 +314,15 @@ ${field("Assistant's name on calls", input("voiceAgentName", t.voiceAgentName), 
 
 function numbers(d: TenantPageData): Html {
     const t = d.tenant;
+    if (d.viewer.kind !== "admin") {
+        const list = (channel: "voice" | "sms") => (t.endpoints[channel] ?? []).map(a => PhoneNumber.display(a.value)).join(", ") || "none yet";
+        return section("numbers", "Phone numbers", html`
+<p><strong>Calls to</strong> ${list("voice")}</p>
+<p><strong>Texts to</strong> ${list("sms")}</p>
+<p>To add or change a number, contact us.</p>
+${form(action(d, "transfer"), field("Transfer calls to", input("transferTo", t.settings.transferTo === null ? "" : PhoneNumber.display(t.settings.transferTo), "tel"), "where callers go when they need a person"))}
+`);
+    }
     return section("numbers", "Phone numbers", form(action(d, "numbers"), html`
 <p>Numbers the assistant answers. A number can belong to one business at a time; adding it here takes it from any other business.</p>
 ${field("Calls to", textarea("voice", phones((t.endpoints.voice ?? []).map(a => a.value)), 2), "one per line")}
@@ -457,8 +490,10 @@ ${field("Staff phones", textarea("phones", Tenant.staffPhones(t).map(PhoneNumber
 ${(Object.keys(NOTICE_LABELS) as (keyof typeof NOTICE_LABELS)[]).map(n => html`<tr><td>${NOTICE_LABELS[n]}</td><td>${check("", `${n}`, s.notifications[n].includes("email"), "email")}</td><td>${check("", `${n}`, s.notifications[n].includes("sms"), "sms")}</td></tr>\n`)}
 </tbody>
 </table>
-<p>${check("Staff text alerts add-on", "smsNotifications", t.plan.subscription.smsNotifications)} <small>without it, text alerts go by email</small></p>
-${field("Extra phone lines", input("extraLines", t.plan.subscription.extraLines, "number", "min=\"0\""))}
+${d.viewer.kind === "admin"
+        ? html`<p>${check("Staff text alerts add-on", "smsNotifications", t.plan.subscription.smsNotifications)} <small>without it, text alerts go by email</small></p>
+${field("Extra phone lines", input("extraLines", t.plan.subscription.extraLines, "number", "min=\"0\""))}`
+        : html`<p><strong>Staff text alerts add-on</strong> ${t.plan.subscription.smsNotifications ? "on" : "off (text alerts go by email)"}</p>`}
 `));
 }
 
@@ -485,6 +520,42 @@ ${field("Phone number", input("phone", "", "tel"))}
 ${field("For how many hours", input("hours", "24", "number", "min=\"1\""), "blank: until you unblock them")}
 ${field("Reason", input("reason", ""))}
 `, "Block")}
+`);
+}
+
+function logins(d: TenantPageData): Html {
+    const t = d.tenant;
+    if (d.viewer.kind === "owner") {
+        const me = d.viewer.account;
+        return section("logins", "Your login", html`
+<p><strong>Email</strong> ${me.email}</p>
+${form(action(d, `accounts/${me.id}/password`), html`
+${field("Current password", input("current", "", "password", "autocomplete=\"current-password\""))}
+${field("New password", input("password", "", "password", "autocomplete=\"new-password\""), `at least ${MIN_PASSWORD_LENGTH} characters`)}
+`, "Change password")}
+`);
+    }
+    return section("logins", "Logins", html`
+<p>People who can sign in to this business's settings. They only see this business.</p>
+<table>
+<thead><tr><th>Email</th><th>Name</th><th>Last signed in</th><th>New password</th><th></th></tr></thead>
+<tbody>
+${d.accounts.map(a => html`<tr>
+<td>${a.email}</td>
+<td>${a.name}</td>
+<td>${a.lastLoginAt === null ? "never" : when(a.lastLoginAt, t)}</td>
+<td>${form(action(d, `accounts/${a.id}/password`), input("password", "", "password", "autocomplete=\"new-password\""), "Set")}</td>
+<td>${form(action(d, `accounts/${a.id}/remove`), raw(""), "Remove")}</td>
+</tr>\n`)}
+</tbody>
+</table>
+${d.accounts.length === 0 ? html`<p>No logins yet.</p>` : ""}
+<h3>Add a login</h3>
+${form(action(d, "accounts"), html`
+${field("Email", input("email", "", "email"))}
+${field("Name", input("name", ""))}
+${field("Password", input("password", "", "password", "autocomplete=\"new-password\""), `at least ${MIN_PASSWORD_LENGTH} characters; share it with them privately`)}
+`, "Add login")}
 `);
 }
 

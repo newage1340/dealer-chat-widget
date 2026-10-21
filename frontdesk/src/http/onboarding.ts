@@ -7,13 +7,15 @@
  * Everything is validated through `parseTenant`, like the settings pages.
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { Hono, type Context } from "hono";
 
 import { importRows, parsePastedRows, syncCatalog } from "../catalogs/index.ts";
 import {
     LANGUAGE_NAMES,
+    MIN_PASSWORD_LENGTH,
+    Password,
     PhoneNumber,
     Professionalism,
     type Language,
@@ -232,6 +234,12 @@ ${field("Time zone", select("timezone", TIME_ZONES, value("timezone", DEFAULT_TI
 ${field(required("Email for summaries and alerts", true), input("email", value("email"), "email"), "where we send conversation summaries and alerts")}
 </fieldset>
 <fieldset>
+<legend><strong>Your login</strong></legend>
+<p>You'll sign in to your settings page with the email above and this password.</p>
+${field(required("Password", true), input("password", "", "password", "autocomplete=\"new-password\""), `at least ${MIN_PASSWORD_LENGTH} characters`)}
+${field(required("Password again", true), input("password2", "", "password", "autocomplete=\"new-password\""))}
+</fieldset>
+<fieldset>
 <legend><strong>Hours</strong></legend>
 <table>
 <thead><tr><th>Day</th><th>Closed</th><th>Opens</th><th>Closes</th><th>By appointment only</th></tr></thead>
@@ -285,6 +293,7 @@ function donePage(tenant: Tenant, pack: DomainPack, items: number, error: string
 <main>
 <p>We have your information. Our team will set up a phone number for ${tenant.name} and contact you when the assistant is ready.
 Summaries and alerts will go to the email you gave us.</p>
+<p>You can sign in to your settings page at <a href="/settings/login">/settings</a> with your email and password.</p>
 <section>
 <h2>What we saved</h2>
 <dl>
@@ -370,6 +379,15 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
         }
         if (email === "") {
             problems.push("Email for summaries and alerts is required.");
+        } else if (await store.accounts.byEmail(email) !== null) {
+            problems.push("That email already has a login. Sign in at /settings instead, or use another email.");
+        }
+        const password = String(body["password"] ?? "");
+        const passwordProblem = Password.problem(password);
+        if (passwordProblem !== null) {
+            problems.push(passwordProblem);
+        } else if (password !== String(body["password2"] ?? "")) {
+            problems.push("The two passwords don't match.");
         }
         const timezone = one(body, "timezone") || DEFAULT_TIME_ZONE;
         if (!TIME_ZONES.some(([zone]) => zone === timezone)) {
@@ -447,6 +465,23 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
         }
         const tenant = parsed.tenant;
         await store.tenants.save(tenant);
+        const now = services.clock();
+        await store.accounts.create({
+            id: randomUUID(), tenantId: tenant.id, email, name: "", passwordHash: await Password.hash(password), createdAt: now, lastLoginAt: null,
+        });
+        await store.accounts.markSubmitted(tenant.id, now);
+        if (config.onboardingNotifyEmail) {
+            await store.jobs.enqueue([{
+                kind:      "send_email",
+                to:        config.onboardingNotifyEmail,
+                subject:   `New onboarding: ${tenant.name} (${pack.name})`,
+                text:      `${tenant.name} signed up through the onboarding page.\n\nType: ${pack.name}\nPhone: ${one(body, "phone")}\nEmail: ${email}\n\nReview it and assign a phone number at ${config.publicBaseUrl || ""}/settings/${tenant.slug}`,
+                purpose:   "staff_alert",
+                tenantId:  tenant.id,
+                dedupeKey: `onboarding:${tenant.id}`,
+                runAt:     null,
+            }]);
+        }
 
         // The catalog never fails onboarding: how it went is recorded and shown on the next page.
         if (source.kind !== "manual") {

@@ -241,6 +241,27 @@ create table eval_runs (
 create index eval_runs_scenario on eval_runs (scenario, ran_at);
 `,
     },
+    {
+        version: 4,
+        sql: `
+create table accounts (
+    id             text primary key,
+    tenant_id      text not null references tenants(id) on delete cascade,
+    email          text not null unique,
+    name           text not null default '',
+    password_hash  text not null,
+    created_at     timestamptz not null,
+    last_login_at  timestamptz
+);
+create index accounts_tenant on accounts (tenant_id);
+
+create table onboarding_submissions (
+    tenant_id     text primary key references tenants(id) on delete cascade,
+    submitted_at  timestamptz not null,
+    reviewed_at   timestamptz
+);
+`,
+    },
 ];
 
 export async function migrate(db: Db): Promise<number> {

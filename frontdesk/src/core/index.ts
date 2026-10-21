@@ -8,6 +8,11 @@ export {
     AppointmentStatus,
 } from "./appointment.ts";
 export {
+    MIN_PASSWORD_LENGTH,
+    Password,
+    type Account,
+} from "./account.ts";
+export {
     Bound,
     PLATFORM_BOUNDS,
 } from "./bounds.ts";

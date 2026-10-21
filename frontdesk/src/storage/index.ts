@@ -3,6 +3,7 @@
  */
 
 export {
+    type AccountStore,
     type AppointmentStore,
     type BlockStore,
     type ClaimedJob,

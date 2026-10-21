@@ -135,3 +135,60 @@ describe("sign-in cookie", () => {
         expect(viaTunnel.headers.get("set-cookie")).toMatch(/Secure/i);
     });
 });
+
+describe("business owner logins", () => {
+    async function ownerCookie(email: string, password: string) {
+        const res = await app.http.request("/settings/login", { method: "POST", body: new URLSearchParams({ email, password }) });
+        return { status: res.status, location: res.headers.get("location"), cookie: (res.headers.get("set-cookie") ?? "").split(";")[0]! };
+    }
+    async function as(owner: string, path: string, body?: Record<string, string>) {
+        return await app.http.request(path, body === undefined
+            ? { headers: { Cookie: owner } }
+            : { method: "POST", body: new URLSearchParams(body), headers: { Cookie: owner } });
+    }
+
+    it("lets the admin add a login that only sees its own business", async () => {
+        const added = await post("/settings/demo-plumber/accounts", { email: "Owner@Plumber.example", name: "Pat", password: "pipes and drains 1" });
+        expect(added.status).toBe(303);
+        const login = await ownerCookie("owner@plumber.example", "pipes and drains 1");
+        expect(login.status).toBe(303);
+
+        expect((await as(login.cookie, "/settings")).headers.get("location")).toBe("/settings/demo-plumber");
+        const page = await (await as(login.cookie, "/settings/demo-plumber")).text();
+        expect(page).toContain("Signed in as owner@plumber.example");
+        expect(page).not.toContain('name="domain"');
+        expect(page).toContain("To add or change a number, contact us.");
+
+        expect((await as(login.cookie, "/settings/salon")).status).toBe(404);
+        expect((await as(login.cookie, "/settings/quality")).status).toBe(404);
+        expect((await as(login.cookie, "/settings/demo-plumber/numbers", { voice: "+13175550999", sms: "", transferTo: "" })).status).toBe(404);
+        expect((await as(login.cookie, "/settings/new", { name: "x", slug: "x", domain: "plumbing" })).status).toBe(404);
+
+        await as(login.cookie, "/settings/demo-plumber/assistant", { professionalism: "casual", honestAboutAi: "", maxSessionMinutes: "20" });
+        expect((await app.store.tenants.bySlug("demo-plumber"))?.settings.style.professionalism).toBe("casual");
+        await as(login.cookie, "/settings/demo-plumber/business", { name: "Renamed Plumbing", domain: "therapy_practice", timezone: "America/Indiana/Indianapolis", hoursText: "" });
+        const after = (await app.store.tenants.bySlug("demo-plumber"))!;
+        expect(after.name).toBe("Renamed Plumbing");
+        expect(after.domain).toBe("plumbing");
+    });
+
+    it("lets an owner change their own password, which signs out old sessions", async () => {
+        await post("/settings/demo-plumber/accounts", { email: "pat@plumber.example", password: "first password 1" });
+        const first = await ownerCookie("pat@plumber.example", "first password 1");
+        const account = (await app.store.accounts.byEmail("pat@plumber.example"))!;
+        const wrong = await as(first.cookie, `/settings/demo-plumber/accounts/${account.id}/password`, { current: "nope", password: "second password 2" });
+        expect(wrong.status).toBe(400);
+        const changed = await as(first.cookie, `/settings/demo-plumber/accounts/${account.id}/password`, { current: "first password 1", password: "second password 2" });
+        expect(changed.status).toBe(303);
+        expect((await as(first.cookie, "/settings/demo-plumber")).headers.get("location")).toBe("/settings/login");
+        expect((await ownerCookie("pat@plumber.example", "second password 2")).status).toBe(303);
+    });
+
+    it("refuses wrong passwords and slows down guessing", async () => {
+        await post("/settings/demo-plumber/accounts", { email: "sam@plumber.example", password: "the real password" });
+        for (let i = 0; i < 8; i++) {
+            expect((await ownerCookie("sam@plumber.example", `guess ${i}`)).status).toBe(401);
+        }
+        expect((await ownerCookie("sam@plumber.example", "the real password")).status).toBe(429);
+    });
+});

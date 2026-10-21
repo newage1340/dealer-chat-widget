@@ -6,7 +6,7 @@
  * Sign-in is the admin token, kept in an HTTP-only, same-site cookie.
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
@@ -17,6 +17,7 @@ import {
     Address,
     ContactId,
     DomainId,
+    Password,
     PhoneNumber,
     SessionId,
     type CatalogSource,
@@ -27,6 +28,7 @@ import {
     type Weekday,
 } from "../../core/index.ts";
 import { lintTenant } from "../../tenants/lint.ts";
+import { LoginThrottle, Session, Viewer } from "./auth.ts";
 import { fromTenant, parseTenant, type TenantDraft } from "../../tenants/schema.ts";
 import { previewPrompt, SAMPLE_MESSAGE } from "../admin.ts";
 import type { ChannelDeps } from "../context.ts";
@@ -93,30 +95,54 @@ function optionValue(raw: string): string | number | boolean {
 /**
  * A section's edit: change the draft from the form, or return problems to show instead of saving.
  */
-type Edit = (draft: TenantDraft, body: Body, tenant: Tenant) => string[] | void | Promise<string[] | void>;
+type Edit = (draft: TenantDraft, body: Body, tenant: Tenant, viewer: Viewer) => string[] | void | Promise<string[] | void>;
 
-export function settingsRoutes(deps: ChannelDeps): Hono {
-    const app = new Hono();
+type Env = { Variables: { viewer: Viewer } };
+
+export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
+    const app = new Hono<Env>();
     const { services, config } = deps;
     const { store, registry } = services;
-    const token = createHash("sha256").update(`settings:${config.adminToken}`).digest("hex");
+    const throttle = new LoginThrottle();
 
-    const signedIn = (c: Context): boolean => {
+    /**
+     * Who the session cookie belongs to, or null when nobody valid is signed in.
+     */
+    const viewerOf = async (c: Context): Promise<Viewer | null> => {
         const cookie = getCookie(c, COOKIE) ?? "";
-        return config.adminToken !== ""
-            && cookie.length === token.length
-            && timingSafeEqual(Buffer.from(cookie), Buffer.from(token));
+        if (Session.validAdmin(cookie, config.adminToken)) {
+            return { kind: "admin" };
+        }
+        const id = Session.ownerId(cookie);
+        const account = id === null ? null : await store.accounts.byId(id);
+        return account !== null && Session.validOwner(cookie, account, config.sessionSecret, services.clock())
+            ? { kind: "owner", account }
+            : null;
     };
-    const auth: MiddlewareHandler = async (c, next) => signedIn(c)
+    const auth: MiddlewareHandler<Env> = async (c, next) => {
+        const viewer = await viewerOf(c);
+        if (viewer === null) {
+            return c.redirect("/settings/login");
+        }
+        c.set("viewer", viewer);
+        return next();
+    };
+    const adminOnly: MiddlewareHandler<Env> = async (c, next) => c.get("viewer").kind === "admin"
         ? next()
-        : c.redirect("/settings/login");
+        : c.notFound();
+    const startSession = (c: Context, value: string) => {
+        // Secure only when this request came over https (directly or through a tunnel/proxy): a Secure cookie
+        // set on http://localhost is dropped by the browser, which made sign-in loop back to the login page.
+        const https = new URL(c.req.url).protocol === "https:" || c.req.header("x-forwarded-proto") === "https";
+        setCookie(c, COOKIE, value, { httpOnly: true, sameSite: "Lax", path: "/settings", secure: https, maxAge: Session.maxAgeSeconds });
+    };
 
     const domains = () => registry.ids().map(id => [id, registry.get(id).name] as const).sort((a, b) => a[1].localeCompare(b[1]));
     const datasets = async () => (await readdir(DATASETS_DIR).catch(() => [] as string[]))
         .filter(n => n.endsWith(".json") || n.endsWith(".csv"))
         .sort();
 
-    const render = async (c: Context, tenant: Tenant, notice: string, problems: readonly string[] = []) => {
+    const render = async (c: Context<Env>, tenant: Tenant, notice: string, problems: readonly string[] = []) => {
         const now = services.clock();
         const pack = registry.get(tenant.domain);
         const items = await store.tenants.catalog(tenant.id);
@@ -133,30 +159,56 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
             notice,
             problems,
             warnings:    lintTenant(tenant, pack, items),
+            viewer:      c.get("viewer"),
+            accounts:    await store.accounts.forTenant(tenant.id),
         });
         return c.html(html, problems.length > 0 ? 400 : 200);
     };
     const back = (c: Context, slug: string, section: string, notice = "Saved.") =>
         c.redirect(`/settings/${slug}?notice=${encodeURIComponent(notice)}#${section}`, 303);
-    const tenantOr404 = async (c: Context) => store.tenants.bySlug(c.req.param("slug") ?? "");
+    // Every per-business route goes through this: an owner asking for another business gets a 404.
+    const tenantOr404 = async (c: Context<Env>) => {
+        const tenant = await store.tenants.bySlug(c.req.param("slug") ?? "");
+        return tenant !== null && Viewer.canSee(c.get("viewer"), tenant)
+            ? tenant
+            : null;
+    };
 
     // --- sign in -------------------------------------------------------------------------
 
     app.get("/settings/static/settings.css", async c => c.body(await readFile(new URL("settings.css", STATIC), "utf8"), 200, { "Content-Type": "text/css" }));
 
-    app.get("/settings/login", c => c.html(loginPage(config.adminToken ? "" : "Set ADMIN_TOKEN in .env to use the settings pages.")));
+    app.get("/settings/login", c => c.html(loginPage("")));
 
+    /**
+     * Owners sign in with email and password; the platform admin leaves email blank and gives the admin token.
+     */
     app.post("/settings/login", async c => {
         const body = await c.req.parseBody();
-        const given = createHash("sha256").update(`settings:${String(body["token"] ?? "")}`).digest("hex");
-        if (!config.adminToken || given !== token) {
-            return c.html(loginPage("That token isn't right."), 401);
+        const email = String(body["email"] ?? "").trim().toLowerCase();
+        const password = String(body["password"] ?? body["token"] ?? "");
+        const now = Date.now();
+        const keys = [`ip:${c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "local"}`, ...(email ? [`email:${email}`] : [])];
+        if (throttle.blocked(keys, now)) {
+            return c.html(loginPage("Too many tries. Wait 15 minutes and try again."), 429);
         }
-        // Secure only when this request came over https (directly or through a tunnel/proxy): a Secure cookie
-        // set on http://localhost is dropped by the browser, which made sign-in loop back to this page.
-        const https = new URL(c.req.url).protocol === "https:" || c.req.header("x-forwarded-proto") === "https";
-        setCookie(c, COOKIE, token, { httpOnly: true, sameSite: "Lax", path: "/settings", secure: https, maxAge: 7 * 24 * 3600 });
-        return c.redirect("/settings", 303);
+        if (email === "") {
+            if (config.adminToken && Session.validAdmin(Session.admin(password), config.adminToken)) {
+                throttle.clear(keys);
+                startSession(c, Session.admin(config.adminToken));
+                return c.redirect("/settings", 303);
+            }
+        } else {
+            const account = await store.accounts.byEmail(email);
+            if (account !== null && await Password.verify(password, account.passwordHash)) {
+                throttle.clear(keys);
+                await store.accounts.touchLogin(account.id, services.clock());
+                startSession(c, Session.owner(account, config.sessionSecret, services.clock()));
+                return c.redirect("/settings", 303);
+            }
+        }
+        throttle.fail(keys, now);
+        return c.html(loginPage(email === "" ? "That admin token isn't right." : "That email and password don't match."), 401);
     });
 
     app.post("/settings/logout", c => {
@@ -166,9 +218,25 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
 
     // --- businesses ----------------------------------------------------------------------
 
-    app.get("/settings", auth, async c => c.html(indexPage(await store.tenants.all(), domains(), [])));
+    app.get("/settings", auth, async c => {
+        const viewer = c.get("viewer");
+        if (viewer.kind === "owner") {
+            const own = await store.tenants.byId(viewer.account.tenantId);
+            return own === null ? c.notFound() : c.redirect(`/settings/${own.slug}`);
+        }
+        return c.html(indexPage(await store.tenants.all(), domains(), [], await store.accounts.unreviewed()));
+    });
 
-    app.get("/settings/quality", auth, async c => {
+    app.post("/settings/:slug/reviewed", auth, adminOnly, async c => {
+        const tenant = await tenantOr404(c);
+        if (tenant === null) {
+            return c.notFound();
+        }
+        await store.accounts.markReviewed(tenant.id, services.clock());
+        return c.redirect("/settings", 303);
+    });
+
+    app.get("/settings/quality", auth, adminOnly, async c => {
         const days = [1, 7, 30, 90].find(n => n === Number(c.req.query("days"))) ?? 7;
         const since = new Date(services.clock().getTime() - days * 86_400_000);
         return c.html(qualityPage({
@@ -180,7 +248,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
         }));
     });
 
-    app.post("/settings/new", auth, async c => {
+    app.post("/settings/new", auth, adminOnly, async c => {
         const body = await c.req.parseBody();
         const slug = String(body["slug"] ?? "").trim().toLowerCase();
         const result = parseTenant({
@@ -195,7 +263,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
             problems.push(`'${slug}' is already taken`);
         }
         if (!result.ok || problems.length > 0) {
-            return c.html(indexPage(await store.tenants.all(), domains(), problems), 400);
+            return c.html(indexPage(await store.tenants.all(), domains(), problems, await store.accounts.unreviewed()), 400);
         }
         await store.tenants.save(result.tenant);
         return c.redirect(`/settings/${slug}`, 303);
@@ -229,15 +297,15 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
 
     // --- section edits -------------------------------------------------------------------
 
-    const edit = (section: string, apply: Edit, after?: (tenant: Tenant, before: Tenant) => Promise<string>) => {
-        app.post(`/settings/:slug/${section}`, auth, async c => {
+    const edit = (section: string, apply: Edit, after?: (tenant: Tenant, before: Tenant) => Promise<string>, admin = false) => {
+        app.post(`/settings/:slug/${section}`, auth, ...(admin ? [adminOnly] : []), async c => {
             const tenant = await tenantOr404(c);
             if (tenant === null) {
                 return c.notFound();
             }
             const body = await c.req.parseBody({ all: true });
             const draft = fromTenant(tenant);
-            const problems = await apply(draft, body, tenant) ?? [];
+            const problems = await apply(draft, body, tenant, c.get("viewer")) ?? [];
             if (problems.length > 0) {
                 return render(c, tenant, "", problems);
             }
@@ -251,9 +319,12 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
         });
     };
 
-    edit("business", (draft, body) => {
+    edit("business", (draft, body, _tenant, viewer) => {
         draft.name = one(body, "name");
-        draft.domain = DomainId(one(body, "domain"));
+        // The business type decides the whole assistant; only the platform admin changes it.
+        if (viewer.kind === "admin") {
+            draft.domain = DomainId(one(body, "domain"));
+        }
         draft.phone = one(body, "phone");
         draft.address = one(body, "address");
         draft.website = one(body, "website");
@@ -287,6 +358,11 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
             }
         }
         return moved.length > 0 ? `Saved. Moved the number from ${moved.join(", ")}.` : "Saved.";
+    }, true);
+
+    // Owners can't move phone numbers, but they choose where transfers go.
+    edit("transfer", (draft, body) => {
+        draft.settings.transferTo = one(body, "transferTo");
     });
 
     edit("assistant", (draft, body) => {
@@ -434,7 +510,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
         draft.options = Object.fromEntries(pairs(one(body, "options")).map(([k, v]) => [k, optionValue(v)]));
     });
 
-    edit("notifications", (draft, body) => {
+    edit("notifications", (draft, body, _tenant, viewer) => {
         draft.staff = { emails: lines(one(body, "emails")), phones: lines(one(body, "phones")) as PhoneNumber[] };
         const vias = (name: string) => {
             const chosen = many(body, name).filter((v): v is "email" | "sms" => v === "email" || v === "sms");
@@ -446,7 +522,10 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
             handoff:      vias("handoff"),
             budget_alert: vias("budget_alert"),
         };
-        draft.plan = { ...draft.plan, smsNotifications: on(body, "smsNotifications"), extraLines: Number(one(body, "extraLines")) || 0 };
+        // Add-ons are part of the plan: the admin (or billing) sets them, not the owner.
+        if (viewer.kind === "admin") {
+            draft.plan = { ...draft.plan, smsNotifications: on(body, "smsNotifications"), extraLines: Number(one(body, "extraLines")) || 0 };
+        }
     });
 
     app.post("/settings/:slug/blocks", auth, async c => {
@@ -483,6 +562,68 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
         }
         await store.blocks.unblock(contact.id);
         return back(c, tenant.slug, "blocks", "Unblocked.");
+    });
+
+    // --- logins ----------------------------------------------------------------------------
+
+    app.post("/settings/:slug/accounts", auth, adminOnly, async c => {
+        const tenant = await tenantOr404(c);
+        if (tenant === null) {
+            return c.notFound();
+        }
+        const body = await c.req.parseBody();
+        const email = String(body["email"] ?? "").trim().toLowerCase();
+        const password = String(body["password"] ?? "");
+        const problem = !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "Enter a valid email address." : Password.problem(password);
+        if (problem !== null) {
+            return render(c, tenant, "", [problem]);
+        }
+        const created = await store.accounts.create({
+            id: randomUUID(), tenantId: tenant.id, email, name: String(body["name"] ?? "").trim(),
+            passwordHash: await Password.hash(password), createdAt: services.clock(), lastLoginAt: null,
+        });
+        return created
+            ? back(c, tenant.slug, "logins", `Added a login for ${email}.`)
+            : render(c, tenant, "", [`${email} already has a login.`]);
+    });
+
+    app.post("/settings/:slug/accounts/:id/remove", auth, adminOnly, async c => {
+        const tenant = await tenantOr404(c);
+        const account = await store.accounts.byId(c.req.param("id"));
+        if (tenant === null || account === null || account.tenantId !== tenant.id) {
+            return c.notFound();
+        }
+        await store.accounts.remove(account.id);
+        return back(c, tenant.slug, "logins", `Removed the login for ${account.email}.`);
+    });
+
+    /**
+     * The admin sets a new password; an owner changes their own, giving the current one.
+     */
+    app.post("/settings/:slug/accounts/:id/password", auth, async c => {
+        const tenant = await tenantOr404(c);
+        const account = await store.accounts.byId(c.req.param("id"));
+        const viewer = c.get("viewer");
+        if (tenant === null || account === null || account.tenantId !== tenant.id
+            || (viewer.kind === "owner" && viewer.account.id !== account.id)) {
+            return c.notFound();
+        }
+        const body = await c.req.parseBody();
+        const password = String(body["password"] ?? "");
+        if (viewer.kind === "owner" && !await Password.verify(String(body["current"] ?? ""), account.passwordHash)) {
+            return render(c, tenant, "", ["Your current password isn't right."]);
+        }
+        const problem = Password.problem(password);
+        if (problem !== null) {
+            return render(c, tenant, "", [problem]);
+        }
+        const hash = await Password.hash(password);
+        await store.accounts.setPassword(account.id, hash);
+        if (viewer.kind === "owner") {
+            // The old session was signed with the old password; start a new one so they stay signed in.
+            startSession(c, Session.owner({ ...account, passwordHash: hash }, config.sessionSecret, services.clock()));
+        }
+        return back(c, tenant.slug, "logins", "Password changed.");
     });
 
     return app;

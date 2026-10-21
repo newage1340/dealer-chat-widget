@@ -2,6 +2,7 @@
  * Runtime configuration, read from environment variables once at startup.
  */
 
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -76,6 +77,8 @@ export type Config = {
     readonly sessionIdleMinutes:   number;
     readonly runWorker:            boolean;
     readonly onboardingCode:       string;
+    readonly onboardingNotifyEmail: string;
+    readonly sessionSecret:        string;
     readonly voicePipeline:        "twilio_gather" | "media_streams" | "media_streams_local";
     readonly openaiTtsModel:       string;
     readonly openaiTtsVoice:       string;
@@ -168,6 +171,9 @@ export function loadConfig(): Config {
         sessionIdleMinutes: int("SESSION_IDLE_MINUTES", 30),
         runWorker:          flag("RUN_WORKER", true),
         onboardingCode:     env("ONBOARDING_CODE"),
+        onboardingNotifyEmail: env("ONBOARDING_NOTIFY_EMAIL"),
+        // Signs business-owner sessions. Derived from the admin token when not set, so it is never empty in practice.
+        sessionSecret:      env("SESSION_SECRET") || createHash("sha256").update(`session:${env("ADMIN_TOKEN")}`).digest("hex"),
         voicePipeline:      (["media_streams", "media_streams_local"] as const).find(p => p === env("VOICE_PIPELINE").toLowerCase()) ?? "twilio_gather",
         openaiTtsModel:     env("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
         openaiTtsVoice:     env("OPENAI_TTS_VOICE", "coral"),
