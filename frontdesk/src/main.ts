@@ -169,14 +169,22 @@ async function runEvals(
         process.exit(1);
     }
     const scenarios = [
-        ...(which !== "packs" ? await loadScenarios(path) : []),
-        ...(which !== "files" ? await generatedScenarios(app.store, app.services.registry) : []),
+        ...(which !== "packs"
+				? await loadScenarios(path)
+				: []
+		   ),
+        ...(which !== "files"
+				? await generatedScenarios(app.store, app.services.registry)
+				: []
+		   ),
     ];
     if (which !== "files" && !scenarios.some(s => s.name.includes("(generated)"))) {
         console.warn("no demo tenants in the database to generate pack checks from; run `pnpm seed-demo` first");
     }
     const runId = new Date().toISOString();
-    const model = config.llm.primary === "local" ? config.llm.localModels.capable : config.llm.openaiModels.capable;
+    const model = config.llm.primary === "local"
+		? config.llm.localModels.capable
+		: config.llm.openaiModels.capable;
     let flawless = 0;
     let cost = 0;
     for (const scenario of scenarios) {
@@ -206,7 +214,8 @@ async function runEvals(
         }
         flawless += passes === repeat ? 1 : 0;
     }
-    console.info(`\n${flawless}/${scenarios.length} passed every run${repeat > 1 ? ` (${repeat} runs each)` : ""}, $${cost.toFixed(4)} total`);
+	let runDetails = repeat > 1 ? ` (${repeat} runs each)` : "";
+    console.info(`\n${flawless}/${scenarios.length} passed every run${runDetails}, $${cost.toFixed(4)} total`);
     await app.store.close();
     process.exit(flawless === scenarios.length ? 0 : 1);
 }

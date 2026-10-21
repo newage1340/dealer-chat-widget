@@ -104,8 +104,12 @@ export async function generatedScenarios(store: Store, registry: DomainRegistry)
     }
     return demos.flatMap((d, i) => {
         // Borrow an item from the next business type over, e.g. a brake job for the nail salon.
-        const other = demos[(i + 1) % demos.length]!;
-        const item = other.items[Math.floor(other.items.length / 2)];
+        // Skip types whose items are addresses (real estate listings): "do you offer 3410 Weston Pointe Dr?" isn't a question.
+        const others = [...demos.slice(i + 1), ...demos.slice(0, i)]
+            .filter(o => o.items.some(x => !/^\d/.test(Catalog.title(x, registry.get(o.tenant.domain).catalog))));
+        const other = others[0] ?? d;
+        const candidates = other.items.filter(x => !/^\d/.test(Catalog.title(x, registry.get(other.tenant.domain).catalog)));
+        const item = candidates[Math.floor(candidates.length / 2)];
         const foreign = item === undefined || other === d
             ? "scuba diving lessons"
             : Catalog.title(item, registry.get(other.tenant.domain).catalog).toLowerCase();

@@ -47,10 +47,17 @@ export const PENDING_DIRECTIVES: Map<string, CallDirective> = new Map();
 type TwilioMessage =
     | { readonly event: "connected" }
     | { readonly event: "start";
-        readonly start: { readonly streamSid: string; readonly callSid: string; readonly customParameters?: Readonly<Record<string, string>> }
+        readonly start: {
+            readonly streamSid: string;
+            readonly callSid: string;
+            readonly customParameters?: Readonly<Record<string, string>>
+        }
     }
     | { readonly event: "media";
-        readonly media: { readonly payload: string; readonly track?: string }
+        readonly media: {
+            readonly payload: string;
+            readonly track?: string
+        }
     }
     | { readonly event: "mark";
         readonly mark: { readonly name: string }
@@ -389,14 +396,26 @@ export class StreamCall {
     /**
      * One sentence through the first voice that works; a voice that fails before any audio hands over to the next.
      */
-    async #synthesize(text: string, voices: readonly Voice[], language: Language, signal: AbortSignal): Promise<void> {
+    async #synthesize(
+        text: string,
+        voices: readonly Voice[],
+        language: Language,
+        signal: AbortSignal
+    ): Promise<void> {
         for (const voice of voices) {
             let sent = false;
             try {
                 const once = new AsyncQueue<string>();
                 once.push(text);
                 once.close();
-                for await (const chunk of voice.synthesize(once, "", PHONE_AUDIO, { ...this.#context(), languages: [language] }, signal)) {
+				const chunks = voice.synthesize(
+				    once,
+				    "",
+				    PHONE_AUDIO,
+				    { ...this.#context(), languages: [language] },
+				    signal
+				);
+                for await (const chunk of chunks) {
                     if (signal.aborted || this.#closed) {
                         return;
                     }
@@ -407,9 +426,9 @@ export class StreamCall {
                     sent = true;
                     for (let i = 0; i < chunk.bytes.length; i += FRAME_BYTES) {
                         this.#t.send({
-                            event:     "media",
+                            event: "media",
                             streamSid: this.#streamSid,
-                            media:     { payload: Buffer.from(chunk.bytes.subarray(i, i + FRAME_BYTES)).toString("base64") },
+                            media: { payload: Buffer.from(chunk.bytes.subarray(i, i + FRAME_BYTES)).toString("base64") },
                         });
                     }
                 }
@@ -429,7 +448,11 @@ export class StreamCall {
     #mark(): Promise<void> {
         const name = `m${++this.#markSeq}`;
         const played = new Promise<void>(resolve => this.#marks.set(name, resolve));
-        this.#t.send({ event: "mark", streamSid: this.#streamSid, mark: { name } });
+        this.#t.send({
+            event: "mark",
+            streamSid: this.#streamSid,
+            mark: { name }
+        });
         return played;
     }
 

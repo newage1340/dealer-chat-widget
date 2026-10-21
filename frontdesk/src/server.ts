@@ -174,13 +174,20 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
     const worker = new Worker({
         services,
         messaging:      overrides.messaging ?? twilio ?? new LoggingMessaging(true),
-        email:          overrides.email ?? (config.resendApiKey ? new ResendEmail(config.resendApiKey) : new LoggingEmail(true)),
+        email:          overrides.email ??
+			(config.resendApiKey
+				? new ResendEmail(config.resendApiKey)
+				: new LoggingEmail(true)),
         transcriber:    overrides.transcriber !== undefined
             ? overrides.transcriber
-            : config.deepgramApiKey ? new DeepgramTranscriber(config.deepgramApiKey) : null,
+            : config.deepgramApiKey
+				? new DeepgramTranscriber(config.deepgramApiKey)
+				: null,
         fetchRecording: overrides.fetchRecording !== undefined
             ? overrides.fetchRecording
-            : twilio !== null ? (url: string) => twilio.recording(url) : null,
+            : twilio !== null
+				? (url: string) => twilio.recording(url)
+				: null,
         emailFrom:      config.emailFrom,
         defaultSmsFrom: config.twilioDefaultFrom,
         dashboardUrl:   config.dashboardUrl,
