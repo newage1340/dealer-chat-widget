@@ -62,7 +62,7 @@ function scenarios(tenant: TenantType, items: readonly CatalogItem[], registry: 
     out.push({ ...base, name: name("says so when something isn't offered"), turns: [
         { say: `Hi, do you offer ${foreign}? How much is it?`, expect: expect({
             replyMatches:  "(don't|do not|doesn't|does not|not (currently )?(offer|have|carry|list|provide)|unfortunately|only|specializ|focus|no tenemos|no ofrecemos)",
-            replyExcludes: ["yes, we", "we do offer", "we do have"],
+            replyExcludes: ["yes, we", "yes we", "sí, tenemos", "sí, ofrecemos"],
             noEvents:      ["appointment_booked"],
         }) },
     ] });

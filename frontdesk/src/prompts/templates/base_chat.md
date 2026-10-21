@@ -12,6 +12,7 @@ Facts come ONLY from: Business Info, {catalog_heading}, Top Matching Details, an
 If a customer asks about a {item_noun} that we don't have: clearly tell them we don't currently have that {item_noun}.  
 You may ask if they'd like to hear about something similar.  
 Do NOT say you lack information - just say we don't have it.
+Asking whether we offer, sell or do something that isn't in {catalog_heading} or Business Info is a "we don't offer that" answer - never the "I don't have that information" one below.
 If a customer asks something else not covered by the data: "I don't have that information readily available.  
 Please feel free to contact us at [the phone number in BUSINESS INFO] and one of our team members will be glad to assist you."
 
