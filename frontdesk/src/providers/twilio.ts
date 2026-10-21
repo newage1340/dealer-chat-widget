@@ -18,6 +18,28 @@ export type TwilioCredentials = {
 const API = "https://api.twilio.com/2010-04-01";
 
 /**
+ * Typographic characters models like to write, and the plain ones that keep a text in GSM-7.
+ * One curly apostrophe turns a whole message into UCS-2, which fits 70 characters per segment instead of 160.
+ */
+const PLAIN: readonly [RegExp, string][] = [
+    [/[\u2018\u2019\u201A\u201B\u2032]/g, "'"],
+    [/[\u201C\u201D\u201E\u201F\u2033]/g, "\""],
+    [/[\u2013\u2014\u2015\u2212]/g, "-"],
+    [/\u2026/g, "..."],
+    [/[\u00A0\u2007\u202F\u2009\u200A]/g, " "],
+    [/[\u200B\u200C\u200D\uFEFF]/g, ""],
+    [/[\u2022\u00B7]/g, "-"],
+];
+
+/**
+ * A text with typographic punctuation replaced by plain characters, so it bills as GSM-7 when it can.
+ * Letters in other alphabets (Spanish accents in GSM-7 stay, Chinese or Vietnamese don't) are left alone.
+ */
+export function plainSms(text: string): string {
+    return PLAIN.reduce((out, [pattern, plain]) => out.replace(pattern, plain), text);
+}
+
+/**
  * GSM-7 messages are 160 characters per segment (153 when split); anything else is UCS-2 at 70 (67).
  */
 export function smsSegments(text: string): number {
@@ -45,7 +67,8 @@ export class TwilioSms implements MessagingProvider {
 
     async send(message: OutboundSms, signal?: AbortSignal): Promise<SendReceipt> {
         const c = this.#credentials;
-        const body = new URLSearchParams({ To: message.to, Body: message.text });
+        const text = plainSms(message.text);
+        const body = new URLSearchParams({ To: message.to, Body: text });
         if (c.messagingServiceSid) {
             body.set("MessagingServiceSid", c.messagingServiceSid);
         } else {
@@ -80,7 +103,7 @@ export class TwilioSms implements MessagingProvider {
             service:    "messaging",
             purpose:    message.purpose,
             occurredAt: new Date(),
-            units:      { sms_segments: smsSegments(message.text) },
+            units:      { sms_segments: smsSegments(text) },
             costUsd:    null,
             latencyMs:  performance.now() - started,
             tenantId:   message.tenantId,

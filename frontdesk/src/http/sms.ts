@@ -7,7 +7,7 @@ import { Hono } from "hono";
 import { Address, type Inbound } from "../core/index.ts";
 import { collect } from "../pipeline/engine.ts";
 import { STRINGS, say } from "../prompts/strings.ts";
-import { smsSegments } from "../providers/twilio.ts";
+import { plainSms, smsSegments } from "../providers/twilio.ts";
 import { form, twilioSignature, xml, type ChannelDeps } from "./context.ts";
 import { messageResponse } from "./twiml.ts";
 
@@ -58,6 +58,7 @@ export function smsRoutes(deps: ChannelDeps): Hono {
             console.error("SMS turn failed:", e);
             text = say(STRINGS.fallbackText, tenant.defaultLanguage);
         }
+        text = plainSms(text);
         // The reply rides on the webhook response, so meter it here (Twilio bills it like any text).
         await store.usage.record({
             provider:   "twilio",

@@ -9,7 +9,7 @@ import {
     type LlmRequest,
     type LlmStreamPart,
 } from "../../src/providers/index.ts";
-import { smsSegments, TwilioSignature } from "../../src/providers/twilio.ts";
+import { plainSms, smsSegments, TwilioSignature } from "../../src/providers/twilio.ts";
 
 const REQUEST: LlmRequest = {
     messages:    [{ role: "user", text: "hi" }],
@@ -110,5 +110,13 @@ describe("Twilio", () => {
         expect(smsSegments("hello")).toBe(1);
         expect(smsSegments("a".repeat(161))).toBe(2);
         expect(smsSegments("你好".repeat(40))).toBe(2);
+    });
+
+    it("keeps model punctuation from turning a text into UCS-2", () => {
+        const reply = "Sure \u2014 we\u2019re open \u201Ctill 6\u201D tomorrow\u2026 see you then! ".repeat(3);
+        expect(smsSegments(reply)).toBe(3);
+        expect(plainSms(reply)).toBe("Sure - we're open \"till 6\" tomorrow... see you then! ".repeat(3));
+        expect(smsSegments(plainSms(reply))).toBe(1);
+        expect(plainSms("¿Mañana a las 3?")).toBe("¿Mañana a las 3?");
     });
 });
