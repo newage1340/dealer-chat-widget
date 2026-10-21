@@ -132,6 +132,11 @@ export {
     type TenantSettings,
 } from "./tenant.ts";
 export {
+    LocalTime,
+    WEEKDAY_NAMES,
+    type WeekdayName,
+} from "./time.ts";
+export {
     Sentiment,
     SessionOutcome,
     Urgency,

@@ -3,6 +3,9 @@
  */
 
 export {
+    Catalog,
+} from "./catalog.ts";
+export {
     DomainPackError,
     DomainRegistry,
     loadPack,
