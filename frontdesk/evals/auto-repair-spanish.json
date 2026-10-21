@@ -1,0 +1,14 @@
+{
+  "name": "Auto repair: Spanish price question",
+  "tenant": "demo-auto-repair",
+  "channel": "sms",
+  "turns": [
+    {
+      "say": "Buenas, ¿cuánto cuesta un cambio de aceite sintético?",
+      "expect": {
+        "language": "es",
+        "replyMatches": "79|99"
+      }
+    }
+  ]
+}

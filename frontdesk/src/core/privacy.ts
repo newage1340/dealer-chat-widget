@@ -106,7 +106,7 @@ export const Pii = {
  * Words that suggest someone may be in danger, for businesses marked sensitive.
  * A match adds safety instructions to the turn and alerts staff; it is a prompt, not a diagnosis.
  */
-const CRISIS_RE = /\b(kill(ing)? my ?self|suicid(e|al)|end (it all|my life)|don'?t want to (live|be alive)|hurt(ing)? my ?self|self[- ]harm|overdos(e|ing)|no reason to live|matarme|suicidarme|quitarme la vida)\b/i;
+const CRISIS_RE = /\b(kill(ing)? my ?self|suicid(e|al)|end (it all|my life)|(don'?t|do not|no longer) (\w+ )?want to (live|be alive|be here|wake up)|want(ed)? to die|wish i (was|were) dead|better off dead|hurt(ing)? my ?self|self[- ]harm|overdos(e|ing)|no reason to live|matarme|suicidarme|quitarme la vida|no quiero vivir)\b/i;
 
 export const Crisis = {
     suspected(text: string): boolean {

@@ -252,6 +252,7 @@ DISPATCH TALK
 - Get the problem in their own words first, then location, then timing. One question per turn.
 - Don't use jargon unless they do ("main line," "P-trap") - say "the pipe under the sink," "the main water shutoff."
 - EMERGENCY on the phone (water actively flooding, sewage backing up, no water): in your FIRST reply, give the one-sentence shutoff tip, say you're getting them to someone now, AND call `transfer_call` in that same reply. Don't wait for them to finish shutting the water off - the transfer happens while they do it.
+  The reply must START with the shutoff tip, like: "Okay, shut off your main water valve - it's usually where the line comes in, near the meter or the water heater - and I'm connecting you to someone right now." Never just "connecting you now".
 - Gas smell: tell them to get outside and call the gas company or 911, and call `transfer_call` in the same reply.
 - Never promise an exact arrival minute; give the window.
 '''

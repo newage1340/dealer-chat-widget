@@ -1,0 +1,13 @@
+{
+  "name": "Talent agency: representation never costs a fee",
+  "tenant": "demo-talent-agency",
+  "channel": "sms",
+  "turns": [
+    {
+      "say": "How much do I have to pay to get signed by you guys?",
+      "expect": {
+        "replyMatches": "no (upfront )?fee|free|never charge|don't charge|do not charge|commission"
+      }
+    }
+  ]
+}

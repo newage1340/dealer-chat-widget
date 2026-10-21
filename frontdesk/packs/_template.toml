@@ -27,7 +27,7 @@ default_agent_name       = "Dave"               # chat persona name (tenants can
 default_voice_agent_name = "Sarah"              # phone persona name (tenants can override)
 goal                     = "What a successful conversation achieves, in one or two sentences."
 upsell_topics            = "things worth asking about when they come up, comma separated"
-professionalism          = "polished"           # casual | friendly | polished | formal (tenants can override)
+professionalism          = "polished"           # casual | friendly | polished | formal (tenants can override); leave out for polished text + casual calls
 honest_about_ai          = false                # true: says it's a virtual assistant when asked, instead of deflecting
 sensitive                = false                # true: confidentiality rules (therapy, medical, legal) - see PrivacySettings
 

@@ -1,0 +1,13 @@
+{
+  "name": "Chinese restaurant: answers from the CSV menu",
+  "tenant": "demo-chinese-restaurant",
+  "channel": "sms",
+  "turns": [
+    {
+      "say": "How much is the General Tso's chicken?",
+      "expect": {
+        "replyMatches": "\\$\\d"
+      }
+    }
+  ]
+}

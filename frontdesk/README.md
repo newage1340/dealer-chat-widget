@@ -121,6 +121,63 @@ Tenants live in the database. Create or update one with `PUT /admin/tenants` and
 Everything except `id`, `slug`, `name`, `domain` and `timezone` has a default; see `src/tenants/schema.ts`.
 `pnpm import-tenants <dir>` loads a directory of these (or of the old Python-format files).
 
+## Demo businesses
+
+`pnpm seed-demo` loads eleven demo businesses from `tenants/demo/` and syncs their catalogs from `datasets/`
+(re-running it keeps any phone numbers set on the settings page). `pnpm check-demo` validates them end to end.
+
+| Slug | Business type | Languages | Catalog | Shows off |
+|---|---|---|---|---|
+| demo-hair-salon | Hair salon | en, es | 28 services (JSON) | patch-test rule, deposits |
+| demo-nail-salon | Nail salon | en, vi, es | 30 services (JSON) | walk-ins, group bookings |
+| demo-chinese-restaurant | Chinese restaurant | en, zh | 49 dishes (CSV, POS-style headers) | column mapping, pickup orders with totals |
+| demo-auto-repair | Auto repair, Mexican-owned | en, es (staff summaries in Spanish) | 31 services (CSV) | bilingual catalog, Spanish follow-ups |
+| demo-therapy-practice | Therapy practice | en, es | 15 services (JSON) | confidential mode, formal tone, honest about being virtual, crisis handling |
+| demo-boxing-gym | Boxing gym | en, es | 26 classes and memberships (CSV) | casual tone, waivers, minors |
+| demo-computer-repair | Computer and phone repair | en only | 32 services and refurbished devices (JSON) | single-language business, no passwords in chat |
+| demo-esl-tutor | ESL for Spanish speakers | es first, en | 20 classes (JSON) | Spanish as the main language |
+| demo-real-estate | Real estate agent | en, es | 24 listings (JSON) | listing and photo links, Fair Housing rules |
+| demo-talent-agency | Talent agency for actors | en only | 19 programs (JSON) | no-fee representation, protecting minors |
+| demo-plumbing | Plumbing | en, es | 13 services (JSON) | emergencies and live transfers |
+
+Each demo has web chat at `/widget/<slug>`. To try one by phone, put the Twilio number under its Phone numbers on
+the settings page; that moves the number away from whichever business had it.
+
+## Settings website
+
+`/settings` (sign in with `ADMIN_TOKEN`) edits everything a business owner tunes: business info, phone numbers,
+tone, privacy, languages, schedule, catalog source, profile answers, notifications and blocked callers. It also
+shows usage and conversations. Each section is its own form and saves through the same validation as `PUT /admin/tenants`.
+The markup is bare on purpose (no classes, styles or scripts); `public/settings/settings.css` is an empty hook for styling.
+
+## Catalogs: one interface for menus, price lists, listings and inventory
+
+Every business has a catalog shaped by its domain pack (dishes, services, listings, vehicles). Where it comes from is a
+per-business setting (`settings.catalog.source`):
+
+- `manual`: rows uploaded via `POST /admin/catalog-upload` or pasted on the settings page (CSV or JSON);
+- `dataset`: a file in `datasets/`;
+- `csv_url`: any CSV link, e.g. a Google Sheet published as CSV, or a point-of-sale export;
+- `json_url`: any JSON feed, with `itemsPath` pointing at the list.
+
+`settings.catalog.fieldMap` renames the source's columns to the pack's fields (`"Dish": "name"`). Remote sources
+refresh on their own every `refreshMinutes` (the worker checks once a minute) or right away with "Sync now".
+A failed or empty fetch keeps the last good catalog. Whatever the source, the assistant sees the same catalog rows
+and the same `search_catalog` tool. Adding another source (Square, Shopify, an MLS feed) is one connector in
+`src/catalogs/connectors.ts`.
+
+## Languages, tone and privacy
+
+- **Languages.** `settings.languages` lists what a business offers; the assistant tells customers which languages are
+  available when they ask for another one. Each reply's language is detected, and that is what sets the voice and the
+  speech recognizer for the next turn, even when the model switches without calling `switch_language`. Customers'
+  remembered languages can be reset from the settings page or with `POST /admin/tenants/:slug/languages/reset`.
+- **Tone.** `settings.style.professionalism` (casual, friendly, polished, formal) and `honestAboutAi`; each defaults to the domain pack's value.
+- **Privacy.** `settings.privacy.redact` scrubs card numbers, SSNs, bank account numbers and birth dates from what customers
+  write, before the model sees it or anything is stored. `sensitive` adds confidentiality rules (never confirm who is a client,
+  only collect what scheduling needs). Staff texts and transcript emails then carry no conversation content, and any
+  crisis message gets 988 guidance and an urgent staff alert.
+
 ## Admin API
 
 All need `Authorization: Bearer $ADMIN_TOKEN` except `/health` and catalog upload (upload token).
@@ -134,6 +191,9 @@ All need `Authorization: Bearer $ADMIN_TOKEN` except `/health` and catalog uploa
 | `GET /admin/prompt/:slug?channel=voice&message=...` | The exact prompt a turn would get |
 | `GET /admin/transcripts?tenant=...&outcome=lead,booked`, `GET /admin/transcripts/:sessionId` | For the staff web app |
 | `GET /admin/blocks?tenant=...`, `POST /admin/blocks`, `DELETE /admin/blocks/:contactId` | Bans |
+| `GET /admin/tenants/:slug/catalog`, `POST /admin/tenants/:slug/catalog/sync` | Catalog, sync status, sync now |
+| `POST /admin/tenants/:slug/languages/reset` | `{phone}` for one customer, empty for all |
+| `GET /datasets/:file` | The sample datasets (public, for trying the CSV and JSON link sources) |
 
 ## Layout
 
@@ -146,9 +206,11 @@ src/tools/      the model's tools
 src/turn/       contracts: turn context, policies, tools, subscribers, outcomes
 src/pipeline/   turn engine, policies, subscribers, session lifecycle, job worker
 src/storage/    storage ports, Postgres implementation, migrations
-src/http/       channels: web widget, SMS, Twilio voice, Vapi, admin
+src/catalogs/   catalog sources: connectors (dataset, CSV link, JSON link) and syncing
+src/http/       channels: web widget, SMS, Twilio voice, Vapi, admin, settings website
 src/evals/      scripted conversation evals
 packs/          domain packs (TOML); evals/ scenario files; public/ widget front end
+datasets/       sample catalogs; tenants/demo/ the demo businesses
 ```
 
 ## Deploying on Render

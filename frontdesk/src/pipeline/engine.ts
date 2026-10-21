@@ -281,11 +281,12 @@ export class TurnEngine {
         }
 
         const meter = SessionMeter.record(session.meter, verdict, outcome.assessment, costUsd);
-        const saved = await this.#commit(ctx, { ...outcome, events: [...outcome.events, ...extra] }, { ...session, meter }, true);
+        const committed = { ...outcome, events: [...outcome.events, ...extra] };
+        const saved = await this.#commit(ctx, committed, { ...session, meter }, true);
         if (lastClosingTurn && inbound.channel !== "voice") {
             await closeSession(this.#s, session.id, "budget");
         }
-        yield { kind: "done", result: this.#result(ctx, outcome, saved, {}, false) };
+        yield { kind: "done", result: this.#result(ctx, committed, saved, {}, false) };
     }
 
     // --- the model loop -------------------------------------------------------------

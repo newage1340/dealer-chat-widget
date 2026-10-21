@@ -173,10 +173,11 @@ export type FollowupKind = ValueOf<typeof FollowupKind>;
 
 /**
  * Defaults a tenant can override in its settings.
+ * `professionalism` null keeps the original pairing: polished in text, casual on calls.
  * `sensitive` turns on the discretion rules for businesses that owe clients confidentiality (see PrivacySettings).
  */
 export type PackDefaults = {
-    readonly professionalism: Professionalism;
+    readonly professionalism: Professionalism | null;
     readonly honestAboutAi:   boolean;
     readonly sensitive:       boolean;
 };

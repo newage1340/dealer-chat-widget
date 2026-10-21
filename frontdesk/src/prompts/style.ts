@@ -13,9 +13,10 @@ import type { DomainPack } from "../domains/index.ts";
 
 /**
  * The tenant's settings, with the pack's defaults filled in.
+ * `professionalism` null is the original pairing: polished in text, casual on calls.
  */
 export type ResolvedStyle = {
-    readonly professionalism: Professionalism;
+    readonly professionalism: Professionalism | null;
     readonly honestAboutAi:   boolean;
     readonly sensitive:       boolean;
 };
@@ -75,8 +76,15 @@ export const Style = {
 
     rules(style: ResolvedStyle, voice: boolean): string {
         return voice
-            ? VOICE_STYLE[style.professionalism]
-            : CHAT_STYLE[style.professionalism];
+            ? VOICE_STYLE[style.professionalism ?? "casual"]
+            : CHAT_STYLE[style.professionalism ?? "polished"];
+    },
+
+    /**
+     * How a level reads on the settings page.
+     */
+    describe(level: Professionalism | null): string {
+        return level ?? "polished in text, casual on calls";
     },
 
     persona(style: ResolvedStyle, voice: boolean): string {
@@ -93,7 +101,7 @@ export const Style = {
                 + "Not an AI. Not a virtual assistant. Not a bot.\n"
                 + "You sit at the front desk, you know the {business_noun}, you know the team, and you've been doing this a while.\n"
                 + "Never say you're an AI, automated system, virtual assistant, bot, or anything that breaks character.\n"
-                + (style.professionalism === "casual" || style.professionalism === "friendly"
+                + (style.professionalism === null || style.professionalism === "casual" || style.professionalism === "friendly"
                     ? "If a caller asks \"are you a robot?\", deflect casually like a real person would (\"haha no I'm here, just a busy day\") and pivot back to helping.\n"
                     : "If a caller asks whether you're a robot, answer lightly that you're here to help and pivot back to their question.\n")
                 + "Never confirm."

@@ -45,7 +45,7 @@ const DomainSection = z.strictObject({
     default_voice_agent_name: text,
     goal:                     text,
     upsell_topics:            text.default(""),
-    professionalism:          z.enum(Object.values(Professionalism) as [Professionalism, ...Professionalism[]]).default("polished"),
+    professionalism:          z.enum(Object.values(Professionalism) as [Professionalism, ...Professionalism[]]).optional().transform(v => v ?? null),
     honest_about_ai:          flag,
     sensitive:                flag,
 });

@@ -135,7 +135,7 @@ export function tenantPage(d: TenantPageData): string {
 <header>
 <p><a href="/settings">All businesses</a></p>
 <h1>${tenant.name}</h1>
-<p>${pack.name} &middot; <a href="/?slug=${tenant.slug}">Open web chat</a> &middot; <a href="/settings/${tenant.slug}/prompt">See the assistant's instructions</a></p>
+<p>${pack.name} &middot; <a href="/widget/${tenant.slug}">Open web chat</a> &middot; <a href="/settings/${tenant.slug}/prompt">See the assistant's instructions</a></p>
 <nav><ul>${sections.map(([id, label]) => html`<li><a href="#${id}">${label}</a></li>`)}</ul></nav>
 </header>
 <main>
@@ -230,7 +230,7 @@ function assistant(d: TenantPageData): Html {
     const s = d.tenant.settings;
     const defaults = d.pack.defaults;
     const levels: [string, string][] = [
-        ["", `Business type default (${defaults.professionalism})`],
+        ["", `Business type default (${Style.describe(defaults.professionalism)})`],
         ...Object.values(Professionalism).map((l): [string, string] => [l, l]),
     ];
     const honesty: [string, string][] = [

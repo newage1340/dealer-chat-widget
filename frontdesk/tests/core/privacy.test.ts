@@ -31,6 +31,9 @@ describe("Pii.redact", () => {
 describe("Crisis.suspected", () => {
     it.each([
         ["I don't want to live anymore", true],
+        ["I don't really want to live anymore", true],
+        ["sometimes I want to die", true],
+        ["ya no quiero vivir", true],
         ["sometimes I think about killing myself", true],
         ["my sink is killing me lol", false],
         ["I need to book a session", false],
