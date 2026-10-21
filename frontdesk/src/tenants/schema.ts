@@ -54,6 +54,15 @@ const fallback = z.enum(["voicemail", "forward", "reject"]);
 const DEFAULT_DISCLOSURE: LocalizedText = {
     en: "Just so you know, this call is recorded and transcribed.",
     es: "Le informamos que esta llamada se graba y se transcribe.",
+    zh: "提醒您，本通话会被录音并转写成文字。",
+    vi: "Xin lưu ý, cuộc gọi này được ghi âm và chuyển thành văn bản.",
+    tl: "Para lang po malaman ninyo, nire-record at isinusulat ang tawag na ito.",
+    ar: "للعلم، يتم تسجيل هذه المكالمة وتحويلها إلى نص.",
+    ko: "참고로 이 통화는 녹음되며 글로 기록됩니다.",
+    ru: "Сообщаем, что этот звонок записывается и расшифровывается.",
+    fr: "Pour information, cet appel est enregistré et transcrit.",
+    ht: "Pou ou konnen, apèl sa a anrejistre epi transkri.",
+    pt: "Para sua informação, esta ligação é gravada e transcrita.",
 };
 
 const refresh = z.number().int().min(5).max(7 * 24 * 60).default(60);

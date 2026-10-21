@@ -38,3 +38,32 @@ describe("LanguageGuess", () => {
         expect(LanguageGuess.of("Of course, we can continue in English. How can I help you today?")).toBe("en");
     });
 });
+
+describe("fixed lines", () => {
+    it("exist in every language, with the same placeholders as the English", async () => {
+        const { STRINGS } = await import("../../src/prompts/strings.ts");
+        const { Language } = await import("../../src/core/index.ts");
+        const texts: [string, Record<string, string>][] = [];
+        for (const [key, value] of Object.entries(STRINGS)) {
+            if (Array.isArray(value)) {
+                value.forEach((v, i) => texts.push([`${key}.${i}`, v as Record<string, string>]));
+            } else if ("en" in value) {
+                texts.push([key, value as Record<string, string>]);
+            } else {
+                Object.entries(value).forEach(([k, v]) => texts.push([`${key}.${k}`, v as Record<string, string>]));
+            }
+        }
+        const placeholders = (t: string) => [...t.matchAll(/\{[a-z_]+\}/g)].map(m => m[0]).sort();
+        const problems: string[] = [];
+        for (const [key, text] of texts) {
+            for (const language of Object.values(Language)) {
+                if (text[language] === undefined) {
+                    problems.push(`${key} has no ${language}`);
+                } else if (placeholders(text[language]!).join() !== placeholders(text.en!).join()) {
+                    problems.push(`${key}.${language} placeholders differ from English`);
+                }
+            }
+        }
+        expect(problems).toEqual([]);
+    });
+});
