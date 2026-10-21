@@ -17,7 +17,7 @@ import {
 // Basic plan: $99, cap = 40% = $39.60.
 const PLAN: Plan = {
     pricing:      DEFAULT_PRICING,
-    subscription: { extraWeeklyHours: 0, extraLines: 0, smsNotifications: false, topUpsUsd: 0 },
+    subscription: { extraLines: 0, smsNotifications: false, topUpsUsd: 0 },
 };
 // Wednesday 2026-10-21, 11:00 in Indianapolis; open 9:00-17:00 that day.
 const T0 = new Date("2026-10-21T15:00:00Z");
@@ -25,7 +25,7 @@ const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);
 const INPUT: BudgetInput = {
     channel:       "voice",
     plan:          PLAN,
-    schedule:      { windows: [{ day: 3, startMinute: 9 * 60, endMinute: 17 * 60 }] },
+    schedule:      { kind: "windows", windows: [{ day: 3, startMinute: 9 * 60, endMinute: 17 * 60 }] },
     timeZone:      "America/Indiana/Indianapolis",
     textAlwaysOn:  true,
     costThisMonth: 0,

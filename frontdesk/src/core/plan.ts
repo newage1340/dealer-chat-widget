@@ -3,8 +3,10 @@
  *
  * The rule that keeps the business out of the red: a tenant's service costs
  * (models, speech, telephony, texts) may never exceed a fixed share of what they paid this month.
- * Everything they buy (extra hours, extra lines, top-ups) raises the allowance in proportion,
+ * Everything they buy (extra lines, add-ons, top-ups) raises the allowance in proportion,
  * so more service is always paid for before it is delivered.
+ * There is no limit on hours: the assistant answers around the clock until the allowance runs out,
+ * and after that callers can still leave a voicemail.
  */
 
 /**
@@ -16,8 +18,6 @@
  */
 export type PlanPricing = {
     readonly basePriceUsd:          number;
-    readonly includedWeeklyHours:   number;
-    readonly extraWeeklyHourUsd:    number;
     readonly extraLineUsd:          number;
     readonly smsNotificationsUsd:   number;
     readonly costShare:             number;
@@ -30,7 +30,6 @@ export type PlanPricing = {
  * `topUpsUsd` are one-off purchases this month that extend the allowance.
  */
 export type Subscription = {
-    readonly extraWeeklyHours: number;
     readonly extraLines:       number;
     readonly smsNotifications: boolean;
     readonly topUpsUsd:        number;
@@ -43,8 +42,6 @@ export type Plan = {
 
 export const DEFAULT_PRICING: PlanPricing = {
     basePriceUsd:          99,
-    includedWeeklyHours:   40,
-    extraWeeklyHourUsd:    5,
     extraLineUsd:          25,
     smsNotificationsUsd:   10,
     costShare:             0.4,
@@ -56,7 +53,6 @@ export const Plan = {
         const p = plan.pricing;
         const s = plan.subscription;
         return p.basePriceUsd
-            + s.extraWeeklyHours * p.extraWeeklyHourUsd
             + s.extraLines * p.extraLineUsd
             + (s.smsNotifications ? p.smsNotificationsUsd : 0)
             + s.topUpsUsd;
@@ -74,10 +70,6 @@ export const Plan = {
      */
     assistantCapUsd(plan: Plan): number {
         return Plan.costCapUsd(plan) * (1 - plan.pricing.voicemailReserveShare);
-    },
-
-    weeklyHours(plan: Plan): number {
-        return plan.pricing.includedWeeklyHours + plan.subscription.extraWeeklyHours;
     },
 
     maxConcurrentCalls(plan: Plan): number {

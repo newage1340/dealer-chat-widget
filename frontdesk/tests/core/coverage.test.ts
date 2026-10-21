@@ -1,24 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { Coverage, DEFAULT_CALL_FALLBACKS } from "../../src/core/index.ts";
+import { Coverage, DEFAULT_CALL_FALLBACKS, PhoneNumber } from "../../src/core/index.ts";
 
 describe("Coverage.fallbackFor", () => {
     const forwardBoth = { offSchedule: "forward", lineBusy: "forward" } as const;
+    const business = PhoneNumber.parse("317-555-0100");
+    const direct = { forwardTo: business, forwardedFrom: null };
+    const forwarded = { forwardTo: business, forwardedFrom: business };
 
     it("defaults to our own voicemail", () => {
-        expect(Coverage.fallbackFor("always", DEFAULT_CALL_FALLBACKS, "off_schedule")).toBe("voicemail");
-        expect(Coverage.fallbackFor("always", DEFAULT_CALL_FALLBACKS, "line_busy")).toBe("voicemail");
+        expect(Coverage.fallbackFor(DEFAULT_CALL_FALLBACKS, "off_schedule", direct)).toBe("voicemail");
+        expect(Coverage.fallbackFor(DEFAULT_CALL_FALLBACKS, "line_busy", direct)).toBe("voicemail");
     });
 
-    it("forwards only when calls reach us directly", () => {
-        expect(Coverage.fallbackFor("always", forwardBoth, "line_busy")).toBe("forward");
-        expect(Coverage.fallbackFor("overflow", forwardBoth, "line_busy")).toBe("voicemail");
-        expect(Coverage.fallbackFor("after_hours", forwardBoth, "off_schedule")).toBe("voicemail");
+    it("forwards only calls that came to us directly, and only with a number to forward to", () => {
+        expect(Coverage.fallbackFor(forwardBoth, "line_busy", direct)).toBe("forward");
+        expect(Coverage.fallbackFor(forwardBoth, "line_busy", forwarded)).toBe("voicemail");
+        expect(Coverage.fallbackFor(forwardBoth, "off_schedule", { forwardTo: null, forwardedFrom: null })).toBe("voicemail");
     });
 
     it("rejects for free when nothing is left, but keeps voicemail on the reserve", () => {
-        expect(Coverage.fallbackFor("always", forwardBoth, "tenant_cap")).toBe("reject");
-        expect(Coverage.fallbackFor("always", forwardBoth, "blocked")).toBe("reject");
-        expect(Coverage.fallbackFor("always", forwardBoth, "allowance_used")).toBe("voicemail");
+        expect(Coverage.fallbackFor(forwardBoth, "tenant_cap", direct)).toBe("reject");
+        expect(Coverage.fallbackFor(forwardBoth, "blocked", direct)).toBe("reject");
+        expect(Coverage.fallbackFor(forwardBoth, "allowance_used", direct)).toBe("voicemail");
     });
 });

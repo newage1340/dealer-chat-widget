@@ -4,7 +4,7 @@
 
 import type { AbusePolicy, SessionLimits } from "./budget.ts";
 import type { Address, Channel, PhoneNumber } from "./channel.ts";
-import type { CallFallbacks, CoverageMode } from "./coverage.ts";
+import type { CallFallbacks } from "./coverage.ts";
 import type { DomainId, TenantId } from "./ids.ts";
 import type { ValueOf } from "./lang.ts";
 import type { Language, LocalizedText } from "./language.ts";
@@ -83,8 +83,8 @@ export type TenantSettings = {
  * `defaultLanguage` greets callers the system knows nothing about;
  * customers can switch to any supported language by asking, or just by speaking it.
  * `staffLanguage` is the language transcript gists and staff notices are written in.
- * `coverage` is how calls reach us (after hours, overflow, or always); it shapes greetings and fallbacks.
- * `schedule` is when the assistant answers the calls that reach us; outside it they get the off-schedule fallback.
+ * `schedule` is when the assistant answers the calls that reach us (always, unless the tenant narrows it);
+ * outside it they get the off-schedule fallback.
  */
 export type Tenant = {
     readonly id:              TenantId;
@@ -105,7 +105,6 @@ export type Tenant = {
     readonly staffLanguage:   Language;
     readonly profile:         Readonly<Record<string, string>>;
     readonly plan:            Plan;
-    readonly coverage:        CoverageMode;
     readonly schedule:        ServiceSchedule;
     readonly settings:        TenantSettings;
 };

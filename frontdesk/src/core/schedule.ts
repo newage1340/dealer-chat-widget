@@ -1,6 +1,8 @@
 /**
- * The weekly hours a tenant has the assistant answering calls.
- * Tenants pick any hours they like, up to what their plan includes.
+ * When the assistant answers calls that reach it.
+ * By default it always does; a tenant can narrow that to chosen weekly hours
+ * (outside them, calls get the off-schedule fallback, our voicemail by default).
+ * Hours are a preference, not a plan limit: the monthly cost cap is what bounds spend.
  */
 
 import { Result } from "./result.ts";
@@ -11,9 +13,9 @@ import { Result } from "./result.ts";
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 /**
- * One stretch of coverage within a single day, in the tenant's local time,
+ * One stretch of answering within a single day, in the tenant's local time,
  * as minutes after midnight (`endMinute` 1440 means midnight at the end of the day).
- * Overnight coverage is two windows, one on each day.
+ * Overnight hours are two windows, one on each day.
  */
 export type WeeklyWindow = {
     readonly day:         Weekday;
@@ -21,9 +23,11 @@ export type WeeklyWindow = {
     readonly endMinute:   number;
 };
 
-export type ServiceSchedule = {
-    readonly windows: readonly WeeklyWindow[];
-};
+export type ServiceSchedule =
+    | { readonly kind: "always" }
+    | { readonly kind: "windows";
+		readonly windows: readonly WeeklyWindow[]
+	};
 
 /**
  * A moment as the tenant's wall clock shows it.
@@ -41,10 +45,7 @@ export type ScheduleProblem =
 		readonly a: WeeklyWindow;
 		readonly b: WeeklyWindow
 	}
-    | { readonly kind: "too_many_hours";
-		readonly hours: number;
-		readonly allowed: number
-	};
+    | { readonly kind: "empty" };
 
 const MINUTES_PER_DAY = 24 * 60;
 const WEEKDAYS: Record<string, Weekday> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -67,13 +68,21 @@ export const LocalClock = {
 } as const;
 
 export const ServiceSchedule = {
+    always: { kind: "always" } as ServiceSchedule,
+
     weeklyHours(schedule: ServiceSchedule): number {
+        if (schedule.kind === "always") {
+            return 7 * 24;
+        }
         return schedule.windows.reduce(
             (sum, w) => sum + (w.endMinute - w.startMinute), 0
         ) / 60;
     },
 
     isOpen(schedule: ServiceSchedule, clock: LocalClock): boolean {
+        if (schedule.kind === "always") {
+            return true;
+        }
         return schedule.windows.some(
             w => w.day === clock.day
                 && clock.minute >= w.startMinute
@@ -82,10 +91,13 @@ export const ServiceSchedule = {
     },
 
     /**
-     * Minutes until coverage ends, or null if it is not open now.
+     * Minutes until coverage ends (Infinity when always open), or null if it is not open now.
      * Back-to-back windows (Monday until midnight, Tuesday from midnight) count as one.
      */
     minutesLeft(schedule: ServiceSchedule, clock: LocalClock): number | null {
+        if (schedule.kind === "always") {
+            return Number.POSITIVE_INFINITY;
+        }
         let day = clock.day;
         let minute = clock.minute;
         let total = 0;
@@ -110,8 +122,14 @@ export const ServiceSchedule = {
         return total;
     },
 
-    validate(schedule: ServiceSchedule, allowedHours: number): Result<ServiceSchedule, ScheduleProblem[]> {
+    validate(schedule: ServiceSchedule): Result<ServiceSchedule, ScheduleProblem[]> {
+        if (schedule.kind === "always") {
+            return Result.ok(schedule);
+        }
         const problems: ScheduleProblem[] = [];
+        if (schedule.windows.length === 0) {
+            problems.push({ kind: "empty" });
+        }
         for (const w of schedule.windows) {
             if (
                 !Number.isInteger(w.startMinute)
@@ -132,10 +150,6 @@ export const ServiceSchedule = {
             if (a.day === b.day && b.startMinute < a.endMinute) {
                 problems.push({ kind: "overlap", a, b });
             }
-        }
-        const hours = ServiceSchedule.weeklyHours(schedule);
-        if (hours > allowedHours) {
-            problems.push({ kind: "too_many_hours", hours, allowed: allowedHours });
         }
         return problems.length === 0
             ? Result.ok(schedule)

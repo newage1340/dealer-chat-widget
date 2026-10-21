@@ -59,9 +59,9 @@ export {
     CallFallback,
     CallHandling,
     Coverage,
-    CoverageMode,
     DEFAULT_CALL_FALLBACKS,
     type CallFallbacks,
+    type CallRoute,
 } from "./coverage.ts";
 export {
     type DomainEvent,

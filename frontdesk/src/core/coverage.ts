@@ -1,27 +1,19 @@
 /**
- * How calls reach the assistant, and what happens when it cannot take one.
+ * What happens to a call the assistant cannot take, so no call that reaches us goes unanswered.
  *
- * In every mode the business's own phone service decides which calls come to us,
- * so calls staff answer never pass through Twilio and never cost us anything:
- * - `after_hours`: the business forwards its line to us while it is closed.
- * - `overflow`:    the business forwards calls nobody answered in time (carrier "forward on no answer / busy").
- * - `always`:      every call comes straight to us and the assistant answers immediately.
+ * The business's own phone service decides which calls reach us (forward everything,
+ * forward when nobody picks up, forward while closed, or publish our number);
+ * we never need to know which, because calls staff answer never pass through us at all.
  */
 
 import type { RefusalReason } from "./budget.ts";
+import type { PhoneNumber } from "./channel.ts";
 import type { ValueOf } from "./lang.ts";
-
-export const CoverageMode = {
-    AfterHours: "after_hours",
-    Overflow:   "overflow",
-    Always:     "always",
-} as const;
-export type CoverageMode = ValueOf<typeof CoverageMode>;
 
 /**
  * What a call gets when the assistant cannot take it.
  * `voicemail` is our own: a short greeting, a recording, a transcript emailed to staff (~1.1 cents a minute).
- * `forward` dials the business (~2.2 cents a minute for the whole call, voicemail included).
+ * `forward` dials the business (~2.2 cents a minute for the whole call, their voicemail included).
  * `reject` plays a busy signal and costs nothing.
  */
 export const CallFallback = {
@@ -40,7 +32,7 @@ export type CallFallbacks = {
 };
 
 /**
- * How a call the assistant is not answering was handled, recorded on its session.
+ * How a call was handled, recorded on its session.
  */
 export const CallHandling = {
     Assistant: "assistant",
@@ -55,25 +47,36 @@ export const DEFAULT_CALL_FALLBACKS: CallFallbacks = {
     lineBusy:    "voicemail",
 };
 
+/**
+ * What we know about where a call came from, for deciding whether forwarding is safe.
+ * `forwardedFrom` is the number that forwarded the call to us, when the carrier reports one.
+ */
+export type CallRoute = {
+    readonly forwardTo:     PhoneNumber | null;
+    readonly forwardedFrom: PhoneNumber | null;
+};
+
 export const Coverage = {
     /**
-     * Whether calls may be forwarded back to the business.
-     * In `after_hours` and `overflow` the business forwarded the call to us,
-     * so sending it back would ring an empty phone and bounce straight back.
+     * Whether forwarding this call is possible and cannot loop.
+     * A call some phone already forwarded to us is never sent back out:
+     * it most likely came from the business, whose phone just went unanswered.
      */
-    canForward(mode: CoverageMode): boolean {
-        return mode === "always";
+    canForward(route: CallRoute): boolean {
+        return route.forwardTo !== null
+            && route.forwardedFrom === null;
     },
 
     /**
      * What a refused call actually gets.
      * Blocked callers and tenants with nothing left are rejected (free);
      * once the assistant's allowance is used up, the reserve still pays for voicemail.
+     * A forward that is not possible becomes voicemail.
      */
     fallbackFor(
-        mode: CoverageMode,
         fallbacks: CallFallbacks,
-        reason: RefusalReason
+        reason: RefusalReason,
+        route: CallRoute
     ): CallFallback
     {
         const chosen = (() => {
@@ -85,7 +88,7 @@ export const Coverage = {
                 case "line_busy":      return fallbacks.lineBusy;
             }
         })();
-        return chosen === "forward" && !Coverage.canForward(mode)
+        return chosen === "forward" && !Coverage.canForward(route)
             ? "voicemail"
             : chosen;
     },
