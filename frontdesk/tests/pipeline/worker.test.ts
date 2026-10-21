@@ -84,3 +84,15 @@ describe("Worker", () => {
         expect(await closeSession(h.services, result.session.id, "idle")).toBe(false);
     });
 });
+
+describe("fixed costs", () => {
+    it("charges each tenant's phone numbers once a month", async () => {
+        const h = await harness([plumber()], script);
+        await h.worker.tick();
+        h.clock.now = new Date(h.clock.now.getTime() + 2 * 60_000);
+        await h.worker.tick();
+        const tenant = (await h.store.tenants.byId(TenantId("plumber")))!;
+        // One number (used for both SMS and voice), charged once.
+        expect(await h.store.spend.monthToDate(tenant, h.clock.now)).toBeCloseTo(1.15);
+    });
+});

@@ -44,6 +44,9 @@ export type JobBody =
     | { readonly kind: "cold_followup";
         readonly conversationId: ConversationId;
         readonly afterMessageAt: string
+    }
+    | { readonly kind: "record_fixed_costs";
+        readonly month: string
     };
 
 export type JobKind = JobBody["kind"];

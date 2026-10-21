@@ -10,7 +10,7 @@
         "": { "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0 }
     },
     "twilio": {
-        "": { "sms_segments": 0.0083, "call_seconds": 0.000142 }
+        "": { "sms_segments": 0.0083, "call_seconds": 0.000142, "number_months": 1.15 }
     },
     "twilio-speech": {
         "": { "requests": 0.02 }

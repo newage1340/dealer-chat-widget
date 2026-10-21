@@ -18,6 +18,7 @@ import {
     type LlmRequest,
     type ScriptedReply,
 } from "../../src/providers/index.ts";
+import { loadPrices } from "../../src/server.ts";
 import { openStore, type Store } from "../../src/storage/index.ts";
 
 export type Harness = {
@@ -38,7 +39,7 @@ export async function harness(
     tenants: readonly Tenant[],
     script: (request: LlmRequest) => ScriptedReply | string
 ): Promise<Harness> {
-    const store = await openStore("", null);
+    const store = await openStore("", null, await loadPrices(new URL("../../prices.json", import.meta.url).pathname));
     for (const t of tenants) {
         await store.tenants.save(t);
     }

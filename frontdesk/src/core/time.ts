@@ -16,7 +16,20 @@ export const WEEKDAY_NAMES = [
 ] as const;
 export type WeekdayName = (typeof WEEKDAY_NAMES)[number];
 
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+const MONTH_NAMES = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec"
+] as const;
 
 /**
  * `month` is 1-12; `minuteOfDay` is minutes after local midnight.

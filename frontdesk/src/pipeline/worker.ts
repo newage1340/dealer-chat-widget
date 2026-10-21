@@ -103,6 +103,7 @@ export class Worker {
         if (now.getTime() - this.#lastSweep >= 60_000) {
             this.#lastSweep = now.getTime();
             await sweepIdleSessions(this.#d.services);
+            await this.#scheduleFixedCosts(now);
         }
         let ran = 0;
         for (;;) {
@@ -141,7 +142,45 @@ export class Worker {
             case "transcribe_voicemail": return this.#transcribeVoicemail(tenant, job);
             case "classify_session":     return this.#classify(tenant, job);
             case "deliver_transcript":   return this.#deliverTranscript(tenant, job);
+            case "record_fixed_costs":   return this.#recordFixedCosts(tenant, job);
         }
+    }
+
+    // --- fixed costs ------------------------------------------------------------------
+
+    /**
+     * Once a month per tenant, charge the costs that don't come from usage (their phone numbers)
+     * against their allowance. The dedupe key makes this run once per tenant per month.
+     */
+    async #scheduleFixedCosts(now: Date): Promise<void> {
+        const { store } = this.#d.services;
+        const tenants = await store.tenants.all();
+        await store.jobs.enqueue(tenants.map(t => {
+            const local = LocalTime.of(now, t.timezone);
+            const month = `${local.year}-${String(local.month).padStart(2, "0")}`;
+            return { kind: "record_fixed_costs", month, tenantId: t.id, dedupeKey: `fixed:${t.id}:${month}`, runAt: null };
+        }));
+    }
+
+    async #recordFixedCosts(tenant: Tenant, _job: JobOf<"record_fixed_costs">): Promise<void> {
+        const numbers = new Set(
+            Object.values(tenant.endpoints).flatMap(list => (list ?? []).map(a => a.value))
+        );
+        if (numbers.size === 0) {
+            return;
+        }
+        await this.#d.services.store.usage.record({
+            provider:   "twilio",
+            model:      "",
+            service:    "telephony",
+            purpose:    "turn",
+            occurredAt: this.#d.services.clock(),
+            units:      { number_months: numbers.size },
+            costUsd:    null,
+            latencyMs:  null,
+            tenantId:   tenant.id,
+            channel:    null,
+        });
     }
 
     // --- sending ----------------------------------------------------------------------

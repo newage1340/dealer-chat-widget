@@ -26,6 +26,7 @@ export const UsageUnit = {
     AudioSeconds:      "audio_seconds",
     Characters:        "characters",
     Requests:          "requests",
+    NumberMonths:      "number_months",
 } as const;
 export type UsageUnit = ValueOf<typeof UsageUnit>;
 
