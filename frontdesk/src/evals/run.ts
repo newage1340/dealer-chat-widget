@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
-import { Address, Language, type EventKind, type Inbound } from "../core/index.ts";
+import { Address, Language, type EventKind, type Inbound, type Tenant } from "../core/index.ts";
 import { DomainRegistry } from "../domains/index.ts";
 import { collect, TurnEngine } from "../pipeline/engine.ts";
 import { DEFAULT_POLICIES } from "../pipeline/policies.ts";
@@ -38,6 +38,7 @@ const Scenario = z.strictObject({
     tenant:  z.string().describe("slug of a tenant in the configured database"),
     channel: z.enum(["web", "sms", "voice"]).default("sms"),
     profile: z.strictObject({ firstName: z.string().optional(), phone: z.string().optional() }).default({}),
+    privacy: z.strictObject({ sensitive: z.boolean().optional(), crisisSupport: z.boolean().optional() }).default({}).describe("tenant privacy settings to override for this scenario"),
     turns:   z.array(z.strictObject({ say: z.string(), expect: Expectation.prefault({}) })).min(1),
 });
 type Scenario = z.output<typeof Scenario>;
@@ -66,7 +67,20 @@ export async function loadScenarios(path: string): Promise<Scenario[]> {
 }
 
 export async function runScenario(scenario: Scenario, source: Store, llm: LlmProvider, prices: PriceTable): Promise<EvalResult> {
-    const tenant = await source.tenants.bySlug(scenario.tenant);
+    const stored = await source.tenants.bySlug(scenario.tenant);
+    const tenant: Tenant | null = stored === null
+        ? null
+        : {
+            ...stored,
+            settings: {
+                ...stored.settings,
+                privacy: {
+                    ...stored.settings.privacy,
+                    sensitive:     scenario.privacy.sensitive ?? stored.settings.privacy.sensitive,
+                    crisisSupport: scenario.privacy.crisisSupport ?? stored.settings.privacy.crisisSupport,
+                },
+            },
+        };
     if (tenant === null) {
         return { name: scenario.name, passed: false, failures: [`no tenant '${scenario.tenant}' in the configured database`], log: [], costUsd: 0 };
     }

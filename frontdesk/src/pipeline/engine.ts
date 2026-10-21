@@ -30,7 +30,6 @@ import {
     type Session,
 } from "../core/index.ts";
 import { STRINGS, say } from "../prompts/strings.ts";
-import { Style } from "../prompts/style.ts";
 import {
     ProviderError,
     type ChatMessage,
@@ -271,7 +270,7 @@ export class TurnEngine {
         const extra: EventBody[] = verdict.kind === "closing" && session.meter.closing === null
             ? [{ kind: "session_closing", reason: verdict.reason }]
             : [];
-        if (Style.resolve(tenant, pack).sensitive && Crisis.suspected(inbound.text)) {
+        if (tenant.settings.privacy.crisisSupport && Crisis.suspected(inbound.text)) {
             extra.push({ kind: "handoff_requested", reason: "crisis", note: "A message in this conversation may indicate a safety concern. Please reach out as soon as possible." });
         }
         const capBefore = Budget.capStatus(ctx.costThisMonth, tenant.plan);

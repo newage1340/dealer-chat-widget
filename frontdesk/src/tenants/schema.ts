@@ -123,7 +123,8 @@ export const TenantFile = z.strictObject({
         languages:           z.array(z.enum(LANGUAGES)).min(1).default(LANGUAGES),
         privacy:             z.strictObject({
             redact:    z.array(z.enum(PII_KINDS)).default([...DEFAULT_PRIVACY.redact]),
-            sensitive: z.boolean().default(false),
+            sensitive:     z.boolean().default(false),
+            crisisSupport: z.boolean().default(false),
         }).prefault({}),
         style:               z.strictObject({
             professionalism: z.enum(LEVELS).nullable().default(null),
@@ -250,7 +251,7 @@ export function fromTenant(tenant: Tenant) {
             maxSessionMinutes:   Math.round(s.limits.maxSessionSeconds / 60),
             recordingDisclosure: s.recordingDisclosure.enabled,
             languages:           [...s.languages],
-            privacy:             { redact: [...s.privacy.redact], sensitive: s.privacy.sensitive },
+            privacy:             { redact: [...s.privacy.redact], sensitive: s.privacy.sensitive, crisisSupport: s.privacy.crisisSupport },
             style:               { ...s.style },
             catalog:             { source: { ...s.catalog.source } as CatalogSource, fieldMap: { ...s.catalog.fieldMap } },
         },

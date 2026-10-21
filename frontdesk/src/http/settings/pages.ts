@@ -257,8 +257,9 @@ function privacy(d: TenantPageData): Html {
 ${Object.values(PiiKind).map(k => html`<p>${check(PII_LABELS[k], "redact", s.redact.includes(k), k)}</p>`)}
 </fieldset>
 <p>${check("Confidential business (therapy, medical, legal)", "sensitive", s.sensitive || packSensitive)}${packSensitive ? html` <small>always on for ${d.pack.name}</small>` : ""}</p>
-<p><small>Confidential: the assistant never confirms who is a client, asks only what scheduling needs, gives crisis resources,
+<p><small>Confidential: the assistant never confirms who is a client, asks only what scheduling needs,
 and staff texts and emails leave out what was said.</small></p>
+<p>${check("Crisis support", "crisisSupport", s.crisisSupport)} <small>off by default. When on, messages that suggest self-harm get the 988 crisis line and 911, and staff get an urgent alert. Turn on only if the business wants this.</small></p>
 `));
 }
 

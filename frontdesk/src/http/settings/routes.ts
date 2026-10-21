@@ -298,7 +298,8 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
     edit("privacy", (draft, body) => {
         draft.settings.privacy = {
             redact:    many(body, "redact") as PiiKind[],
-            sensitive: on(body, "sensitive"),
+            sensitive:     on(body, "sensitive"),
+            crisisSupport: on(body, "crisisSupport"),
         };
     });
 

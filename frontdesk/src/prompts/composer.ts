@@ -316,7 +316,7 @@ export class PromptComposer {
     }
 
     #crisis(ctx: TurnContext): string {
-        if (!Crisis.suspected(ctx.inbound.text)) {
+        if (!ctx.tenant.settings.privacy.crisisSupport || !Crisis.suspected(ctx.inbound.text)) {
             return "";
         }
         return "=== SAFETY FIRST (CRITICAL) ===\n"

@@ -25,16 +25,20 @@ export type PiiKind = ValueOf<typeof PiiKind>;
  * and from what the model writes back.
  * `sensitive` is for businesses that owe their clients discretion (therapy, medical, legal):
  * the assistant never confirms who is a client and never repeats personal details,
- * crisis messages get safety resources, and staff texts and emails carry no conversation content.
+ * and staff texts and emails carry no conversation content.
+ * `crisisSupport` (off unless the business turns it on) answers messages that suggest self-harm with
+ * crisis-line guidance and sends staff an urgent alert. It is a liability decision for the business, not a default.
  */
 export type PrivacySettings = {
-    readonly redact:    readonly PiiKind[];
-    readonly sensitive: boolean;
+    readonly redact:        readonly PiiKind[];
+    readonly sensitive:     boolean;
+    readonly crisisSupport: boolean;
 };
 
 export const DEFAULT_PRIVACY: PrivacySettings = {
-    redact:    ["card", "ssn", "bank_account"],
-    sensitive: false,
+    redact:        ["card", "ssn", "bank_account"],
+    sensitive:     false,
+    crisisSupport: false,
 };
 
 const REPLACEMENT: Readonly<Record<PiiKind, string>> = {
@@ -103,7 +107,7 @@ export const Pii = {
 } as const;
 
 /**
- * Words that suggest someone may be in danger, for businesses marked sensitive.
+ * Words that suggest someone may be in danger, for businesses that turn on crisis support.
  * A match adds safety instructions to the turn and alerts staff; it is a prompt, not a diagnosis.
  */
 const CRISIS_RE = /\b(kill(ing)? my ?self|suicid(e|al)|end (it all|my life)|(don'?t|do not|no longer) (\w+ )?want to (live|be alive|be here|wake up)|want(ed)? to die|wish i (was|were) dead|better off dead|hurt(ing)? my ?self|self[- ]harm|overdos(e|ing)|no reason to live|matarme|suicidarme|quitarme la vida|no quiero vivir)\b/i;

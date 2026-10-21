@@ -151,7 +151,7 @@ export const Tenant = {
             settings: {
                 ...stored.settings,
                 languages: s.languages ?? Object.values(Language),
-                privacy:   s.privacy ?? DEFAULT_PRIVACY,
+                privacy:   { ...DEFAULT_PRIVACY, ...s.privacy },
                 style:     s.style ?? { professionalism: null, honestAboutAi: null },
                 catalog:   s.catalog ?? DEFAULT_CATALOG_SETTINGS,
             },

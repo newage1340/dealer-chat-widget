@@ -19,6 +19,7 @@ export type ResolvedStyle = {
     readonly professionalism: Professionalism | null;
     readonly honestAboutAi:   boolean;
     readonly sensitive:       boolean;
+    readonly crisisSupport:   boolean;
 };
 
 const CHAT_STYLE: Readonly<Record<Professionalism, string>> = {
@@ -71,6 +72,7 @@ export const Style = {
             professionalism: tenant.settings.style.professionalism ?? pack.defaults.professionalism,
             honestAboutAi:   tenant.settings.style.honestAboutAi ?? pack.defaults.honestAboutAi,
             sensitive:       tenant.settings.privacy.sensitive || pack.defaults.sensitive,
+            crisisSupport:   tenant.settings.privacy.crisisSupport,
         };
     },
 
@@ -121,8 +123,6 @@ export const Style = {
     and never repeat the details back or put them in a tool call.
 -   Never ask for insurance member IDs, social security numbers, dates of birth or payment details: the office handles those securely.
 -   Never leave or promise messages with personal details; texts we send only say who we are and the appointment time.
--   If someone mentions suicide, self-harm, or being in danger: respond with warmth, tell them to call or text 988 (Suicide & Crisis Lifeline),
-    or 911 if they are in immediate danger, and call \`request_callback\` with the note "urgent: safety concern".
 `;
     },
 

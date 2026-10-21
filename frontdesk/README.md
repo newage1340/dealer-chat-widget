@@ -132,7 +132,7 @@ Everything except `id`, `slug`, `name`, `domain` and `timezone` has a default; s
 | demo-nail-salon | Nail salon | en, vi, es | 30 services (JSON) | walk-ins, group bookings |
 | demo-chinese-restaurant | Chinese restaurant | en, zh | 49 dishes (CSV, POS-style headers) | column mapping, pickup orders with totals |
 | demo-auto-repair | Auto repair, Mexican-owned | en, es (staff summaries in Spanish) | 31 services (CSV) | bilingual catalog, Spanish follow-ups |
-| demo-therapy-practice | Therapy practice | en, es | 15 services (JSON) | confidential mode, formal tone, honest about being virtual, crisis handling |
+| demo-therapy-practice | Therapy practice | en, es | 15 services (JSON) | confidential mode, formal tone, honest about being virtual |
 | demo-boxing-gym | Boxing gym | en, es | 26 classes and memberships (CSV) | casual tone, waivers, minors |
 | demo-computer-repair | Computer and phone repair | en only | 32 services and refurbished devices (JSON) | single-language business, no passwords in chat |
 | demo-esl-tutor | ESL for Spanish speakers | es first, en | 20 classes (JSON) | Spanish as the main language |
@@ -175,8 +175,9 @@ and the same `search_catalog` tool. Adding another source (Square, Shopify, an M
 - **Tone.** `settings.style.professionalism` (casual, friendly, polished, formal) and `honestAboutAi`; each defaults to the domain pack's value.
 - **Privacy.** `settings.privacy.redact` scrubs card numbers, SSNs, bank account numbers and birth dates from what customers
   write, before the model sees it or anything is stored. `sensitive` adds confidentiality rules (never confirm who is a client,
-  only collect what scheduling needs). Staff texts and transcript emails then carry no conversation content, and any
-  crisis message gets 988 guidance and an urgent staff alert.
+  only collect what scheduling needs). Staff texts and transcript emails then carry no conversation content.
+  `crisisSupport` is **off by default**: when a business turns it on, messages that suggest self-harm get 988/911
+  guidance and staff get an urgent alert. When it's off, nothing in the prompts mentions crisis handling.
 
 ## Admin API
 

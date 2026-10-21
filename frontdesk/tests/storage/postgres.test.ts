@@ -13,7 +13,8 @@ import {
 import { openStore, type Store } from "../../src/storage/index.ts";
 import { CUSTOMER, PLUMBER_NUMBER, plumber } from "../support/fixtures.ts";
 
-const T0 = new Date("2026-10-21T15:00:00Z");
+// activeCalls compares with the database clock, so tests start near the real time.
+const T0 = new Date(Math.floor(Date.now() / 60_000) * 60_000 - 60_000);
 const DEFAULTS = { language: "en" as const, smsIdleMs: 2 * 3600_000 };
 const caller = Address.phone(CUSTOMER)!;
 

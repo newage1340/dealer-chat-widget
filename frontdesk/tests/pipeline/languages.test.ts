@@ -54,8 +54,21 @@ describe("privacy", () => {
         expect(history.map(m => m.text).join(" ")).not.toContain("4111");
     });
 
-    it("alerts staff to a possible crisis at a sensitive business, with safety instructions for the model", async () => {
+    it("does nothing special with a crisis message unless the business turns crisis support on", async () => {
         const h = await harness([tenant({ id: "t", slug: "therapy", domain: "therapy_practice", endpoints: { sms: ["+13175550200"] } })], script);
+        await h.turn({ text: "honestly I don't want to live anymore" });
+        const jobs = await h.store.jobs.claim(50, 60_000, h.clock.now);
+        expect(jobs.some(j => j.kind === "notify_staff" && j.subject.startsWith("URGENT"))).toBe(false);
+        const system = h.llm.requests.at(-1)!.messages.slice(0, 2).map(m => "text" in m ? m.text : "").join("\n");
+        expect(system).not.toContain("988");
+        expect(system).toContain("PRIVACY & CONFIDENTIALITY");
+    });
+
+    it("with crisis support on, alerts staff and gives the model safety instructions", async () => {
+        const h = await harness([tenant({
+            id: "t", slug: "therapy", domain: "therapy_practice", endpoints: { sms: ["+13175550200"] },
+            settings: { privacy: { crisisSupport: true } },
+        })], script);
         await h.turn({ text: "honestly I don't want to live anymore" });
         const jobs = await h.store.jobs.claim(50, 60_000, h.clock.now);
         const alert = jobs.find(j => j.kind === "notify_staff" && j.subject.startsWith("URGENT"));

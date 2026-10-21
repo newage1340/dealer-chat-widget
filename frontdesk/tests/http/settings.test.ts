@@ -75,7 +75,7 @@ describe("settings pages", () => {
         await post("/settings/demo-plumber/privacy", { redact: ["card", "birth_date"], sensitive: "on" });
         const saved = (await app.store.tenants.bySlug("demo-plumber"))!;
         expect(saved.settings.style).toEqual({ professionalism: "formal", honestAboutAi: true });
-        expect(saved.settings.privacy).toEqual({ redact: ["card", "birth_date"], sensitive: true });
+        expect(saved.settings.privacy).toEqual({ redact: ["card", "birth_date"], sensitive: true, crisisSupport: false });
         expect(saved.settings.limits.maxSessionSeconds).toBe(20 * 60);
 
         const bad = await post("/settings/demo-plumber/business", { name: "X", domain: "plumbing", timezone: "Mars/Olympus", hoursText: "" });
