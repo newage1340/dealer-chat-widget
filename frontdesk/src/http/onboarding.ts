@@ -223,7 +223,7 @@ ${form("/onboarding", html`
 <input type="hidden" name="type" value="${pack.id}">
 ${d.needCode ? field(required("Invite code", true), input("inviteCode", value("inviteCode"))) : ""}
 <fieldset>
-<legend>About your business</legend>
+<legend><strong>About your business</strong></legend>
 ${field(required("Business name", true), input("name", value("name")))}
 ${field(required("Main phone", true), input("phone", value("phone"), "tel"))}
 ${field("Address", input("address", value("address")))}
@@ -232,7 +232,7 @@ ${field("Time zone", select("timezone", TIME_ZONES, value("timezone", DEFAULT_TI
 ${field(required("Email for summaries and alerts", true), input("email", value("email"), "email"), "where we send conversation summaries and alerts")}
 </fieldset>
 <fieldset>
-<legend>Hours</legend>
+<legend><strong>Hours</strong></legend>
 <table>
 <thead><tr><th>Day</th><th>Closed</th><th>Opens</th><th>Closes</th><th>By appointment only</th></tr></thead>
 <tbody>
@@ -244,22 +244,22 @@ ${DAYS.map(day => {
 </table>
 </fieldset>
 ${questions.length > 0 ? html`<fieldset>
-<legend>About your ${pack.businessNoun}</legend>
+<legend><strong>About your ${pack.businessNoun}</strong></legend>
 ${questions.map(q => field(required(q.label, q.required), textarea(`profile.${q.key}`, value(`profile.${q.key}`), 3), q.question))}
 </fieldset>` : ""}
 <fieldset>
-<legend>How the assistant should sound</legend>
+<legend><strong>How the assistant should sound</strong></legend>
 ${field("How formal", select("professionalism", levels, value("professionalism")))}
 ${field("Assistant's name", input("agentName", value("agentName")), `optional; blank: ${pack.defaultAgentName}`)}
 </fieldset>
 <fieldset>
-<legend>Languages offered</legend>
+<legend><strong>Languages offered</strong></legend>
 <p>English is always offered.</p>
 ${LANGUAGE_OPTIONS.filter(([code]) => code !== "en").map(([code, name]) => html`<p>${check(name, "languages", offered.includes(code), code)}</p>`)}
 ${field("Main language", select("defaultLanguage", LANGUAGE_OPTIONS, value("defaultLanguage", "en")), "used with new customers")}
 </fieldset>
 <fieldset>
-<legend>Your ${spec.itemNounPlural}</legend>
+<legend><strong>Your ${spec.itemNounPlural}</strong></legend>
 <p>Optional. Paste a list, or give us a link we can check for updates. You can also send it later.</p>
 <p><small>Columns we understand: ${spec.fields.map(f => `${f.name} (${f.label || f.name})`).join(", ")}</small></p>
 ${field(`Paste your ${spec.itemNounPlural}`, textarea("catalogRows", value("catalogRows"), 8), "CSV with a header row, or a JSON list")}
@@ -268,7 +268,7 @@ ${field("Or a link", input("catalogUrl", value("catalogUrl"), "url"))}
 <label><input type="radio" name="catalogLink" value="json_url"${raw(link === "json_url" ? " checked" : "")}> JSON link</label></p>
 </fieldset>
 <fieldset>
-<legend>Anything else the assistant should know</legend>
+<legend><strong>Anything else the assistant should know</strong></legend>
 ${field(required(notes?.label ?? "Notes", notes?.required ?? false), textarea("notes", value("notes"), 5), notes?.question ?? "payment methods, things you don't do, anything customers often ask")}
 </fieldset>
 `, "Send")}

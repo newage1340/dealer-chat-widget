@@ -119,3 +119,19 @@ describe("quality page", () => {
         expect(html).not.toMatch(/style=|class=|<script/);
     });
 });
+
+describe("sign-in cookie", () => {
+    it("works on http://localhost even when the public URL is https, and is Secure behind an https tunnel", async () => {
+        const store = await openStore("", null);
+        await store.tenants.save(plumber());
+        const tunnelled = await buildApp({ ...CONFIG, publicBaseUrl: "https://example.trycloudflare.com" }, { store, llm: new FakeLlm(() => "ok"), messaging: new LoggingMessaging(), email: new LoggingEmail(), transcriber: null, fetchRecording: null });
+        const local = await tunnelled.http.request("http://localhost/settings/login", { method: "POST", body: new URLSearchParams({ token: "admin" }) });
+        const localCookie = local.headers.get("set-cookie") ?? "";
+        expect(localCookie).not.toMatch(/Secure/i);
+        const page = await tunnelled.http.request("http://localhost/settings", { headers: { Cookie: localCookie.split(";")[0]! } });
+        expect(page.status).toBe(200);
+
+        const viaTunnel = await tunnelled.http.request("http://localhost/settings/login", { method: "POST", body: new URLSearchParams({ token: "admin" }), headers: { "X-Forwarded-Proto": "https" } });
+        expect(viaTunnel.headers.get("set-cookie")).toMatch(/Secure/i);
+    });
+});

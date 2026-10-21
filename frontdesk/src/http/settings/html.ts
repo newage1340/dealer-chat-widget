@@ -62,8 +62,14 @@ ${body.html}
 
 // --- form controls ---------------------------------------------------------------------
 
+/**
+ * A labelled control. Labels are bold; text boxes start on the line below their label, with the help text to their right.
+ */
 export function field(label: string, control: Html, help = ""): Html {
-    return html`<p><label>${label} ${control}</label>${help ? html` <small>${help}</small>` : ""}</p>\n`;
+    if (control.html.startsWith("<textarea")) {
+        return html`<p><label><strong>${label}</strong><br>${control}</label>${help ? html` <small>${help}</small>` : ""}</p>\n`;
+    }
+    return html`<p><label><strong>${label}</strong> ${control}</label>${help ? html` <small>${help}</small>` : ""}</p>\n`;
 }
 
 export function input(name: string, value: string | number | null | undefined, type = "text", extra = ""): Html {

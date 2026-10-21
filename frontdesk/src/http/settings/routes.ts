@@ -152,7 +152,10 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
         if (!config.adminToken || given !== token) {
             return c.html(loginPage("That token isn't right."), 401);
         }
-        setCookie(c, COOKIE, token, { httpOnly: true, sameSite: "Lax", path: "/settings", secure: config.publicBaseUrl.startsWith("https://"), maxAge: 7 * 24 * 3600 });
+        // Secure only when this request came over https (directly or through a tunnel/proxy): a Secure cookie
+        // set on http://localhost is dropped by the browser, which made sign-in loop back to this page.
+        const https = new URL(c.req.url).protocol === "https:" || c.req.header("x-forwarded-proto") === "https";
+        setCookie(c, COOKIE, token, { httpOnly: true, sameSite: "Lax", path: "/settings", secure: https, maxAge: 7 * 24 * 3600 });
         return c.redirect("/settings", 303);
     });
 

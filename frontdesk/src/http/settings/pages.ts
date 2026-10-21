@@ -312,7 +312,7 @@ ${field("How formal", select("professionalism", levels, s.style.professionalism 
 ${field("If asked whether it's an AI", select("honestAboutAi", honesty, s.style.honestAboutAi === null ? "" : s.style.honestAboutAi ? "yes" : "no"))}
 ${field("Longest conversation (minutes)", bounded("maxSessionMinutes", Math.round(s.limits.maxSessionSeconds / 60), PLATFORM_BOUNDS.maxSessionMinutes), "the assistant starts wrapping up politely three replies before this")}
 <fieldset>
-<legend>Calls</legend>
+<legend><strong>Calls</strong></legend>
 ${field("Wait for the caller to speak (seconds)", bounded("silenceSeconds", s.calls.silenceSeconds, PLATFORM_BOUNDS.silenceSeconds))}
 ${field("\"Are you still there?\" prompts before hanging up", bounded("stillTherePrompts", s.calls.stillTherePrompts, PLATFORM_BOUNDS.stillTherePrompts))}
 ${field("Calls with hidden caller ID", select("hiddenCallerId", [["assistant", "Answer normally"], ["voicemail", "Send to voicemail"], ["reject", "Don't answer"]], s.calls.hiddenCallerId), "robocalls usually hide their number")}
@@ -328,7 +328,7 @@ function privacy(d: TenantPageData): Html {
     const packSensitive = d.pack.defaults.sensitive;
     return section("privacy", "Privacy", form(action(d, "privacy"), html`
 <fieldset>
-<legend>Remove from what customers write (before the assistant sees it or anything is saved)</legend>
+<legend><strong>Remove from what customers write (before the assistant sees it or anything is saved)</strong></legend>
 ${Object.values(PiiKind).map(k => html`<p>${check(PII_LABELS[k], "redact", s.redact.includes(k), k)}</p>`)}
 </fieldset>
 <p>${check("Confidential business (therapy, medical, legal)", "sensitive", s.sensitive || packSensitive)}${packSensitive ? html` <small>always on for ${d.pack.name}</small>` : ""}</p>
@@ -345,7 +345,7 @@ ${form(action(d, "languages"), html`
 ${field("Main language", select("defaultLanguage", LANGUAGE_OPTIONS, t.defaultLanguage), "used with new customers")}
 ${field("Language for your summaries and alerts", select("staffLanguage", LANGUAGE_OPTIONS, t.staffLanguage))}
 <fieldset>
-<legend>Languages the assistant offers</legend>
+<legend><strong>Languages the assistant offers</strong></legend>
 ${LANGUAGE_OPTIONS.map(([code, name]) => html`<p>${check(name, "languages", t.settings.languages.includes(code) || code === t.defaultLanguage, code)}</p>`)}
 </fieldset>
 `)}
