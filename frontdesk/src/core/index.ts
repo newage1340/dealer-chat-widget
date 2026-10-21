@@ -102,6 +102,7 @@ export {
     type Variant,
 } from "./lang.ts";
 export {
+    LANGUAGE_NAMES,
     Language,
     LanguageTag,
     LocalizedText,

@@ -41,6 +41,16 @@ export const PhoneNumber = {
         }
         return null;
     },
+
+    /**
+     * "+13175550142" -> "(317) 555-0142"; other numbers unchanged.
+     */
+    display(phone: PhoneNumber | string): string {
+        const digits = phone.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+        return digits.length === 10
+            ? `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+            : phone;
+    },
 } as const;
 
 /**

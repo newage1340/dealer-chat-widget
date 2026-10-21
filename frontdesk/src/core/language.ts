@@ -30,6 +30,23 @@ export type Language = ValueOf<typeof Language>;
 const TAGS: ReadonlySet<string> = new Set(Object.values(Language));
 
 /**
+ * English names, for prompts and staff-facing text.
+ */
+export const LANGUAGE_NAMES: Readonly<Record<Language, string>> = {
+    en: "English",
+    es: "Spanish",
+    zh: "Mandarin Chinese",
+    vi: "Vietnamese",
+    tl: "Tagalog",
+    ar: "Arabic",
+    ko: "Korean",
+    ru: "Russian",
+    fr: "French",
+    ht: "Haitian Creole",
+    pt: "Portuguese",
+};
+
+/**
  * Text with an English original and optional translations.
  */
 export type LocalizedText = { readonly en: string } & Readonly<Partial<Record<Language, string>>>;

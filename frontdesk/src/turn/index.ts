@@ -5,5 +5,5 @@
 export { type TurnContext, } from "./context.ts";
 export { TurnOutcome, type TurnPart, } from "./outcome.ts";
 export { PolicyDecision, type Policy, } from "./policy.ts";
-export { Subscriber, } from "./subscriber.ts";
+export { Subscriber, type SubscriberContext, } from "./subscriber.ts";
 export { Tool, ToolResult, } from "./tool.ts";

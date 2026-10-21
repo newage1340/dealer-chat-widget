@@ -12,7 +12,7 @@
 # Write literal curly braces as {{ and }}.
 #
 # Do NOT restate universal rules here (persona honesty, one question per message, no URLs,
-# booking steps, META_JSON, call tokens, hours handling). The base prompts already cover them.
+# booking steps, tools, ending calls, hours handling). The base prompts already cover them.
 # Only write what is specific to this kind of business.
 
 [domain]
@@ -84,7 +84,7 @@ label = "Typical length"
 [booking]
 visit_noun       = "appointment"     # "visit", "service call", "appointment"
 subject_label    = "Service"         # label in staff alerts
-subject_hint     = "service name"    # what goes in META_JSON "subject"
+subject_hint     = "service name"    # what the booking's "subject" should be
 general_subject  = "consultation"    # subject when nothing specific was chosen
 location         = "business"        # "business" (they come in) or "customer" (we go to them)
 skip_intake_when = ""                # optional: when the intake questions don't apply

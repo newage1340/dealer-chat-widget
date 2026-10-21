@@ -18,9 +18,11 @@ import type { TurnContext } from "./context.ts";
  * `directive` asks the call to transfer or end once the reply has been spoken; null leaves it alone.
  * `assessment` and `language` let a tool report on the turn (flag_conversation, switch_language);
  * null leaves them alone.
+ * `failed` results always go back to the model, so it can fix the problem or tell the customer.
  */
 export type ToolResult = {
     readonly output:         unknown;
+    readonly failed:         boolean;
     readonly events:         readonly EventBody[];
     readonly contactChanges: ContactChanges;
     readonly sentUrls:       readonly string[];
@@ -29,10 +31,15 @@ export type ToolResult = {
     readonly language:       Language | null;
 };
 
+/**
+ * `followUp` tools return information the model needs before it can reply (a search, a booking check),
+ * so the model is called again with the result. Other tools just record something.
+ */
 export interface Tool<Schema extends z.ZodType = z.ZodType> {
     readonly name:        string;
     readonly description: string;
     readonly parameters:  Schema;
+    readonly followUp:    boolean;
     run(args: z.output<Schema>, ctx: TurnContext): ToolResult | Promise<ToolResult>;
 }
 
@@ -46,9 +53,10 @@ export const Tool = {
 } as const;
 
 export const ToolResult = {
-    output(output: unknown, extra: Partial<Omit<ToolResult, "output">> = {}): ToolResult {
+    output(output: unknown, extra: Partial<Omit<ToolResult, "output" | "failed">> = {}): ToolResult {
         return {
             output,
+            failed:         false,
             events:         extra.events ?? [],
             contactChanges: extra.contactChanges ?? {},
             sentUrls:       extra.sentUrls ?? [],
@@ -56,5 +64,12 @@ export const ToolResult = {
             assessment:     extra.assessment ?? null,
             language:       extra.language ?? null,
         };
+    },
+
+    /**
+     * A failure the model should see and act on (e.g. "that day is closed").
+     */
+    error(message: string): ToolResult {
+        return { ...ToolResult.output({ error: message }), failed: true };
     },
 } as const;

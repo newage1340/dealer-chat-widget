@@ -37,11 +37,13 @@ export type JobBody =
     | { readonly kind: "deliver_transcript";
         readonly sessionId: SessionId
     }
-    | { readonly kind: "send_reminder";
+    | { readonly kind: "send_followup";
+        readonly followup: "confirm" | "reminder";
         readonly appointmentId: AppointmentId
     }
     | { readonly kind: "cold_followup";
-        readonly conversationId: ConversationId
+        readonly conversationId: ConversationId;
+        readonly afterMessageAt: string
     };
 
 export type JobKind = JobBody["kind"];

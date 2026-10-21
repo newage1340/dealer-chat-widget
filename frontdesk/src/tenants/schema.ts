@@ -81,6 +81,7 @@ export const TenantFile = z.strictObject({
     defaultLanguage: z.enum(LANGUAGES).default("en"),
     staffLanguage:   z.enum(LANGUAGES).default("en"),
     profile:         z.record(z.string(), z.string()).default({}),
+    options:         z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
     plan:            z.strictObject({
         extraLines:       z.number().int().min(0).default(0),
         smsNotifications: z.boolean().default(false),
@@ -149,6 +150,7 @@ export function toTenant(file: z.output<typeof TenantFile>): Tenant {
         defaultLanguage: file.defaultLanguage,
         staffLanguage:   file.staffLanguage,
         profile:         file.profile,
+        options:         file.options,
         plan:            { pricing: DEFAULT_PRICING, subscription: file.plan },
         schedule:        file.schedule === "always"
             ? ServiceSchedule.always

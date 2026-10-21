@@ -9,6 +9,7 @@ describe("Tool.define", () => {
             name:        "echo",
             description: "Repeat a phrase.",
             parameters:  z.object({ phrase: z.string(), times: z.number().int() }),
+            followUp:    false,
             run:         args => ToolResult.output(args.phrase.repeat(args.times)),
         });
         const args = echo.parameters.parse({ phrase: "ab", times: 2 });

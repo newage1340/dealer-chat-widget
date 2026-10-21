@@ -79,6 +79,8 @@ export type TenantSettings = {
  * `domain` names the domain pack that supplies business-type behavior.
  * `profile` holds the tenant's answers to that domain's questions
  * (e.g. "do you offer financing?"); its keys are defined by the pack, not by core.
+ * `options` are the pack's per-tenant switches and values (e.g. `fee_phrase`, `free_estimates`),
+ * used by `{setting_<key>}` placeholders and prompt toggles.
  * `agentName` / `voiceAgentName` override the pack's default persona names when set.
  * `defaultLanguage` greets callers the system knows nothing about;
  * customers can switch to any supported language by asking, or just by speaking it.
@@ -104,6 +106,7 @@ export type Tenant = {
     readonly defaultLanguage: Language;
     readonly staffLanguage:   Language;
     readonly profile:         Readonly<Record<string, string>>;
+    readonly options:         Readonly<Record<string, string | number | boolean>>;
     readonly plan:            Plan;
     readonly schedule:        ServiceSchedule;
     readonly settings:        TenantSettings;
