@@ -190,9 +190,12 @@ export const Hours = {
         const state = Hours.isOpenNow(hours, now);
         const today = hours[LocalTime.weekdayName(now)];
         const next = Hours.nextOpenDay(hours, now);
-        const nextPhrase = next !== null
-            ? `${next.label} (${next.hours.text})`
-            : "the next day we're open";
+        const laterToday = today !== undefined && today.opens !== null && now.minuteOfDay < today.opens;
+        const nextPhrase = laterToday
+            ? `later today (${today.text})`
+            : next !== null
+                ? `${next.label} (${next.hours.text})`
+                : "the next day we're open";
         if (state === true) {
             return `OPEN/CLOSED RIGHT NOW: OPEN (today's hours: ${today?.text ?? "unknown"}). If asked whether we're open, say yes.`;
         }

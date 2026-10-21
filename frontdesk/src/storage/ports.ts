@@ -70,7 +70,8 @@ export interface ConversationStore {
      */
     closeSession(id: SessionId, at: Date): Promise<Session | null>;
     /**
-     * Open web and SMS sessions with no activity since `before`, for the idle sweep.
+     * Open web and SMS sessions with no activity since `before` (and calls that never reported an end
+     * for 90 minutes beyond that), for the idle sweep.
      */
     idleSessions(before: Date, limit: number): Promise<readonly Session[]>;
     /**

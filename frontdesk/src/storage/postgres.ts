@@ -36,6 +36,7 @@ import {
     type UsageRecord,
     type Voicemail,
 } from "../core/index.ts";
+import { PriceTable } from "../providers/usage.ts";
 import type { Db, Row } from "./db.ts";
 import type {
     AppointmentStore,
@@ -233,9 +234,14 @@ export class PostgresStore implements Store {
     readonly spend:         SpendLedger;
     readonly blocks:        BlockStore;
     readonly #db: Db;
+    readonly #prices: PriceTable;
 
-    constructor(db: Db) {
+    /**
+     * `prices` estimates the cost of usage records that arrive without one (texts, calls, transcription).
+     */
+    constructor(db: Db, prices: PriceTable = {}) {
         this.#db = db;
+        this.#prices = prices;
         this.tenants       = this.#tenants();
         this.conversations = this.#conversations();
         this.appointments  = this.#appointments();
@@ -446,8 +452,10 @@ export class PostgresStore implements Store {
             },
 
             idleSessions: async (before, limit) => (await db.query(
-                `select * from sessions where ended_at is null and channel in ('web', 'sms') and last_activity_at < $1
-                 order by last_activity_at limit $2`,
+                `select * from sessions where ended_at is null and (
+                     (channel in ('web', 'sms') and last_activity_at < $1)
+                     or (channel = 'voice' and last_activity_at < $1::timestamptz - interval '90 minutes')
+                 ) order by last_activity_at limit $2`,
                 [before, limit],
             )).map(toSession),
 
@@ -683,7 +691,10 @@ export class PostgresStore implements Store {
         };
     }
 
-    async #recordUsage(u: UsageRecord): Promise<void> {
+    async #recordUsage(record: UsageRecord): Promise<void> {
+        const u = record.costUsd === null
+            ? { ...record, costUsd: PriceTable.estimate(this.#prices, record) }
+            : record;
         await this.#db.query(
             `insert into usage (provider, model, service, purpose, occurred_at, units, cost_usd, latency_ms, tenant_id, channel)
              values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)`,

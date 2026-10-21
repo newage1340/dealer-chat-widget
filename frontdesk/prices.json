@@ -1,0 +1,33 @@
+{
+    "_comment": "USD per single unit, by provider then model (\"\" = any model). List prices at time of writing - verify against current vendor pricing before relying on the monthly cap. Self-hosted providers can carry an amortized cost so they compare fairly.",
+    "openai": {
+        "gpt-4o-mini":  { "input_tokens": 0.00000015, "cached_input_tokens": 0.000000075, "output_tokens": 0.0000006 },
+        "gpt-4o":       { "input_tokens": 0.0000025, "cached_input_tokens": 0.00000125, "output_tokens": 0.00001 },
+        "gpt-4.1-mini": { "input_tokens": 0.0000004, "cached_input_tokens": 0.0000001, "output_tokens": 0.0000016 },
+        "gpt-4.1-nano": { "input_tokens": 0.0000001, "cached_input_tokens": 0.000000025, "output_tokens": 0.0000004 }
+    },
+    "local": {
+        "": { "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0 }
+    },
+    "twilio": {
+        "": { "sms_segments": 0.0083, "call_seconds": 0.000142 }
+    },
+    "twilio-speech": {
+        "": { "requests": 0.02 }
+    },
+    "deepgram": {
+        "": { "audio_seconds": 0.000128 }
+    },
+    "resend": {
+        "": { "requests": 0.0004 }
+    },
+    "vapi": {
+        "": { "call_seconds": 0 }
+    },
+    "log-messaging": {
+        "": { "sms_segments": 0 }
+    },
+    "log-email": {
+        "": { "requests": 0 }
+    }
+}

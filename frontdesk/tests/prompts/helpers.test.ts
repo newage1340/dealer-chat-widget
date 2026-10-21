@@ -81,3 +81,12 @@ describe("Speech", () => {
         expect(Speech.spokenDigits("+13175550100")).toBe("3 1 7, 5 5 5, 0 1 0 0");
     });
 });
+
+describe("Hours.openStatusLine", () => {
+    it("points to later today before opening time, not tomorrow", () => {
+        const early = LocalTime.of(new Date("2026-10-21T06:00:00Z"), TZ);  // 2am Wednesday
+        expect(Hours.openStatusLine("Mon-Fri 7am-6pm", early)).toContain("later today (7am to 6pm)");
+        const late = LocalTime.of(new Date("2026-10-21T23:30:00Z"), TZ);   // 7:30pm Wednesday
+        expect(Hours.openStatusLine("Mon-Fri 7am-6pm", late)).toContain("tomorrow (7am to 6pm)");
+    });
+});

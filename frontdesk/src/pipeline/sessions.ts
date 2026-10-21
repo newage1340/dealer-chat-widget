@@ -58,7 +58,7 @@ export async function closeSession(
 }
 
 /**
- * Close web and SMS sessions that have gone quiet.
+ * Close web and SMS sessions that have gone quiet, and calls whose end was never reported.
  */
 export async function sweepIdleSessions(services: Services): Promise<number> {
     const now = services.clock();

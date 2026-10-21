@@ -126,9 +126,9 @@ export class PromptComposer {
         const customerSite = b.location === "customer";
         let steps: string;
         if (voice) {
-            steps = intake.map((f, i) => `  b${i + 1}. ${f.label}: ${f.ask}`).join("\n");
+            steps = intake.map((f, i) => `b${i + 1}. ${f.label}: ${f.ask}`).join("\n        ");
             if (b.skipIntakeWhen) {
-                steps += `\n  (Skip the b-steps when ${b.skipIntakeWhen}.)`;
+                steps += `\n        (Skip the b-steps when ${b.skipIntakeWhen}.)`;
             }
         } else if (intake.length > 0) {
             steps = intake.map(f => `-   ${f.label}: ${f.ask}`).join("\n");

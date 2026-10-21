@@ -9,7 +9,7 @@ export interface UsageSink {
 }
 
 /**
- * List prices in USD per unit, keyed by provider then model.
+ * List prices in USD per unit, keyed by provider then model ("" matches any model of that provider).
  */
 export type PriceTable = Readonly<Record<string, Readonly<Record<string, Readonly<Partial<Record<UsageUnit, number>>>>>>>;
 
@@ -18,7 +18,7 @@ export const PriceTable = {
      * Estimated cost of a usage record, or null if any of its units has no price.
      */
     estimate(table: PriceTable, usage: UsageRecord): number | null {
-        const prices = table[usage.provider]?.[usage.model];
+        const prices = table[usage.provider]?.[usage.model] ?? table[usage.provider]?.[""];
         if (prices === undefined) {
             return null;
         }
