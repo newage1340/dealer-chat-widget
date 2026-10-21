@@ -10,8 +10,11 @@ export {
     type NewMessage,
     type Participants,
     type SessionKey,
+    type SpendLedger,
     type Store,
     type TenantDirectory,
+    type TranscriptQuery,
+    type TranscriptStore,
     type TurnCommit,
     type TurnLog,
 } from "./ports.ts";

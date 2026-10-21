@@ -3,7 +3,10 @@
  */
 
 import type { Address, Channel, PhoneNumber } from "./channel.ts";
+import type { Limits } from "./budget.ts";
 import type { DomainId, TenantId } from "./ids.ts";
+import type { ValueOf } from "./lang.ts";
+import type { Language } from "./language.ts";
 
 export type Branding = {
     readonly color:   string;
@@ -21,14 +24,43 @@ export type TenantLink = {
 };
 
 /**
+ * Things staff are told about.
+ */
+export const StaffNotice = {
+    Transcript:  "transcript",
+    Booking:     "booking",
+    Handoff:     "handoff",
+    BudgetAlert: "budget_alert",
+} as const;
+export type StaffNotice = ValueOf<typeof StaffNotice>;
+
+export const NotifyVia = {
+    Email: "email",
+    Sms:   "sms",
+} as const;
+export type NotifyVia = ValueOf<typeof NotifyVia>;
+
+/**
+ * Paid add-ons. Settings may ask for a feature the plan does not include;
+ * the plan wins (e.g. SMS notices fall back to email).
+ */
+export type Plan = {
+    readonly smsNotifications: boolean;
+};
+
+/**
  * Options every tenant can set, regardless of domain.
  * `coldFollowupMinutes` null means the tenant does not send cold follow-ups.
+ * `notifications` lists, per notice, how staff want to receive it (email by default).
+ * `limits` are the tenant's budgets, with system defaults already applied.
  */
 export type TenantSettings = {
     readonly skipProfileGate:     boolean;
     readonly transferTo:          PhoneNumber | null;
     readonly coldFollowupMinutes: number | null;
     readonly links:               readonly TenantLink[];
+    readonly notifications:       Readonly<Record<StaffNotice, readonly NotifyVia[]>>;
+    readonly limits:              Limits;
 };
 
 /**
@@ -37,6 +69,8 @@ export type TenantSettings = {
  * `profile` holds the tenant's answers to that domain's questions
  * (e.g. "do you offer financing?"); its keys are defined by the pack, not by core.
  * `agentName` / `voiceAgentName` override the pack's default persona names when set.
+ * `languages` are the languages the assistant may converse in, the first being the default;
+ * `staffLanguage` is the language transcript gists and staff notices are written in.
  */
 export type Tenant = {
     readonly id:             TenantId;
@@ -53,7 +87,10 @@ export type Tenant = {
     readonly staffContacts:  readonly Address[];
     readonly branding:       Branding;
     readonly hoursText:      string;
+    readonly languages:      readonly [Language, ...Language[]];
+    readonly staffLanguage:  Language;
     readonly profile:        Readonly<Record<string, string>>;
+    readonly plan:           Plan;
     readonly settings:       TenantSettings;
 };
 
@@ -63,6 +100,22 @@ export const Tenant = {
      */
     endpoint(tenant: Tenant, channel: Channel): Address | null {
         return tenant.endpoints[channel]?.[0] ?? null;
+    },
+
+    /**
+     * How staff receive a notice, after the plan is applied.
+     */
+    notifyVia(tenant: Tenant, notice: StaffNotice): readonly NotifyVia[] {
+        const allowed = tenant.settings.notifications[notice].filter(
+            via => via !== "sms" || tenant.plan.smsNotifications
+        );
+        return allowed.length > 0
+            ? allowed
+            : ["email"];
+    },
+
+    speaks(tenant: Tenant, language: Language): boolean {
+        return tenant.languages.includes(language);
     },
 
     staffPhones(tenant: Tenant): PhoneNumber[] {

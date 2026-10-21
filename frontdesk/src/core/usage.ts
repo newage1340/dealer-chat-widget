@@ -13,6 +13,7 @@ export const ServiceKind = {
     Messaging:          "messaging",
     Telephony:          "telephony",
     VoiceOrchestration: "voice_orchestration",
+    Email:              "email",
 } as const;
 export type ServiceKind = ValueOf<typeof ServiceKind>;
 
@@ -33,12 +34,13 @@ export type UsageUnit = ValueOf<typeof UsageUnit>;
  */
 export const Purpose = {
     Turn:                "turn",
-    CallSummary:         "call_summary",
     BookingConfirmation: "booking_confirmation",
     StaffAlert:          "staff_alert",
     Reminder:            "reminder",
     Followup:            "followup",
     Link:                "link",
+    Classification:      "classification",
+    Transcript:          "transcript",
     Authoring:           "authoring",
 } as const;
 export type Purpose = ValueOf<typeof Purpose>;

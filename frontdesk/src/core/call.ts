@@ -4,6 +4,7 @@
  * so silence limits, turn limits, transfers and hang-ups behave the same on Twilio and Vapi.
  */
 
+import type { SessionLimits } from "./budget.ts";
 import type { PhoneNumber } from "./channel.ts";
 import type { ValueOf } from "./lang.ts";
 import { Result } from "./result.ts";
@@ -14,6 +15,7 @@ export const CallEndReason = {
     Silence:      "silence",
     TurnLimit:    "turn_limit",
     Transferred:  "transferred",
+    Budget:       "budget",
     Error:        "error",
 } as const;
 export type CallEndReason = ValueOf<typeof CallEndReason>;
@@ -56,10 +58,7 @@ export type CallEvent =
     | { readonly kind: "hung_up" }
     | { readonly kind: "failed" };
 
-export type CallLimits = {
-    readonly maxTurns:       number;
-    readonly maxSilentTurns: number;
-};
+export type CallLimits = Pick<SessionLimits, "maxTurns" | "maxSilentTurns">;
 
 export type InvalidCallTransition = {
     readonly from:  CallState["status"];

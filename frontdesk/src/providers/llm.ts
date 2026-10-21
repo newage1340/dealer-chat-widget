@@ -9,7 +9,12 @@
 
 import type { Channel, Purpose, TenantId, UsageRecord, ValueOf } from "../core/index.ts";
 
+/**
+ * `Small` is for narrow, high-volume jobs with short outputs (classification, language detection),
+ * the first candidates for a self-hosted model.
+ */
 export const ModelTier = {
+    Small:   "small",
     Fast:    "fast",
     Capable: "capable",
 } as const;
@@ -51,9 +56,20 @@ export type ToolDefinition = {
     readonly parameters:  Readonly<Record<string, unknown>>;
 };
 
+/**
+ * `json_schema` constrains the whole reply to a JSON document matching `schema` (structured output).
+ */
+export type ResponseFormat =
+    | { readonly kind: "text" }
+    | { readonly kind: "json_schema";
+        readonly name: string;
+        readonly schema: Readonly<Record<string, unknown>>
+    };
+
 export type LlmRequest = {
     readonly messages:    readonly ChatMessage[];
     readonly tools:       readonly ToolDefinition[];
+    readonly format:      ResponseFormat;
     readonly tier:        ModelTier;
     readonly maxTokens:   number;
     readonly temperature: number;

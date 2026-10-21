@@ -4,9 +4,10 @@
  */
 
 import type {
-	Address, Appointment, CallVendor, CatalogItem, Channel, Contact,
-	ContactChanges, Conversation, ConversationId, DomainEvent,
-	Job, JobId, Message, Session, Tenant, TenantId } from "../core/index.ts";
+	Address, Appointment, CallVendor, CatalogItem, Channel, Classification,
+	Contact, ContactChanges, ContactId, Conversation, ConversationId, DomainEvent,
+	Job, JobId, Message, Session, SessionId, SessionOutcome, Spend,
+	Tenant, TenantId, Transcript } from "../core/index.ts";
 import type { UsageSink } from "../providers/index.ts";
 
 export interface TenantDirectory {
@@ -92,10 +93,36 @@ export interface JobQueue {
     fail(id: JobId, error: string, retryAt: Date | null): Promise<void>;
 }
 
+/**
+ * Filters for listing transcripts (the future staff web app, metrics).
+ */
+export type TranscriptQuery = {
+    readonly tenantId: TenantId;
+    readonly since:    Date | null;
+    readonly until:    Date | null;
+    readonly outcomes: readonly SessionOutcome[];
+    readonly limit:    number;
+};
+
+export interface TranscriptStore {
+    transcript(sessionId: SessionId): Promise<Transcript | null>;
+    list(query: TranscriptQuery): Promise<readonly Transcript[]>;
+    saveClassification(classification: Classification): Promise<void>;
+}
+
+/**
+ * Spend aggregated from the usage table, in the tenant's day and month.
+ */
+export interface SpendLedger {
+    spend(tenant: Tenant, contactId: ContactId, now: Date): Promise<Spend>;
+}
+
 export interface Store {
     readonly tenants:       TenantDirectory;
     readonly conversations: ConversationStore;
     readonly turns:         TurnLog;
+    readonly transcripts:   TranscriptStore;
     readonly jobs:          JobQueue;
     readonly usage:         UsageSink;
+    readonly spend:         SpendLedger;
 }

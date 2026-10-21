@@ -10,12 +10,14 @@
 
 import type { z } from "zod";
 
-import type { CallDirective, ContactChanges, EventBody } from "../core/index.ts";
+import type { CallDirective, ContactChanges, EventBody, Language, TurnAssessment } from "../core/index.ts";
 import type { TurnContext } from "./context.ts";
 
 /**
  * `output` is returned to the model as the tool result (JSON-serializable).
  * `directive` asks the call to transfer or end once the reply has been spoken; null leaves it alone.
+ * `assessment` and `language` let a tool report on the turn (flag_conversation, switch_language);
+ * null leaves them alone.
  */
 export type ToolResult = {
     readonly output:         unknown;
@@ -23,6 +25,8 @@ export type ToolResult = {
     readonly contactChanges: ContactChanges;
     readonly sentUrls:       readonly string[];
     readonly directive:      CallDirective | null;
+    readonly assessment:     TurnAssessment | null;
+    readonly language:       Language | null;
 };
 
 export interface Tool<Schema extends z.ZodType = z.ZodType> {
@@ -49,6 +53,8 @@ export const ToolResult = {
             contactChanges: extra.contactChanges ?? {},
             sentUrls:       extra.sentUrls ?? [],
             directive:      extra.directive ?? null,
+            assessment:     extra.assessment ?? null,
+            language:       extra.language ?? null,
         };
     },
 } as const;

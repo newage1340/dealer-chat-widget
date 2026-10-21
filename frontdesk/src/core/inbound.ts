@@ -5,6 +5,7 @@
  */
 
 import type { Address, Channel } from "./channel.ts";
+import type { Language } from "./language.ts";
 
 /**
  * How an inbound message names its tenant:
@@ -24,6 +25,7 @@ export type TenantRef =
  * A webhook retried by the vendor carries the same key and is answered from the first result.
  * `externalSessionId` ties the message to a vendor session (CallSid, widget session); null for SMS.
  * `confidence` is the speech recognizer's confidence for voice input, null elsewhere.
+ * `language` is the language a multilingual recognizer detected, when it reports one.
  */
 export type Inbound = {
     readonly channel:           Channel;
@@ -34,4 +36,5 @@ export type Inbound = {
     readonly dedupeKey:         string;
     readonly externalSessionId: string | null;
     readonly confidence:        number | null;
+    readonly language:          Language | null;
 };

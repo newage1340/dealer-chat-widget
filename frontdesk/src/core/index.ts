@@ -8,6 +8,18 @@ export {
     AppointmentStatus,
 } from "./appointment.ts";
 export {
+    Budget,
+    BudgetReason,
+    SessionMeter,
+    TurnAssessment,
+    type BudgetVerdict,
+    type ContactLimits,
+    type Limits,
+    type SessionLimits,
+    type Spend,
+    type TenantLimits,
+} from "./budget.ts";
+export {
     CallEndReason,
     CallState,
     type CallDirective,
@@ -44,6 +56,7 @@ export {
     type EventMeta,
     type EventOf,
     type HandoffReason,
+    type SessionCloseReason,
 } from "./events.ts";
 export {
     AppointmentId,
@@ -75,14 +88,29 @@ export {
     type Variant,
 } from "./lang.ts";
 export {
+    Language,
+    LanguageTag,
+    LocalizedText,
+} from "./language.ts";
+export {
     Result,
 } from "./result.ts";
 export {
+    NotifyVia,
+    StaffNotice,
     Tenant,
     type Branding,
+    type Plan,
     type TenantLink,
     type TenantSettings,
 } from "./tenant.ts";
+export {
+    Sentiment,
+    SessionOutcome,
+    Urgency,
+    type Classification,
+    type Transcript,
+} from "./transcript.ts";
 export {
     Purpose,
     ServiceKind,

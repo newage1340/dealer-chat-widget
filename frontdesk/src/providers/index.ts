@@ -4,6 +4,11 @@
  */
 
 export {
+    type EmailProvider,
+    type EmailReceipt,
+    type OutboundEmail,
+} from "./email.ts";
+export {
     ProviderError,
     ProviderFailure,
 } from "./errors.ts";
@@ -15,6 +20,7 @@ export {
     type LlmRequest,
     type LlmResponse,
     type LlmStreamPart,
+    type ResponseFormat,
     type ToolCall,
     type ToolDefinition,
 } from "./llm.ts";
@@ -25,11 +31,11 @@ export {
 } from "./messaging.ts";
 export {
     type AudioFormat,
+    type Recognition,
     type SpeechChunk,
     type SpeechContext,
     type SpeechToText,
     type TextToSpeech,
-    type Transcript,
 } from "./speech.ts";
 export {
     PriceTable,

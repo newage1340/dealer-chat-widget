@@ -7,6 +7,7 @@
 import type { PhoneNumber } from "./channel.ts";
 import type { AppointmentId, ConversationId, SessionId, TenantId } from "./ids.ts";
 import type { Variant } from "./lang.ts";
+import type { StaffNotice } from "./tenant.ts";
 import type { Purpose } from "./usage.ts";
 
 export type JobBody =
@@ -15,13 +16,22 @@ export type JobBody =
         readonly text: string;
         readonly purpose: Purpose
     }
-    | { readonly kind: "notify_staff";
+    | { readonly kind: "send_email";
+        readonly to: string;
+        readonly subject: string;
         readonly text: string;
-        readonly reason: string
+        readonly purpose: Purpose
     }
-    | { readonly kind: "summarize_call";
-        readonly sessionId: SessionId;
-        readonly headline: string
+    | { readonly kind: "notify_staff";
+        readonly notice: StaffNotice;
+        readonly subject: string;
+        readonly text: string
+    }
+    | { readonly kind: "classify_session";
+        readonly sessionId: SessionId
+    }
+    | { readonly kind: "deliver_transcript";
+        readonly sessionId: SessionId
     }
     | { readonly kind: "send_reminder";
         readonly appointmentId: AppointmentId

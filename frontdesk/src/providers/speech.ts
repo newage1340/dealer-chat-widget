@@ -4,7 +4,7 @@
  * Nothing implements these yet; they fix the shape adapters will meet.
  */
 
-import type { Purpose, TenantId, UsageRecord } from "../core/index.ts";
+import type { Language, Purpose, TenantId, UsageRecord } from "../core/index.ts";
 
 export type AudioFormat = {
     readonly encoding:   "pcm16" | "mulaw";
@@ -12,24 +12,31 @@ export type AudioFormat = {
 };
 
 /**
- * `final` transcripts end a caller utterance; interim ones may still change.
+ * `final` results end a caller utterance; interim ones may still change.
+ * `language` is set by recognizers that detect it, null otherwise.
  */
-export type Transcript =
+export type Recognition =
     | { readonly kind: "interim";
         readonly text: string
     }
     | { readonly kind: "final";
         readonly text: string;
-        readonly confidence: number
+        readonly confidence: number;
+        readonly language: Language | null
     }
     | { readonly kind: "usage";
         readonly usage: UsageRecord
     };
 
+/**
+ * `languages` are the languages to listen or speak in;
+ * more than one asks a multilingual recognizer to detect which is being spoken.
+ */
 export type SpeechContext = {
-    readonly tenantId: TenantId;
-    readonly purpose:  Purpose;
-    readonly hints:    readonly string[];
+    readonly tenantId:  TenantId;
+    readonly purpose:   Purpose;
+    readonly languages: readonly Language[];
+    readonly hints:     readonly string[];
 };
 
 export interface SpeechToText {
@@ -39,7 +46,7 @@ export interface SpeechToText {
         format:  AudioFormat,
         context: SpeechContext,
         signal?: AbortSignal,
-    ): AsyncIterable<Transcript>;
+    ): AsyncIterable<Recognition>;
 }
 
 export type SpeechChunk =
