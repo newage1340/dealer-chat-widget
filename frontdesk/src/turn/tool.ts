@@ -1,0 +1,54 @@
+/**
+ * The unit of capability: something the model can do during a turn.
+ *
+ * A tool is a schema (what the model must supply) and a function (what it means).
+ * It returns output for the model plus the facts it established;
+ * it never sends, books or writes anything itself.
+ * Domain packs choose which tools a tenant gets, and can shape their schemas
+ * (e.g. the booking tool requires the pack's intake fields).
+ */
+
+import type { z } from "zod";
+
+import type { CallDirective, ContactChanges, EventBody } from "../core/index.ts";
+import type { TurnContext } from "./context.ts";
+
+/**
+ * `output` is returned to the model as the tool result (JSON-serializable).
+ * `directive` asks the call to transfer or end once the reply has been spoken; null leaves it alone.
+ */
+export type ToolResult = {
+    readonly output:         unknown;
+    readonly events:         readonly EventBody[];
+    readonly contactChanges: ContactChanges;
+    readonly sentUrls:       readonly string[];
+    readonly directive:      CallDirective | null;
+};
+
+export interface Tool<Schema extends z.ZodType = z.ZodType> {
+    readonly name:        string;
+    readonly description: string;
+    readonly parameters:  Schema;
+    run(args: z.output<Schema>, ctx: TurnContext): ToolResult | Promise<ToolResult>;
+}
+
+export const Tool = {
+    /**
+     * Identity function that lets TypeScript infer `args` from `parameters`.
+     */
+    define<Schema extends z.ZodType>(tool: Tool<Schema>): Tool<Schema> {
+        return tool;
+    },
+} as const;
+
+export const ToolResult = {
+    output(output: unknown, extra: Partial<Omit<ToolResult, "output">> = {}): ToolResult {
+        return {
+            output,
+            events:         extra.events ?? [],
+            contactChanges: extra.contactChanges ?? {},
+            sentUrls:       extra.sentUrls ?? [],
+            directive:      extra.directive ?? null,
+        };
+    },
+} as const;
