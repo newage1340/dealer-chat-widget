@@ -31,11 +31,40 @@ services:
         sync: false
       - key: TWILIO_DEFAULT_FROM
         sync: false
+      - key: TWILIO_VALIDATE_SIGNATURES
+        value: "true"
+      - key: SESSION_SECRET
+        generateValue: true
+      # Email: Gmail (the Python app's variables) or Resend; set one.
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: NOTIFY_FROM_EMAIL
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM
         sync: false
+      - key: ONBOARDING_CODE
+        sync: false
+      - key: ONBOARDING_NOTIFY_EMAIL
+        sync: false
+      # Voice stays on Twilio <Gather> until Deepgram (or the local GPU machine) is approved.
+      - key: VOICE_PIPELINE
+        value: twilio_gather
       - key: DEEPGRAM_API_KEY
+        sync: false
+      # Billing: off until STRIPE_SECRET_KEY is set.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_BASE
+        sync: false
+      - key: STRIPE_PRICE_EXTRA_LINE
+        sync: false
+      - key: STRIPE_PRICE_SMS_ALERTS
         sync: false
 
 databases:

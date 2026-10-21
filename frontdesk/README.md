@@ -150,6 +150,19 @@ tone, privacy, languages, schedule, catalog source, profile answers, notificatio
 shows usage and conversations. Each section is its own form and saves through the same validation as `PUT /admin/tenants`.
 The markup is bare on purpose (no classes, styles or scripts); `public/settings/settings.css` is an empty hook for styling.
 
+## Logins and billing
+
+- **Logins.** Business owners sign in at `/settings` with email and password and see only their own business.
+  The platform admin leaves the email blank and enters `ADMIN_TOKEN`. Admins add, remove and reset logins on each
+  business's page; owners change their own password. Phone numbers, business type and plan add-ons are admin-only.
+  Onboarding creates the owner's login and flags the business as not reviewed (and emails `ONBOARDING_NOTIFY_EMAIL`).
+- **Billing (Stripe).** Off until `STRIPE_SECRET_KEY` is set. Then each business page has Subscribe (hosted Checkout
+  for the plan and add-ons), top-ups for the current month, and Manage billing (Stripe's customer portal).
+  `/stripe/webhook` records status and add-ons. A subscription that lapses (unpaid, canceled) pauses the assistant;
+  businesses that never subscribed (demos, hand-made) are not affected. Setup steps are in `.env.example`.
+- **Email.** `RESEND_API_KEY`, or SMTP: `GMAIL_USER` + `GMAIL_APP_PASSWORD` (what the Python app used) or `SMTP_*`.
+  Without either, emails are logged. Voicemails are transcribed by OpenAI unless `DEEPGRAM_API_KEY` is set.
+
 ## Catalogs: one interface for menus, price lists, listings and inventory
 
 Every business has a catalog shaped by its domain pack (dishes, services, listings, vehicles). Where it comes from is a
@@ -246,15 +259,13 @@ datasets/       sample catalogs; tenants/demo/ the demo businesses
 
 ## Deploying on Render
 
-`render.yaml` describes a web service plus a managed Postgres database. The database costs extra
-(a few dollars a month for the smallest plan) but is what keeps conversations, transcripts and usage safe across deploys.
-Set the secrets in the Render dashboard, point the Twilio number and Vapi assistant at the service URL,
-and import tenants with `PUT /admin/tenants` (or `pnpm import-tenants` with `DATABASE_URL` set).
-
-The repository's root `Procfile` still starts the old Python `app.py`; switch Render to this service when ready.
+`render.yaml` describes the web service and a managed Postgres database; `docs/DEPLOY.md` is the step-by-step
+checklist (merge, Render, environment, Twilio, Stripe, smoke tests). The root `Procfile` still starts the old
+Python `app.py` until Render is switched to this service.
 
 ## Not verified against live vendors yet
 
-The tests use a scripted model and recording messengers. Before relying on production traffic, check:
-Twilio speech-recognition language codes and voices per language (`src/http/twiml.ts`), Vapi's request and
-end-of-call payload shapes (`src/http/vapi.ts`), the prices in `prices.json`, and Resend/Deepgram responses.
+The tests use a scripted model, fake speech services and recording messengers. Checked live so far: the OpenAI
+model (evals), OpenAI speech and transcription (synthesized audio transcribed back word for word), Twilio calls and
+texts on `twilio_gather`. Before relying on them, check live: the streamed voice pipelines (need Deepgram or the
+GPU machine), Stripe Checkout and webhooks (test mode), SMTP/Resend delivery, Vapi payloads, and `prices.json`.
