@@ -46,6 +46,10 @@ export type LocalTime = {
     readonly minuteOfDay: number;
 };
 
+function pad2(n: number): string {
+    return String(n).padStart(2, "0");
+}
+
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
 function formatter(timeZone: string): Intl.DateTimeFormat {
@@ -123,7 +127,21 @@ export const LocalTime = {
         const suffix = time.hour < 12
             ? "AM"
             : "PM";
-        return `${String(h12).padStart(2, "0")}:${String(time.minute).padStart(2, "0")} ${suffix}`;
+        return `${pad2(h12)}:${pad2(time.minute)} ${suffix}`;
+    },
+
+    /**
+     * "2026-10", for keys that roll over with the tenant's month.
+     */
+    isoMonth(time: LocalTime): string {
+        return `${time.year}-${pad2(time.month)}`;
+    },
+
+    /**
+     * "2026-10-21"
+     */
+    isoDate(time: LocalTime): string {
+        return `${LocalTime.isoMonth(time)}-${pad2(time.day)}`;
     },
 
     monthName(time: LocalTime, style: "short" | "long" = "short"): string {

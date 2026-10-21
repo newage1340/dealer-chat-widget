@@ -3,8 +3,11 @@
  * live transcription for streamed calls, and Aura text-to-speech.
  */
 
-import { AsyncQueue, LanguageTag, type Language, type UsageRecord } from "../core/index.ts";
+import { z } from "zod";
+
+import { AsyncQueue, LanguageTag, UsageRecord, type Language } from "../core/index.ts";
 import { ProviderError } from "./errors.ts";
+import { checkStatus, providerFetch, readJson } from "./http.ts";
 import type {
     AudioFormat,
     BatchTranscriber,
@@ -16,15 +19,18 @@ import type {
     TextToSpeech,
 } from "./speech.ts";
 
-type DeepgramResponse = {
-    readonly metadata?: { readonly duration?: number };
-    readonly results?: {
-        readonly channels?: readonly {
-            readonly detected_language?: string;
-            readonly alternatives?: readonly { readonly transcript?: string }[];
-        }[];
-    };
-};
+/**
+ * The parts of a /v1/listen reply we use.
+ */
+const DeepgramResponse = z.object({
+    metadata: z.object({ duration: z.number().optional() }).optional(),
+    results:  z.object({
+        channels: z.array(z.object({
+            detected_language: z.string().optional(),
+            alternatives:      z.array(z.object({ transcript: z.string().optional() })).optional(),
+        })).optional(),
+    }).optional(),
+});
 
 export class DeepgramTranscriber implements BatchTranscriber {
     readonly name = "deepgram";
@@ -50,35 +56,24 @@ export class DeepgramTranscriber implements BatchTranscriber {
             params.set("detect_language", "true");
         }
         const started = performance.now();
-        let response: Response;
-        try {
-            response = await fetch(`https://api.deepgram.com/v1/listen?${params}`, {
-                method:  "POST",
-                headers: { Authorization: `Token ${this.#apiKey}`, "Content-Type": mimeType },
-                body:    audio,
-                signal:  signal ?? AbortSignal.timeout(60_000),
-            });
-        } catch (e) {
-            throw new ProviderError(this.name, "unavailable", String(e), { cause: e });
-        }
-        if (!response.ok) {
-            throw new ProviderError(this.name, response.status >= 500 ? "unavailable" : "bad_request", `HTTP ${response.status}`);
-        }
-        const json = await response.json() as DeepgramResponse;
+        const response = await providerFetch(this.name, `https://api.deepgram.com/v1/listen?${params}`, {
+            method:  "POST",
+            headers: { Authorization: `Token ${this.#apiKey}`, "Content-Type": mimeType },
+            body:    audio,
+        }, { timeoutMs: 60_000, signal });
+        checkStatus(this.name, response);
+        const json = await readJson(this.name, response, DeepgramResponse);
         const channel = json.results?.channels?.[0];
-        const seconds = json.metadata?.duration ?? 0;
-        const usage: UsageRecord = {
-            provider:   this.name,
-            model:      this.#model,
-            service:    "stt",
-            purpose:    context.purpose,
-            occurredAt: new Date(),
-            units:      { audio_seconds: seconds },
-            costUsd:    null,
-            latencyMs:  performance.now() - started,
-            tenantId:   context.tenantId,
-            channel:    "voice",
-        };
+        const usage = UsageRecord.measured({
+            provider:  this.name,
+            model:     this.#model,
+            service:   "stt",
+            purpose:   context.purpose,
+            units:     { audio_seconds: json.metadata?.duration ?? 0 },
+            tenantId:  context.tenantId,
+            channel:   "voice",
+            startedAt: started,
+        });
         return {
             text:     channel?.alternatives?.[0]?.transcript?.trim() ?? "",
             language: channel?.detected_language !== undefined
@@ -180,11 +175,16 @@ export class DeepgramStreamingStt implements SpeechToText {
         });
         const finish = () => {
             flush();
-            out.push({ kind: "usage", usage: {
-                provider: this.name, model: `${this.#model}-streaming`, service: "stt", purpose: context.purpose, occurredAt: new Date(),
-                units: { audio_seconds: bytes / (format.sampleRate * (format.encoding === "mulaw" ? 1 : 2)) },
-                costUsd: null, latencyMs: performance.now() - started, tenantId: context.tenantId, channel: "voice",
-            } });
+            out.push({ kind: "usage", usage: UsageRecord.measured({
+                provider:  this.name,
+                model:     `${this.#model}-streaming`,
+                service:   "stt",
+                purpose:   context.purpose,
+                units:     { audio_seconds: bytes / (format.sampleRate * (format.encoding === "mulaw" ? 1 : 2)) },
+                tenantId:  context.tenantId,
+                channel:   "voice",
+                startedAt: started,
+            }) });
             out.close();
         };
         ws.addEventListener("close", finish);
@@ -259,28 +259,28 @@ export class DeepgramTts implements TextToSpeech {
                 continue;
             }
             const started = performance.now();
-            let response: Response;
-            try {
-                response = await fetch(`https://api.deepgram.com/v1/speak?${params}`, {
-                    method:  "POST",
-                    headers: { Authorization: `Token ${this.#apiKey}`, "Content-Type": "application/json" },
-                    body:    JSON.stringify({ text: piece }),
-                    signal:  signal === undefined ? AbortSignal.timeout(8_000) : AbortSignal.any([signal, AbortSignal.timeout(8_000)]),
-                });
-            } catch (e) {
-                throw new ProviderError(this.name, "unavailable", String(e), { cause: e });
-            }
-            if (!response.ok || response.body === null) {
-                throw new ProviderError(this.name, response.status >= 500 ? "unavailable" : "bad_request", `speak HTTP ${response.status}`);
+            const response = await providerFetch(this.name, `https://api.deepgram.com/v1/speak?${params}`, {
+                method:  "POST",
+                headers: { Authorization: `Token ${this.#apiKey}`, "Content-Type": "application/json" },
+                body:    JSON.stringify({ text: piece }),
+            }, { timeoutMs: 8_000, signal });
+            checkStatus(this.name, response, `speak HTTP ${response.status}`);
+            if (response.body === null) {
+                throw new ProviderError(this.name, "bad_response", "speak returned no audio");
             }
             for await (const chunk of response.body) {
                 yield { kind: "audio", bytes: chunk };
             }
-            yield { kind: "usage", usage: {
-                provider: this.name, model, service: "tts", purpose: context.purpose, occurredAt: new Date(),
-                units: { characters: piece.length }, costUsd: null, latencyMs: performance.now() - started,
-                tenantId: context.tenantId, channel: "voice",
-            } };
+            yield { kind: "usage", usage: UsageRecord.measured({
+                provider:  this.name,
+                model,
+                service:   "tts",
+                purpose:   context.purpose,
+                units:     { characters: piece.length },
+                tenantId:  context.tenantId,
+                channel:   "voice",
+                startedAt: started,
+            }) };
         }
     }
 }

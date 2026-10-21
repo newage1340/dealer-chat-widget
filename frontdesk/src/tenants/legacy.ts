@@ -2,32 +2,53 @@
  * Converting the Python version's tenant files (data/tenants/*.json) to the new tenant format.
  */
 
+import { z } from "zod";
+
+import { Problem, Result } from "../core/index.ts";
 import type { TenantFile } from "./schema.ts";
 
-type Legacy = {
-    readonly id?:          string;
-    readonly slug?:        string;
-    readonly name?:        string;
-    readonly domain?:      string;
-    readonly timezone?:    string;
-    readonly phone?:       string;
-    readonly address?:     string;
-    readonly website?:     string;
-    readonly hours?:       string;
-    readonly endpoints?:   { readonly sms?: readonly string[]; readonly voice?: readonly string[] };
-    readonly staff?:       { readonly phones?: readonly string[]; readonly emails?: readonly string[] };
-    readonly transfer_to?: string;
-    readonly branding?:    { readonly color?: string; readonly logo_url?: string };
-    readonly profile?:     Readonly<Record<string, string>>;
-    readonly settings?:    Readonly<Record<string, string | number | boolean>>;
-    readonly links?:       readonly { readonly label?: string; readonly url?: string; readonly trigger?: string }[];
-    readonly catalog?:     readonly Record<string, unknown>[];
-};
+const text = z.string().optional();
+const texts = z.array(z.string()).optional();
 
-export function fromLegacy(data: unknown): { tenant: TenantFile; catalog: readonly Record<string, unknown>[] } {
-    const d = data as Legacy;
+/**
+ * The Python version's tenant file. Every field is optional; the new schema decides what is required.
+ */
+const Legacy = z.object({
+    id:          text,
+    slug:        text,
+    name:        text,
+    domain:      text,
+    timezone:    text,
+    phone:       text,
+    address:     text,
+    website:     text,
+    hours:       text,
+    endpoints:   z.object({ sms: texts, voice: texts }).optional(),
+    staff:       z.object({ phones: texts, emails: texts }).optional(),
+    transfer_to: text,
+    branding:    z.object({ color: text, logo_url: text }).optional(),
+    profile:     z.record(z.string(), z.string()).optional(),
+    settings:    z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    links:       z.array(z.object({ label: text, url: text, trigger: text })).optional(),
+});
+
+/**
+ * Whether a tenant file is in the Python version's format (it has fields only that format uses).
+ */
+export function isLegacy(data: Readonly<Record<string, unknown>>): boolean {
+    return "hours" in data
+        || "transfer_to" in data
+        || "_source" in data;
+}
+
+export function fromLegacy(data: unknown): Result<TenantFile, Problem[]> {
+    const parsed = Legacy.safeParse(data);
+    if (!parsed.success) {
+        return Result.err(Problem.fromIssues(parsed.error.issues));
+    }
+    const d = parsed.data;
     const { cold_followup_minutes: cold, ...options } = d.settings ?? {};
-    const tenant: TenantFile = {
+    return Result.ok({
         id:        d.id ?? d.slug ?? "",
         slug:      d.slug ?? d.id ?? "",
         name:      d.name ?? "",
@@ -36,10 +57,10 @@ export function fromLegacy(data: unknown): { tenant: TenantFile; catalog: readon
         address:   d.address ?? "",
         website:   d.website ?? "",
         hoursText: d.hours ?? "",
-        endpoints: { sms: [...(d.endpoints?.sms ?? [])], voice: [...(d.endpoints?.voice ?? [])] },
-        staff:     { phones: [...(d.staff?.phones ?? [])], emails: [...(d.staff?.emails ?? [])] },
+        endpoints: { sms: d.endpoints?.sms ?? [], voice: d.endpoints?.voice ?? [] },
+        staff:     { phones: d.staff?.phones ?? [], emails: d.staff?.emails ?? [] },
         branding:  { color: d.branding?.color ?? "", logoUrl: d.branding?.logo_url ?? "" },
-        profile:   { ...(d.profile ?? {}) },
+        profile:   d.profile ?? {},
         options,
         settings:  {
             ...(typeof cold === "number" && cold > 0 ? { coldFollowupMinutes: cold } : {}),
@@ -47,6 +68,5 @@ export function fromLegacy(data: unknown): { tenant: TenantFile; catalog: readon
             links: (d.links ?? []).flatMap(l => l.url && l.trigger ? [{ label: l.label ?? "link", url: l.url, trigger: l.trigger }] : []),
         },
         ...(d.phone ? { phone: d.phone } : {}),
-    };
-    return { tenant, catalog: d.catalog ?? [] };
+    });
 }

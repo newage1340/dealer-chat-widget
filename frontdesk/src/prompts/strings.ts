@@ -3,7 +3,7 @@
  * Missing translations fall back to English. `{name}` placeholders are filled by `say`.
  */
 
-import { LocalizedText, type Language } from "../core/index.ts";
+import { LocalizedText, PhoneNumber, type Language, type Tenant } from "../core/index.ts";
 import { Template } from "../domains/index.ts";
 
 export const STRINGS = {
@@ -268,4 +268,13 @@ export const STRINGS = {
  */
 export function say(text: LocalizedText, language: Language, values: Readonly<Record<string, string>> = {}): string {
     return Template.render(LocalizedText.in(text, language), values);
+}
+
+/**
+ * " at (317) 555-0142" for the `{phone_sentence}` placeholder, or nothing when the tenant has no number.
+ */
+export function phoneSentence(tenant: Tenant): string {
+    return tenant.phone === null
+        ? ""
+        : ` at ${PhoneNumber.display(tenant.phone)}`;
 }

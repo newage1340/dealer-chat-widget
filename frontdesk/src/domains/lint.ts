@@ -3,25 +3,16 @@
  * They are warnings: the pack still loads, but something in it probably won't work as written.
  */
 
-import type { DomainPack } from "./pack.ts";
+import { DomainPack } from "./pack.ts";
 
 /**
  * `toolNames` are the tools the model can call; passed in so packs don't depend on the tools module.
  */
 export function lintPack(pack: DomainPack, toolNames: ReadonlySet<string>): string[] {
     const warnings: string[] = [];
-    const texts: [string, string][] = [
-        ["prompts.chat", pack.prompts.chat],
-        ["prompts.voice", pack.prompts.voice],
-        ["domain.goal", pack.goal],
-        ...pack.booking.intake.map((f, i): [string, string] => [`booking.intake.${i}.ask`, f.ask]),
-        ...pack.prompts.toggles.flatMap((t, i): [string, string][] => [
-            [`prompts.toggles.${i}`, [t.chat, t.voice, t.elseChat, t.elseVoice].join("\n")],
-        ]),
-    ];
-    for (const [path, text] of texts) {
+    for (const [path, text] of DomainPack.promptTexts(pack)) {
         for (const [, name] of text.matchAll(/`([a-z]+_[a-z_]+)`/g)) {
-            if (!toolNames.has(name!)) {
+            if (name !== undefined && !toolNames.has(name)) {
                 warnings.push(`${path} mentions \`${name}\`, but there is no tool by that name`);
             }
         }

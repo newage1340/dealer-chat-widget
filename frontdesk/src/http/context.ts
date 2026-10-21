@@ -2,7 +2,10 @@
  * What every channel module needs, plus small helpers they share.
  */
 
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import type { Context, MiddlewareHandler } from "hono";
+import type { z } from "zod";
 
 import type { Config } from "../config.ts";
 import type { TurnEngine } from "../pipeline/engine.ts";
@@ -27,6 +30,27 @@ export type ChannelDeps = {
 export async function form(c: Context): Promise<Record<string, string>> {
     const body = await c.req.parseBody();
     return Object.fromEntries(Object.entries(body).map(([k, v]) => [k, typeof v === "string" ? v : ""]));
+}
+
+/**
+ * Compare a secret someone sent with the real one in constant time (for tokens, codes and signatures).
+ * Both are hashed first, so neither the content nor the length leaks through timing.
+ */
+export function sameSecret(sent: string, expected: string): boolean {
+    const digest = (s: string) => createHash("sha256").update(s).digest();
+    return timingSafeEqual(digest(sent), digest(expected));
+}
+
+/**
+ * A JSON request body checked against `schema`, or null when it has the wrong shape.
+ * A missing or unparseable body is read as `{}`, so schemas with defaults still apply.
+ */
+export async function jsonBody<Schema extends z.ZodType>(c: Context, schema: Schema): Promise<z.output<Schema> | null> {
+    const raw: unknown = await c.req.json().catch(() => ({}));
+    const parsed = schema.safeParse(raw);
+    return parsed.success
+        ? parsed.data
+        : null;
 }
 
 /**
@@ -71,7 +95,7 @@ export function adminOnly(config: Config): MiddlewareHandler {
     return async (c, next) => {
         const header = c.req.header("Authorization")?.replace(/^Bearer\s+/i, "") ?? "";
         const token = header || c.req.query("token") || c.req.header("X-Admin-Token") || "";
-        if (!config.adminToken || token !== config.adminToken) {
+        if (!config.adminToken || !sameSecret(token, config.adminToken)) {
             return c.json({ error: "unauthorized" }, 401);
         }
         return next();

@@ -19,8 +19,8 @@ describe("Tool.define", () => {
     });
 });
 
-describe("parsePrice", async () => {
-    const { parsePrice } = await import("../../src/tools/index.ts");
+describe("PriceRange.parse", async () => {
+    const { PriceRange } = await import("../../src/domains/index.ts");
     it.each([
         ["15.95", { low: 15.95, high: 15.95, minimum: false }],
         ["$129-$249", { low: 129, high: 249, minimum: false }],
@@ -29,6 +29,6 @@ describe("parsePrice", async () => {
         ["Quoted on site", null],
         ["Free", { low: 0, high: 0, minimum: false }],
     ])("%s", (text, expected) => {
-        expect(parsePrice(text)).toEqual(expected);
+        expect(PriceRange.parse(text)).toEqual(expected);
     });
 });

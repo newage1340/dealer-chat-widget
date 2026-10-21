@@ -6,10 +6,9 @@
  */
 
 import { CatalogItem, Language, LANGUAGE_NAMES, Tenant, type Tenant as TenantType } from "../core/index.ts";
-import { Catalog, type DomainRegistry } from "../domains/index.ts";
+import { Catalog, PriceRange, type DomainRegistry } from "../domains/index.ts";
 import { Hours } from "../prompts/hours.ts";
 import type { Store } from "../storage/index.ts";
-import { parsePrice } from "../tools/index.ts";
 import type { Scenario } from "./run.ts";
 
 /**
@@ -47,11 +46,11 @@ function scenarios(tenant: TenantType, items: readonly CatalogItem[], registry: 
     const priced = field === null
         ? undefined
         : items.find(i => {
-            const p = parsePrice(CatalogItem.text(i, field));
+            const p = PriceRange.parse(CatalogItem.text(i, field));
             return p !== null && p.low > 0 && !p.minimum;
         });
     if (priced !== undefined && field !== null) {
-        const p = parsePrice(CatalogItem.text(priced, field))!;
+        const p = PriceRange.parse(CatalogItem.text(priced, field))!;
         const digits = priceDigits(p.low).replace(/\B(?=(\d{3})+(?!\d))/g, ",?");
         out.push({ ...base, name: name("quotes a catalog price"), turns: [
             { say: `How much is the ${Catalog.title(priced, spec)}?`, expect: expect({ replyMatches: digits }) },

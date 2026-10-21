@@ -14,6 +14,7 @@ export {
 } from "./errors.ts";
 export {
     FinishReason,
+    jsonSchemaOf,
     LlmProvider,
     ModelTier,
     type ChatMessage,

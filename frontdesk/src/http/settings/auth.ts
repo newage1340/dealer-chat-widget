@@ -6,9 +6,10 @@
  * password hash, so changing the password signs out every other session.
  */
 
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 
 import type { Account, Tenant } from "../../core/index.ts";
+import { sameSecret } from "../context.ts";
 
 export type Viewer =
     | { readonly kind: "admin" }
@@ -20,12 +21,6 @@ const SESSION_DAYS = 14;
 
 function mac(secret: string, text: string): string {
     return createHmac("sha256", secret).update(text).digest("base64url");
-}
-
-function same(a: string, b: string): boolean {
-    const x = Buffer.from(a);
-    const y = Buffer.from(b);
-    return x.length === y.length && timingSafeEqual(x, y);
 }
 
 export const Session = {
@@ -55,11 +50,11 @@ export const Session = {
         if (id !== account.id || !expires || !signature || Number(expires) * 1000 < now.getTime()) {
             return false;
         }
-        return same(signature, mac(secret, `${id}.${expires}.${account.passwordHash.slice(-16)}`));
+        return sameSecret(signature, mac(secret, `${id}.${expires}.${account.passwordHash.slice(-16)}`));
     },
 
     validAdmin(cookie: string, adminToken: string): boolean {
-        return adminToken !== "" && same(cookie, Session.admin(adminToken));
+        return adminToken !== "" && sameSecret(cookie, Session.admin(adminToken));
     },
 
     maxAgeSeconds: SESSION_DAYS * 86_400,
@@ -68,10 +63,6 @@ export const Session = {
 export const Viewer = {
     canSee(viewer: Viewer, tenant: Tenant): boolean {
         return viewer.kind === "admin" || viewer.account.tenantId === tenant.id;
-    },
-
-    isAdmin(viewer: Viewer): boolean {
-        return viewer.kind === "admin";
     },
 } as const;
 

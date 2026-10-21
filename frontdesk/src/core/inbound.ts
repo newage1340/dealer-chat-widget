@@ -1,23 +1,12 @@
 /**
- * A message as it arrives from a channel, before tenant and contact are resolved.
+ * A message as it arrives from a channel. The channel has already found the tenant
+ * (by the number texted or called, or the widget's slug); the contact is resolved by the engine.
  * Channel adapters build these from vendor payloads (validated at the edge),
  * so nothing past this point sees a vendor's wire format.
  */
 
 import type { Address, Channel, PhoneNumber } from "./channel.ts";
 import type { Language } from "./language.ts";
-
-/**
- * How an inbound message names its tenant:
- * phone channels by the number that was texted or called, the web widget by its slug.
- */
-export type TenantRef =
-    | { readonly kind: "endpoint";
-		readonly address: Address
-	}
-    | { readonly kind: "slug";
-		readonly slug: string
-	};
 
 /**
  * `dedupeKey` is unique per delivery attempt's underlying message
@@ -30,7 +19,6 @@ export type TenantRef =
  */
 export type Inbound = {
     readonly channel:           Channel;
-    readonly tenant:            TenantRef;
     readonly sender:            Address;
     readonly text:              string;
     readonly receivedAt:        Date;

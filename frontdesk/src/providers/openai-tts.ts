@@ -4,9 +4,10 @@
  * Audio comes back as 24 kHz 16-bit PCM and is converted to 8 kHz mu-law for the phone line.
  */
 
-import type { Language } from "../core/index.ts";
+import { UsageRecord, type Language } from "../core/index.ts";
 import { MuLaw, Pcm } from "./audio.ts";
 import { ProviderError } from "./errors.ts";
+import { checkStatus, providerFetch } from "./http.ts";
 import type { AudioFormat, SpeechChunk, SpeechContext, TextToSpeech } from "./speech.ts";
 
 const SOURCE_RATE = 24_000;
@@ -47,20 +48,15 @@ export class OpenAiCompatibleTts implements TextToSpeech {
                 continue;
             }
             const started = performance.now();
-            let response: Response;
-            try {
-                response = await fetch(`${this.#o.baseUrl.replace(/\/$/, "")}/audio/speech`, {
-                    method:  "POST",
-                    headers: { Authorization: `Bearer ${this.#o.apiKey || "none"}`, "Content-Type": "application/json" },
-                    body:    JSON.stringify({ model: this.#o.model, voice: voice || this.#o.voice, input: piece, response_format: "pcm" }),
-                    // On a call a slow voice must fail fast so the next one takes over; barge-in can cancel sooner.
-                    signal:  signal === undefined ? AbortSignal.timeout(TIMEOUT_MS) : AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
-                });
-            } catch (e) {
-                throw new ProviderError(this.name, "unavailable", String(e), { cause: e });
-            }
-            if (!response.ok || response.body === null) {
-                throw new ProviderError(this.name, response.status >= 500 ? "unavailable" : "bad_request", `speech HTTP ${response.status}`);
+            // On a call a slow voice must fail fast so the next one takes over; barge-in can cancel sooner.
+            const response = await providerFetch(this.name, `${this.#o.baseUrl.replace(/\/$/, "")}/audio/speech`, {
+                method:  "POST",
+                headers: { Authorization: `Bearer ${this.#o.apiKey || "none"}`, "Content-Type": "application/json" },
+                body:    JSON.stringify({ model: this.#o.model, voice: voice || this.#o.voice, input: piece, response_format: "pcm" }),
+            }, { timeoutMs: TIMEOUT_MS, signal });
+            checkStatus(this.name, response, `speech HTTP ${response.status}`);
+            if (response.body === null) {
+                throw new ProviderError(this.name, "bad_response", "speech returned no audio");
             }
             // Convert as it streams; keep leftover bytes so samples and the 3:1 resample stay aligned.
             let carry = new Uint8Array(0);
@@ -77,11 +73,16 @@ export class OpenAiCompatibleTts implements TextToSpeech {
                 const samples = Pcm.downsample(Pcm.fromBytes(joined.subarray(0, usable)), SOURCE_RATE, format.sampleRate);
                 yield { kind: "audio", bytes: format.encoding === "mulaw" ? MuLaw.encode(samples) : new Uint8Array(samples.buffer) };
             }
-            yield { kind: "usage", usage: {
-                provider: this.name, model: this.#o.model, service: "tts", purpose: context.purpose, occurredAt: new Date(),
-                units: { characters: piece.length }, costUsd: null, latencyMs: performance.now() - started,
-                tenantId: context.tenantId, channel: "voice",
-            } };
+            yield { kind: "usage", usage: UsageRecord.measured({
+                provider:  this.name,
+                model:     this.#o.model,
+                service:   "tts",
+                purpose:   context.purpose,
+                units:     { characters: piece.length },
+                tenantId:  context.tenantId,
+                channel:   "voice",
+                startedAt: started,
+            }) };
         }
     }
 }

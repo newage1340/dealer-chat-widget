@@ -7,7 +7,7 @@
  * Everything is validated through `parseTenant`, like the settings pages.
  */
 
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { Hono, type Context } from "hono";
 
@@ -18,6 +18,7 @@ import {
     Password,
     PhoneNumber,
     Professionalism,
+    Text,
     type Language,
     type Tenant,
     type WeekdayName,
@@ -26,8 +27,9 @@ import type { DomainPack } from "../domains/index.ts";
 import { Hours } from "../prompts/hours.ts";
 import { Style } from "../prompts/style.ts";
 import { parseTenant, type TenantFile } from "../tenants/schema.ts";
-import type { ChannelDeps } from "./context.ts";
-import { check, checkbox, field, form, html, input, page, raw, select, textarea, type Html } from "./settings/html.ts";
+import { sameSecret, type ChannelDeps } from "./context.ts";
+import { formBody, many, minuteOf, on, one, untrimmed, type FormBody } from "./form.ts";
+import { check, checkbox, field, form, html, input, page, raw, select, textarea, type Html } from "./html.ts";
 
 const MAX_FIELD   = 5_000;
 const MAX_CATALOG = 200_000;
@@ -61,40 +63,6 @@ const PROBLEM_LABELS: Readonly<Record<string, string>> = {
     "settings.catalog.source.url":  "Catalog link",
 };
 
-type Body = Record<string, string | File | (string | File)[]>;
-
-function one(body: Body, name: string): string {
-    const value = body[name];
-    const first = Array.isArray(value) ? value[0] : value;
-    return typeof first === "string" ? first.trim() : "";
-}
-
-function many(body: Body, name: string): string[] {
-    const value = body[name];
-    const all = Array.isArray(value) ? value : value === undefined ? [] : [value];
-    return all.filter((v): v is string => typeof v === "string" && v.trim() !== "").map(v => v.trim());
-}
-
-function on(body: Body, name: string): boolean {
-    return one(body, name) !== "";
-}
-
-function same(a: string, b: string): boolean {
-    const digest = (s: string) => createHash("sha256").update(`onboarding:${s}`).digest();
-    return timingSafeEqual(digest(a), digest(b));
-}
-
-/**
- * Minutes after midnight from "13:30"; null when it isn't a clock time.
- */
-function minuteOf(clock: string): number | null {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(clock);
-    if (m === null || Number(m[1]) > 23 || Number(m[2]) > 59) {
-        return null;
-    }
-    return Number(m[1]) * 60 + Number(m[2]);
-}
-
 /**
  * Minutes after midnight as "1:30pm".
  */
@@ -111,7 +79,7 @@ function spoken(minuteOfDay: number): string {
 /**
  * The hours table as hoursText ("Monday: 9am to 6pm, ..., Sunday: closed"), or problems.
  */
-export function hoursFromForm(body: Body): { readonly text: string; readonly problems: readonly string[] } {
+export function hoursFromForm(body: FormBody): { readonly text: string; readonly problems: readonly string[] } {
     const problems: string[] = [];
     const parts = DAYS.map(day => {
         if (on(body, `closed.${day}`)) {
@@ -159,10 +127,6 @@ export function slugify(name: string): string {
     return slug || "business";
 }
 
-function capitalized(text: string): string {
-    return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 /**
  * The pack question whose answer holds "anything else", if the pack has one.
  */
@@ -194,7 +158,7 @@ ${field("Business type", select("type", types, types[0]?.[0] ?? ""))}
 
 type FormData = {
     readonly pack:     DomainPack;
-    readonly body:     Body | null;
+    readonly body:     FormBody | null;
     readonly problems: readonly string[];
     readonly needCode: boolean;
 };
@@ -306,7 +270,7 @@ Summaries and alerts will go to the email you gave us.</p>
 <dt>Hours</dt><dd>${tenant.hoursText}</dd>
 <dt>Languages</dt><dd>${tenant.settings.languages.map(l => LANGUAGE_NAMES[l]).join(", ")} (main: ${LANGUAGE_NAMES[tenant.defaultLanguage]})</dd>
 <dt>Assistant's name</dt><dd>${tenant.agentName || pack.defaultAgentName}</dd>
-<dt>${capitalized(pack.catalog.itemNounPlural)}</dt><dd>${items}${where}${error !== null ? html` - we couldn't read your list (${error}); we'll follow up about it` : ""}</dd>
+<dt>${Text.capitalize(pack.catalog.itemNounPlural)}</dt><dd>${items}${where}${error !== null ? html` - we couldn't read your list (${error}); we'll follow up about it` : ""}</dd>
 </dl>
 </section>
 </main>`);
@@ -320,13 +284,7 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
     const { store, registry } = services;
     const needCode = () => config.onboardingCode !== "";
 
-    const types = () => registry.ids()
-        .map(id => [id, registry.get(id).name] as const)
-        .sort((a, b) => a[1].localeCompare(b[1]));
-    const packFor = (id: string): DomainPack | null => registry.ids().includes(id as DomainPack["id"])
-        ? registry.get(id as DomainPack["id"])
-        : null;
-    const showForm = (c: Context, pack: DomainPack, body: Body | null, problems: readonly string[]) =>
+    const showForm = (c: Context, pack: DomainPack, body: FormBody | null, problems: readonly string[]) =>
         c.html(formPage({ pack, body, problems, needCode: needCode() }), problems.length > 0 ? 400 : 200);
 
     const freeSlug = async (name: string): Promise<string> => {
@@ -339,24 +297,24 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
         }
     };
 
-    app.get("/onboarding", c => c.html(pickerPage(types(), [])));
+    app.get("/onboarding", c => c.html(pickerPage(registry.choices(), [])));
 
     app.get("/onboarding/form", c => {
-        const pack = packFor(c.req.query("type") ?? "");
+        const pack = registry.find(c.req.query("type") ?? "");
         return pack === null
-            ? c.html(pickerPage(types(), ["Choose a business type."]), 400)
+            ? c.html(pickerPage(registry.choices(), ["Choose a business type."]), 400)
             : showForm(c, pack, null, []);
     });
 
     app.post("/onboarding", async c => {
-        const body = await c.req.parseBody({ all: true });
-        const pack = packFor(one(body, "type"));
+        const body = await formBody(c);
+        const pack = registry.find(one(body, "type"));
         if (pack === null) {
-            return c.html(pickerPage(types(), ["Choose a business type."]), 400);
+            return c.html(pickerPage(registry.choices(), ["Choose a business type."]), 400);
         }
         const problems: string[] = [];
 
-        if (needCode() && !same(one(body, "inviteCode"), config.onboardingCode)) {
+        if (needCode() && !sameSecret(one(body, "inviteCode"), config.onboardingCode)) {
             problems.push("The invite code isn't right.");
         }
         for (const [name, v] of Object.entries(body)) {
@@ -382,11 +340,11 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
         } else if (await store.accounts.byEmail(email) !== null) {
             problems.push("That email already has a login. Sign in at /settings instead, or use another email.");
         }
-        const password = String(body["password"] ?? "");
+        const password = untrimmed(body, "password");
         const passwordProblem = Password.problem(password);
         if (passwordProblem !== null) {
             problems.push(passwordProblem);
-        } else if (password !== String(body["password2"] ?? "")) {
+        } else if (password !== untrimmed(body, "password2")) {
             problems.push("The two passwords don't match.");
         }
         const timezone = one(body, "timezone") || DEFAULT_TIME_ZONE;
@@ -461,9 +419,9 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
         } satisfies TenantFile;
         const parsed = parseTenant(draft);
         if (!parsed.ok) {
-            return showForm(c, pack, body, parsed.problems.map(p => `${PROBLEM_LABELS[p.path] ?? (p.path || "Form")}: ${p.message}`));
+            return showForm(c, pack, body, parsed.error.map(p => `${PROBLEM_LABELS[p.path] ?? (p.path || "Form")}: ${p.message}`));
         }
-        const tenant = parsed.tenant;
+        const tenant = parsed.value;
         await store.tenants.save(tenant);
         const now = services.clock();
         await store.accounts.create({

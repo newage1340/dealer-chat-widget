@@ -1,5 +1,5 @@
 /**
- * Escaped HTML templates and plain form controls for the settings pages.
+ * Escaped HTML templates and plain form controls for the settings and onboarding pages.
  *
  * The markup is deliberately bare: semantic elements, no classes, no inline styles, no scripts,
  * so whoever styles it starts from a clean slate (public/settings/settings.css is the hook).
@@ -11,7 +11,10 @@ export function raw(text: string): Html {
     return { html: text };
 }
 
-function escape(text: string): string {
+/**
+ * Text made safe for HTML (and XML) content and attribute values.
+ */
+export function escape(text: string): string {
     return text
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")

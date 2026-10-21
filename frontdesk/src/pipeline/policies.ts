@@ -3,19 +3,13 @@
  * Order matters: compliance first (opt-out), then blocks, then the web profile gate.
  */
 
-import { Block, PhoneNumber } from "../core/index.ts";
-import { STRINGS, say } from "../prompts/strings.ts";
-import { PolicyDecision, TurnOutcome, type Policy, type TurnContext } from "../turn/index.ts";
+import { Block } from "../core/index.ts";
+import { STRINGS, phoneSentence, say } from "../prompts/strings.ts";
+import { PolicyDecision, TurnOutcome, type Policy } from "../turn/index.ts";
 
 const STOP_WORDS: ReadonlySet<string> = new Set(["stop", "stopall", "unsubscribe", "cancel", "end", "quit", "alto", "parar", "baja"]);
 const START_WORDS: ReadonlySet<string> = new Set(["start", "unstop", "resume", "inicio", "empezar"]);
 const HELP_WORDS: ReadonlySet<string> = new Set(["help", "info", "ayuda"]);
-
-function phoneSentence(ctx: TurnContext): string {
-    return ctx.tenant.phone === null
-        ? ""
-        : ` at ${PhoneNumber.display(ctx.tenant.phone)}`;
-}
 
 /**
  * SMS compliance keywords (STOP / START / HELP, and their Spanish equivalents).
@@ -31,7 +25,7 @@ export const optOut: Policy = {
         const language = ["alto", "parar", "baja", "inicio", "empezar", "ayuda"].includes(word)
             ? "es"
             : ctx.session.language;
-        const values = { business_name: ctx.tenant.name, phone_sentence: phoneSentence(ctx) };
+        const values = { business_name: ctx.tenant.name, phone_sentence: phoneSentence(ctx.tenant) };
         if (STOP_WORDS.has(word)) {
             return PolicyDecision.answer({
                 ...TurnOutcome.reply(say(STRINGS.optedOut, language, values), language),

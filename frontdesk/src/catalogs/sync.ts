@@ -86,7 +86,11 @@ export async function syncCatalog(
  * Whether a tenant's source should be fetched now: remote feeds every `refreshMinutes`
  * (retrying failures after five minutes), datasets once.
  */
-export function syncDue(tenant: Tenant, last: CatalogSyncStatus | null, now: Date): boolean {
+export function syncDue(
+    tenant: Tenant,
+    last: CatalogSyncStatus | null,
+    now: Date
+): boolean {
     const source = tenant.settings.catalog.source;
     switch (source.kind) {
         case "manual":
@@ -109,7 +113,10 @@ export function syncDue(tenant: Tenant, last: CatalogSyncStatus | null, now: Dat
 /**
  * Sync every tenant whose source is due (run by the worker once a minute).
  */
-export async function syncDueCatalogs(services: Services, deps: ConnectorDeps = DEFAULT_CONNECTOR_DEPS): Promise<number> {
+export async function syncDueCatalogs(
+    services: Services,
+    deps: ConnectorDeps = DEFAULT_CONNECTOR_DEPS
+): Promise<number> {
     let synced = 0;
     const now = services.clock();
     for (const tenant of await services.store.tenants.all()) {

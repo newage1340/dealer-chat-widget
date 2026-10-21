@@ -16,16 +16,18 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { serve } from "@hono/node-server";
+import { z } from "zod";
 
 import { loadConfig, ROOT } from "./config.ts";
 import { syncCatalog } from "./catalogs/index.ts";
+import { Channel, enumValue, Problem, Result } from "./core/index.ts";
 import { Catalog } from "./domains/index.ts";
 import { authoringPrompt, generatePack, savePack } from "./domains/authoring.ts";
 import { generatedScenarios } from "./evals/generate.ts";
 import { loadScenarios, runScenario } from "./evals/run.ts";
-import { previewPrompt, SAMPLE_MESSAGE } from "./http/admin.ts";
+import { previewPrompt, SAMPLE_MESSAGE } from "./prompts/preview.ts";
 import { buildApp, buildLlm, loadPrices } from "./server.ts";
-import { fromLegacy } from "./tenants/legacy.ts";
+import { fromLegacy, isLegacy } from "./tenants/legacy.ts";
 import { parseTenant } from "./tenants/schema.ts";
 
 async function runServer(): Promise<void> {
@@ -48,22 +50,32 @@ async function runServer(): Promise<void> {
     process.on("SIGTERM", stop);
 }
 
+/**
+ * A tenant file to import, in either format, with its catalog rows alongside.
+ */
+const ImportFile = z.looseObject({
+    catalog: z.array(z.record(z.string(), z.unknown())).default([]),
+});
+
 async function importTenants(dir: string): Promise<void> {
     const app = await buildApp(loadConfig());
     const files = (await readdir(dir)).filter(f => f.endsWith(".json")).sort();
     for (const file of files) {
-        const raw = JSON.parse(await readFile(join(dir, file), "utf8")) as Record<string, unknown>;
-        const legacy = "hours" in raw || "transfer_to" in raw || "_source" in raw;
-        const { tenant: input, catalog } = legacy
-            ? fromLegacy(raw)
-            : { tenant: raw, catalog: (raw["catalog"] as Record<string, unknown>[] | undefined) ?? [] };
-        const { catalog: _, ...withoutCatalog } = input as Record<string, unknown>;
-        const result = parseTenant(withoutCatalog);
-        if (!result.ok) {
-            console.error(`skip ${file}:\n${result.problems.map(p => `  - ${p.path}: ${p.message}`).join("\n")}`);
+        const raw = ImportFile.safeParse(JSON.parse(await readFile(join(dir, file), "utf8")));
+        if (!raw.success) {
+            console.error(`skip ${file}: ${raw.error.message}`);
             continue;
         }
-        const tenant = result.tenant;
+        const { catalog, ...rest } = raw.data;
+        const input = isLegacy(rest)
+            ? fromLegacy(rest)
+            : Result.ok(rest);
+        const result = Result.andThen(input, parseTenant);
+        if (!result.ok) {
+            console.error(`skip ${file}:\n${result.error.map(p => `  - ${Problem.format(p)}`).join("\n")}`);
+            continue;
+        }
+        const tenant = result.value;
         const spec = app.services.registry.get(tenant.domain).catalog;
         await app.store.tenants.save(tenant);
         const now = new Date();
@@ -86,13 +98,13 @@ async function seedDemo(dir: string): Promise<void> {
     for (const file of files) {
         const result = parseTenant(JSON.parse(await readFile(join(dir, file), "utf8")));
         if (!result.ok) {
-            console.error(`skip ${file}:\n${result.problems.map(p => `  - ${p.path}: ${p.message}`).join("\n")}`);
+            console.error(`skip ${file}:\n${result.error.map(p => `  - ${Problem.format(p)}`).join("\n")}`);
             continue;
         }
-        const existing = await app.store.tenants.byId(result.tenant.id);
+        const existing = await app.store.tenants.byId(result.value.id);
         const tenant = existing === null
-            ? result.tenant
-            : { ...result.tenant, endpoints: existing.endpoints, staffContacts: existing.staffContacts };
+            ? result.value
+            : { ...result.value, endpoints: existing.endpoints, staffContacts: existing.staffContacts };
         await app.store.tenants.save(tenant);
         const synced = await syncCatalog(app.services, tenant);
         console.info(`seeded ${tenant.slug} (${tenant.domain}): ${synced === null ? "manual catalog" : synced.ok ? `${synced.value} items` : `catalog failed: ${synced.error}`}`);
@@ -112,15 +124,7 @@ async function printPrompt(
         console.error(`no tenant '${slug}'`);
         process.exit(1);
     }
-    const ch = channel === "voice" || channel === "web"
-		? channel
-		: "sms";
-    console.info(await previewPrompt({
-		config,
-		services: app.services,
-		engine: app.engine
-	}, tenant, ch, message
-	));
+    console.info(await previewPrompt(app.services, tenant, enumValue(Channel, channel) ?? Channel.Sms, message));
     await app.store.close();
 }
 

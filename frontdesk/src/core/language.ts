@@ -6,7 +6,7 @@
  * are written per language ahead of time, so they cost nothing at runtime.
  */
 
-import type { ValueOf } from "./lang.ts";
+import { enumValue, type ValueOf } from "./lang.ts";
 
 /**
  * BCP-47 primary tags for the languages most spoken by limited-English households in the US.
@@ -26,8 +26,6 @@ export const Language = {
     Portuguese:    "pt",
 } as const;
 export type Language = ValueOf<typeof Language>;
-
-const TAGS: ReadonlySet<string> = new Set(Object.values(Language));
 
 /**
  * English names, for prompts and staff-facing text.
@@ -65,10 +63,7 @@ export const LanguageTag = {
      * A supported Language from a tag like "es-MX" or "zh-Hans", or null if unsupported.
      */
     parse(tag: string): Language | null {
-        const primary = tag.trim().toLowerCase().split(/[-_]/)[0] ?? "";
-        return TAGS.has(primary)
-            ? primary as Language
-            : null;
+        return enumValue(Language, tag.trim().toLowerCase().split(/[-_]/)[0]);
     },
 } as const;
 

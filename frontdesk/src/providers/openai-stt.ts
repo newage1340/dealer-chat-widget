@@ -4,9 +4,20 @@
  * or the same API on a self-hosted Whisper server.
  */
 
-import { LanguageTag, type UsageRecord } from "../core/index.ts";
-import { ProviderError } from "./errors.ts";
+import { z } from "zod";
+
+import { LanguageTag, UsageRecord } from "../core/index.ts";
+import { checkStatus, providerFetch, readJson } from "./http.ts";
 import type { BatchTranscriber, BatchTranscript, SpeechContext } from "./speech.ts";
+
+/**
+ * What /audio/transcriptions returns (`language` and `duration` only from some servers).
+ */
+export const TranscriptionReply = z.object({
+    text:     z.string().optional(),
+    language: z.string().optional(),
+    duration: z.number().optional(),
+});
 
 /**
  * Audio length when the API doesn't report it: exact for WAV, and from the bitrate Twilio records MP3 at (32 kbps) otherwise.
@@ -44,33 +55,23 @@ export class OpenAiTranscriber implements BatchTranscriber {
             body.set("language", context.languages[0]!);
         }
         const started = performance.now();
-        let response: Response;
-        try {
-            response = await fetch(`${this.#baseUrl}/audio/transcriptions`, {
-                method:  "POST",
-                headers: { Authorization: `Bearer ${this.#apiKey}` },
-                body,
-                signal:  signal ?? AbortSignal.timeout(60_000),
-            });
-        } catch (e) {
-            throw new ProviderError(this.name, "unavailable", String(e), { cause: e });
-        }
-        if (!response.ok) {
-            throw new ProviderError(this.name, response.status >= 500 ? "unavailable" : "bad_request", `HTTP ${response.status}`);
-        }
-        const json = await response.json() as { text?: string; language?: string; duration?: number };
-        const usage: UsageRecord = {
-            provider:   this.name,
-            model:      this.#model,
-            service:    "stt",
-            purpose:    context.purpose,
-            occurredAt: new Date(),
-            units:      { audio_seconds: json.duration ?? estimateSeconds(audio) },
-            costUsd:    null,
-            latencyMs:  performance.now() - started,
-            tenantId:   context.tenantId,
-            channel:    "voice",
-        };
+        const response = await providerFetch(this.name, `${this.#baseUrl}/audio/transcriptions`, {
+            method:  "POST",
+            headers: { Authorization: `Bearer ${this.#apiKey}` },
+            body,
+        }, { timeoutMs: 60_000, signal });
+        checkStatus(this.name, response);
+        const json = await readJson(this.name, response, TranscriptionReply);
+        const usage = UsageRecord.measured({
+            provider:  this.name,
+            model:     this.#model,
+            service:   "stt",
+            purpose:   context.purpose,
+            units:     { audio_seconds: json.duration ?? estimateSeconds(audio) },
+            tenantId:  context.tenantId,
+            channel:   "voice",
+            startedAt: started,
+        });
         return {
             text:     (json.text ?? "").trim(),
             language: json.language !== undefined ? LanguageTag.parse(json.language) : context.languages[0] ?? null,

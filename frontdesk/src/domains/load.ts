@@ -7,9 +7,9 @@ import { join } from "node:path";
 
 import { parse as parseToml } from "smol-toml";
 
-import { Result, type DomainId } from "../core/index.ts";
+import { DomainId, errorMessage, Problem, Result } from "../core/index.ts";
 import type { DomainPack } from "./pack.ts";
-import { crossCheck, PackFile, toPack, type PackProblem } from "./schema.ts";
+import { crossCheck, PackFile, toPack } from "./schema.ts";
 
 export const PACKS_DIR = new URL("../../packs/", import.meta.url).pathname;
 
@@ -18,10 +18,10 @@ export const PACKS_DIR = new URL("../../packs/", import.meta.url).pathname;
  */
 export class DomainPackError extends Error {
     readonly source:   string;
-    readonly problems: readonly PackProblem[];
+    readonly problems: readonly Problem[];
 
-    constructor(source: string, problems: readonly PackProblem[]) {
-        super(`${source}:\n` + problems.map(p => `  - ${p.path || "(file)"}: ${p.message}`).join("\n"));
+    constructor(source: string, problems: readonly Problem[]) {
+        super(`${source}:\n` + problems.map(p => `  - ${Problem.format(p)}`).join("\n"));
         this.name     = "DomainPackError";
         this.source   = source;
         this.problems = problems;
@@ -31,13 +31,10 @@ export class DomainPackError extends Error {
 /**
  * Validate already-parsed TOML data (also used to check model-written packs before saving).
  */
-export function parsePack(data: unknown): Result<DomainPack, PackProblem[]> {
+export function parsePack(data: unknown): Result<DomainPack, Problem[]> {
     const shape = PackFile.safeParse(data);
     if (!shape.success) {
-        return Result.err(shape.error.issues.map(issue => ({
-            path:    issue.path.join("."),
-            message: issue.message,
-        })));
+        return Result.err(Problem.fromIssues(shape.error.issues));
     }
     const problems = crossCheck(shape.data);
     return problems.length > 0
@@ -45,12 +42,12 @@ export function parsePack(data: unknown): Result<DomainPack, PackProblem[]> {
         : Result.ok(toPack(shape.data));
 }
 
-export function parsePackToml(source: string): Result<DomainPack, PackProblem[]> {
+export function parsePackToml(source: string): Result<DomainPack, Problem[]> {
     let data: unknown;
     try {
         data = parseToml(source);
     } catch (e) {
-        return Result.err([{ path: "", message: e instanceof Error ? e.message : String(e) }]);
+        return Result.err([{ path: "", message: errorMessage(e) }]);
     }
     return parsePack(data);
 }
@@ -63,7 +60,7 @@ export async function loadPack(path: string): Promise<DomainPack> {
     try {
         source = await readFile(path, "utf8");
     } catch (e) {
-        throw new DomainPackError(path, [{ path: "", message: e instanceof Error ? e.message : String(e) }]);
+        throw new DomainPackError(path, [{ path: "", message: errorMessage(e) }]);
     }
     const result = parsePackToml(source);
     if (!result.ok) {
@@ -97,7 +94,23 @@ export class DomainRegistry {
         return pack;
     }
 
+    /**
+     * The pack with this id, or null; for ids from outside (a form, an uploaded tenant file).
+     */
+    find(id: string): DomainPack | null {
+        return this.#packs.get(DomainId(id)) ?? null;
+    }
+
     ids(): DomainId[] {
         return [...this.#packs.keys()];
+    }
+
+    /**
+     * Every pack as `[id, name]`, sorted by name, for pickers.
+     */
+    choices(): [DomainId, string][] {
+        return [...this.#packs.values()]
+            .map((p): [DomainId, string] => [p.id, p.name])
+            .sort((a, b) => a[1].localeCompare(b[1]));
     }
 }

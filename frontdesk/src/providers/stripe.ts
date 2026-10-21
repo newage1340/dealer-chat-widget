@@ -5,7 +5,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { ProviderError } from "./errors.ts";
+import { checkStatus, providerFetch } from "./http.ts";
 
 type Params = Readonly<Record<string, unknown>>;
 
@@ -50,22 +50,13 @@ export class StripeClient {
     }
 
     async #post<T>(path: string, params: Params): Promise<T> {
-        let response: Response;
-        try {
-            response = await this.#fetch(`https://api.stripe.com/v1/${path}`, {
-                method:  "POST",
-                headers: { Authorization: `Bearer ${this.#secretKey}`, "Content-Type": "application/x-www-form-urlencoded" },
-                body:    stripeForm(params).toString(),
-                signal:  AbortSignal.timeout(20_000),
-            });
-        } catch (e) {
-            throw new ProviderError(this.name, "unavailable", String(e), { cause: e });
-        }
+        const response = await providerFetch(this.name, `https://api.stripe.com/v1/${path}`, {
+            method:  "POST",
+            headers: { Authorization: `Bearer ${this.#secretKey}`, "Content-Type": "application/x-www-form-urlencoded" },
+            body:    stripeForm(params).toString(),
+        }, { timeoutMs: 20_000 }, this.#fetch);
         const json = await response.json().catch(() => ({})) as T & { error?: { message?: string } };
-        if (!response.ok) {
-            throw new ProviderError(this.name, response.status >= 500 ? "unavailable" : response.status === 401 ? "auth" : "bad_request",
-                json.error?.message ?? `HTTP ${response.status}`);
-        }
+        checkStatus(this.name, response, json.error?.message);
         return json;
     }
 

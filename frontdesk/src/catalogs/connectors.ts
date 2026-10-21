@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { ROOT } from "../config.ts";
-import { Result, type CatalogSource } from "../core/index.ts";
+import { errorMessage, Result, type CatalogSource } from "../core/index.ts";
 import { parseCsv } from "./csv.ts";
 
 export type RawRow = Readonly<Record<string, unknown>>;
@@ -40,13 +40,19 @@ function rowsFromJson(data: unknown, itemsPath: string): Result<RawRow[], string
             ? (node as Record<string, unknown>)[key]
             : undefined;
     }
-    if (itemsPath === "" && !Array.isArray(node) && typeof node === "object" && node !== null) {
+    if (itemsPath === ""
+		&& !Array.isArray(node)
+		&& typeof node === "object"
+		&& node !== null
+	) {
         // A body like {"items": [...]}: take its only array.
         const arrays = Object.values(node).filter(Array.isArray);
         node = arrays.length === 1 ? arrays[0] : node;
     }
     if (!Array.isArray(node)) {
-        return Result.err(itemsPath ? `nothing is a list at "${itemsPath}"` : "the response is not a list of rows");
+        return Result.err(itemsPath
+			? `nothing is a list at "${itemsPath}"`
+			: "the response is not a list of rows");
     }
     return Result.ok(node.filter((r): r is RawRow => typeof r === "object" && r !== null && !Array.isArray(r)));
 }
@@ -62,11 +68,15 @@ async function download(url: string, deps: ConnectorDeps): Promise<Result<string
             ? Result.err(`${url} is larger than ${MAX_BYTES / 1_000_000} MB`)
             : Result.ok(text);
     } catch (e) {
-        return Result.err(`could not fetch ${url}: ${e instanceof Error ? e.message : String(e)}`);
+        return Result.err(`could not fetch ${url}: ${errorMessage(e)}`);
     }
 }
 
-function parse(text: string, csv: boolean, itemsPath: string): Result<RawRow[], string> {
+function parse(
+    text: string,
+    csv: boolean,
+    itemsPath: string
+): Result<RawRow[], string> {
     if (csv) {
         return Result.ok(parseCsv(text));
     }
@@ -80,7 +90,10 @@ function parse(text: string, csv: boolean, itemsPath: string): Result<RawRow[], 
 /**
  * Raw rows from a source, or why they could not be read. `manual` sources have nothing to fetch.
  */
-export async function fetchRows(source: CatalogSource, deps: ConnectorDeps = DEFAULT_CONNECTOR_DEPS): Promise<Result<RawRow[], string> | null> {
+export async function fetchRows(
+    source: CatalogSource,
+    deps: ConnectorDeps = DEFAULT_CONNECTOR_DEPS
+): Promise<Result<RawRow[], string> | null> {
     switch (source.kind) {
         case "manual":
             return null;
@@ -101,7 +114,11 @@ export async function fetchRows(source: CatalogSource, deps: ConnectorDeps = DEF
             if (!text.ok) {
                 return text;
             }
-            return parse(text.value, source.kind === "csv_url", source.kind === "json_url" ? source.itemsPath : "");
+            return parse(
+                text.value,
+                source.kind === "csv_url",
+                source.kind === "json_url" ? source.itemsPath : ""
+            );
         }
     }
 }

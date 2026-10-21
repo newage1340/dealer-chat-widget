@@ -9,8 +9,10 @@
 import { z } from "zod";
 
 import {
-    Address,
+    assertNever,
     Contact,
+    errorMessage,
+    Language,
     LANGUAGE_NAMES,
     LocalTime,
     PhoneNumber,
@@ -21,15 +23,15 @@ import {
     type Classification,
     type Conversation,
     type JobOf,
-    type Language,
     type Purpose,
-    type SessionId,
+    type StaffNotice,
     type Transcript,
 } from "../core/index.ts";
 import { syncDueCatalogs } from "../catalogs/index.ts";
 import { DomainPack, type FollowupKind } from "../domains/index.ts";
 import { Style } from "../prompts/style.ts";
 import {
+    jsonSchemaOf,
     LlmProvider,
     type BatchTranscriber,
     type EmailProvider,
@@ -37,7 +39,7 @@ import {
 } from "../providers/index.ts";
 import type { ClaimedJob } from "../storage/index.ts";
 import { closeSession, sweepIdleSessions } from "./sessions.ts";
-import type { Services } from "./services.ts";
+import { recordMessage, type Services } from "./services.ts";
 
 /**
  * `emailFrom` is the sender for all email; `defaultSmsFrom` is used when a tenant has no number of its own.
@@ -50,22 +52,27 @@ export type WorkerDeps = {
     readonly transcriber:    BatchTranscriber | null;
     readonly fetchRecording: ((url: string) => Promise<Uint8Array>) | null;
     readonly emailFrom:      string;
-    readonly defaultSmsFrom: string;
+    readonly defaultSmsFrom: PhoneNumber | null;
     readonly dashboardUrl:   string;
 };
 
 const MAX_ATTEMPTS = 5;
 const SMS_LIMIT = 600;
 
-const ClassificationOutput = z.object({
-    outcome:         z.enum(Object.values(SessionOutcome) as [SessionOutcome, ...SessionOutcome[]]),
-    topic:           z.string(),
-    sentiment:       z.enum(Object.values(Sentiment) as [Sentiment, ...Sentiment[]]),
-    urgency:         z.enum(Object.values(Urgency) as [Urgency, ...Urgency[]]),
-    language:        z.string(),
-    followup_needed: z.boolean(),
-    gist:            z.string(),
-});
+/**
+ * What the classifier must return for a pack's sessions; also sent to the model as the reply's JSON Schema.
+ */
+function classificationOutput(pack: DomainPack) {
+    return z.object({
+        outcome:         z.enum(SessionOutcome),
+        topic:           z.enum(DomainPack.topics(pack).map(t => t.id)),
+        sentiment:       z.enum(Sentiment),
+        urgency:         z.enum(Urgency),
+        language:        z.enum(Language),
+        followup_needed: z.boolean(),
+        gist:            z.string(),
+    });
+}
 
 export class Worker {
     readonly #d: WorkerDeps;
@@ -120,7 +127,7 @@ export class Worker {
                     await this.run(job);
                     await store.jobs.complete(job.id);
                 } catch (e) {
-                    const message = e instanceof Error ? e.message : String(e);
+                    const message = errorMessage(e);
                     const retryAt = job.attempts >= MAX_ATTEMPTS
                         ? null
                         : new Date(clock().getTime() + 30_000 * 2 ** (job.attempts - 1));
@@ -146,6 +153,7 @@ export class Worker {
             case "classify_session":     return this.#classify(tenant, job);
             case "deliver_transcript":   return this.#deliverTranscript(tenant, job);
             case "record_fixed_costs":   return this.#recordFixedCosts(tenant, job);
+            default:                     return assertNever(job);
         }
     }
 
@@ -159,8 +167,7 @@ export class Worker {
         const { store } = this.#d.services;
         const tenants = await store.tenants.all();
         await store.jobs.enqueue(tenants.map(t => {
-            const local = LocalTime.of(now, t.timezone);
-            const month = `${local.year}-${String(local.month).padStart(2, "0")}`;
+            const month = LocalTime.isoMonth(LocalTime.of(now, t.timezone));
             return { kind: "record_fixed_costs", month, tenantId: t.id, dedupeKey: `fixed:${t.id}:${month}`, runAt: null };
         }));
     }
@@ -195,9 +202,13 @@ export class Worker {
 
     #from(tenant: Tenant): PhoneNumber {
         const endpoint = Tenant.endpoint(tenant, "sms") ?? Tenant.endpoint(tenant, "voice");
-        return endpoint?.kind === "phone"
-            ? endpoint.value
-            : this.#d.defaultSmsFrom as PhoneNumber;
+        if (endpoint?.kind === "phone") {
+            return endpoint.value;
+        }
+        if (this.#d.defaultSmsFrom === null) {
+            throw new Error(`${tenant.id} has no number to text from, and no default is configured`);
+        }
+        return this.#d.defaultSmsFrom;
     }
 
     /**
@@ -246,7 +257,7 @@ export class Worker {
     /**
      * Tell staff, the ways they chose (email by default; SMS only with the paid add-on).
      */
-    async #staff(tenant: Tenant, notice: Parameters<typeof Tenant.notifyVia>[1], subject: string, text: string, smsText: string): Promise<void> {
+    async #staff(tenant: Tenant, notice: StaffNotice, subject: string, text: string, smsText: string): Promise<void> {
         const vias = Tenant.notifyVia(tenant, notice);
         const emails = tenant.staffContacts.flatMap(a => a.kind === "email" ? [a.value] : []);
         const phones = Tenant.staffPhones(tenant);
@@ -280,26 +291,16 @@ export class Worker {
     /**
      * Record a message we sent outside a turn, so the model sees it in later turns.
      */
-    async #recordOutbound(conversation: Conversation, text: string, dedupeKey: string): Promise<void> {
+    async #recordOutbound(tenant: Tenant, conversation: Conversation, text: string, dedupeKey: string): Promise<void> {
         const { store, clock, smsIdleMs } = this.#d.services;
         const contact = await store.conversations.contact(conversation.contactId);
         const session = await store.conversations.session(
             conversation,
             { channel: "sms" },
-            { language: contact?.preferredLanguage ?? "en", smsIdleMs },
+            { language: Tenant.startLanguage(tenant, contact?.preferredLanguage ?? null), smsIdleMs },
             clock(),
         );
-        await store.turns.commit({
-            dedupeKey,
-            reply:          text,
-            contactId:      conversation.contactId,
-            contactChanges: {},
-            session,
-            messages:       [{ conversationId: conversation.id, sessionId: session.id, role: "assistant", text, channel: "sms" }],
-            events:         [],
-            jobs:           [],
-            at:             clock(),
-        });
+        await recordMessage(this.#d.services, session, conversation.contactId, "assistant", text, dedupeKey);
     }
 
     async #followupText(tenant: Tenant, kind: FollowupKind, contact: Contact, extra: Record<string, string>): Promise<string | null> {
@@ -318,7 +319,7 @@ export class Worker {
         }
         const contact = await store.conversations.contact(appointment.contactId);
         const conversation = await store.conversations.conversation(appointment.conversationId);
-        if (contact?.phone == null || conversation === null) {
+        if (contact === null || contact.phone === null || conversation === null) {
             return;
         }
         const text = await this.#followupText(tenant, job.followup, contact, {
@@ -326,7 +327,7 @@ export class Worker {
             subject:    appointment.subject,
         });
         if (text !== null && await this.#textCustomer(tenant, contact.phone, text, job.followup === "reminder" ? "reminder" : "booking_confirmation")) {
-            await this.#recordOutbound(conversation, text, `job:${job.dedupeKey}`);
+            await this.#recordOutbound(tenant, conversation, text, `job:${job.dedupeKey}`);
         }
         await store.appointments.markNotice(appointment.id, notice);
     }
@@ -343,12 +344,12 @@ export class Worker {
             return;
         }
         const contact = await store.conversations.contact(conversation.contactId);
-        if (contact?.phone == null) {
+        if (contact === null || contact.phone === null) {
             return;
         }
         const text = await this.#followupText(tenant, "cold", contact, {});
         if (text !== null && await this.#textCustomer(tenant, contact.phone, text, "followup")) {
-            await this.#recordOutbound(conversation, text, `job:${job.dedupeKey}`);
+            await this.#recordOutbound(tenant, conversation, text, `job:${job.dedupeKey}`);
         }
     }
 
@@ -357,7 +358,10 @@ export class Worker {
     async #transcribeVoicemail(tenant: Tenant, job: JobOf<"transcribe_voicemail">): Promise<void> {
         const { store } = this.#d.services;
         const session = await store.conversations.sessionById(job.sessionId);
-        if (session === null) {
+        const conversation = session === null
+            ? null
+            : await store.conversations.conversation(session.conversationId);
+        if (session === null || conversation === null) {
             return;
         }
         let text = "(voicemail - transcription unavailable; listen to the recording)";
@@ -374,17 +378,7 @@ export class Worker {
             text = result.text || "(no words in the voicemail)";
             language = result.language ?? language;
         }
-        await store.turns.commit({
-            dedupeKey:      `voicemail:${session.id}`,
-            reply:          "",
-            contactId:      (await store.conversations.conversation(session.conversationId))!.contactId,
-            contactChanges: {},
-            session:        { ...session, language },
-            messages:       [{ conversationId: session.conversationId, sessionId: session.id, role: "user", text, channel: "voice" }],
-            events:         [],
-            jobs:           [],
-            at:             this.#d.services.clock(),
-        });
+        await recordMessage(this.#d.services, { ...session, language }, conversation.contactId, "user", text, `voicemail:${session.id}`);
         await closeSession(this.#d.services, session.id, "completed");
     }
 
@@ -402,11 +396,12 @@ export class Worker {
         if (rule !== null) {
             classification = { ...rule, sessionId: job.sessionId, model: "rule", classifiedAt: clock() };
         } else {
+            const output = classificationOutput(pack);
             const response = await LlmProvider.complete(llm, {
                 cacheKey:    `classify:${pack.id}`,
                 messages:    composer.classify(tenant, pack, transcriptText(transcript, pack)),
                 tools:       [],
-                format:      { kind: "json_schema", name: "classification", schema: classificationSchema(pack) },
+                format:      { kind: "json_schema", name: "classification", schema: jsonSchemaOf(output) },
                 tier:        "small",
                 maxTokens:   300,
                 temperature: 0,
@@ -415,19 +410,18 @@ export class Worker {
                 tenantId:    tenant.id,
                 channel:     transcript.session.channel,
             });
-            const parsed = ClassificationOutput.safeParse(JSON.parse(response.text || "{}"));
+            const parsed = output.safeParse(JSON.parse(response.text || "{}"));
             if (!parsed.success) {
                 throw new Error(`classification did not match the schema: ${parsed.error.message}`);
             }
             const out = parsed.data;
-            const topics = new Set(DomainPack.topics(pack).map(t => t.id));
             classification = {
                 sessionId:      job.sessionId,
                 outcome:        out.outcome,
-                topic:          topics.has(out.topic) ? out.topic : "other",
+                topic:          out.topic,
                 sentiment:      out.sentiment,
                 urgency:        out.urgency,
-                language:       (Object.keys(LANGUAGE_NAMES) as Language[]).find(l => l === out.language.slice(0, 2).toLowerCase()) ?? transcript.session.language,
+                language:       out.language,
                 followupNeeded: out.followup_needed,
                 gist:           out.gist.trim(),
                 model:          `${response.usage.provider}:${response.usage.model}`,
@@ -458,7 +452,7 @@ export class Worker {
         const pack = registry.get(tenant.domain);
         const conversation = await store.conversations.conversation(transcript.session.conversationId);
         const contact = conversation === null ? null : await store.conversations.contact(conversation.contactId);
-        const who = describeContact(contact);
+        const who = Contact.describe(contact);
         const topic = DomainPack.topics(pack).find(t => t.id === c.topic)?.label ?? c.topic;
         const kind = voicemail !== null
             ? "Voicemail"
@@ -522,37 +516,8 @@ export function ruleClassification(transcript: Transcript): Omit<Classification,
     return null;
 }
 
-function describeContact(contact: Contact | null): string {
-    if (contact === null) {
-        return "Unknown";
-    }
-    const name = Contact.displayName(contact);
-    const reach = contact.phone !== null
-        ? PhoneNumber.display(contact.phone)
-        : contact.email || contact.addresses.map(a => a.kind === "web_session" ? "web visitor" : Address.key(a))[0] || "";
-    return [name, reach].filter(Boolean).join(" - ") || "Unknown";
-}
-
 function transcriptText(transcript: Transcript, pack: DomainPack): string {
     return transcript.messages
         .map(m => `${m.role === "user" ? "Customer" : pack.defaultAgentName}: ${m.text}`)
         .join("\n");
 }
-
-function classificationSchema(pack: DomainPack): Record<string, unknown> {
-    return {
-        type:                 "object",
-        additionalProperties: false,
-        required:             ["outcome", "topic", "sentiment", "urgency", "language", "followup_needed", "gist"],
-        properties:           {
-            outcome:         { type: "string", enum: Object.values(SessionOutcome) },
-            topic:           { type: "string", enum: DomainPack.topics(pack).map(t => t.id) },
-            sentiment:       { type: "string", enum: Object.values(Sentiment) },
-            urgency:         { type: "string", enum: Object.values(Urgency) },
-            language:        { type: "string", enum: Object.keys(LANGUAGE_NAMES) },
-            followup_needed: { type: "boolean" },
-            gist:            { type: "string" },
-        },
-    };
-}
-

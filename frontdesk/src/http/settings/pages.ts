@@ -7,29 +7,30 @@ import {
     Budget,
     LANGUAGE_NAMES,
     LocalTime,
+    MIN_PASSWORD_LENGTH,
     PhoneNumber,
     PiiKind,
     Plan,
     PLATFORM_BOUNDS,
     Professionalism,
     Tenant,
+    Text,
     WEEKDAY_NAMES,
-    MIN_PASSWORD_LENGTH,
     type Account,
     type Bound,
     type CatalogItem,
     type CatalogSyncStatus,
     type Contact,
     type EvalSummary,
+    type Language,
     type PromptVariant,
     type QualityRow,
-    type Language,
     type Transcript,
 } from "../../core/index.ts";
 import { Catalog, DomainPack } from "../../domains/index.ts";
 import { Style } from "../../prompts/style.ts";
 import type { Viewer } from "./auth.ts";
-import { check, field, form, html, input, page, raw, select, textarea, type Html } from "./html.ts";
+import { check, field, form, html, input, page, raw, select, textarea, type Html } from "../html.ts";
 
 const LANGUAGE_OPTIONS = Object.entries(LANGUAGE_NAMES) as [Language, string][];
 
@@ -149,7 +150,7 @@ export function tenantPage(d: TenantPageData): string {
         ["privacy", "Privacy"],
         ["languages", "Languages"],
         ["schedule", "Schedule"],
-        ["catalog", pack.catalog.itemNounPlural.charAt(0).toUpperCase() + pack.catalog.itemNounPlural.slice(1)],
+        ["catalog", Text.capitalize(pack.catalog.itemNounPlural)],
         ["details", "Business details"],
         ["notifications", "Notifications"],
         ["blocks", "Blocked callers"],
@@ -437,7 +438,7 @@ function catalog(d: TenantPageData): Html {
         : d.sync.error !== null
             ? `Last sync ${when(d.sync.syncedAt, tenant)} failed: ${d.sync.error}. Still using the previous ${d.sync.items} ${spec.itemNounPlural}.`
             : `Last synced ${when(d.sync.syncedAt, tenant)}: ${d.sync.items} ${spec.itemNounPlural}.`;
-    const title = spec.itemNounPlural.charAt(0).toUpperCase() + spec.itemNounPlural.slice(1);
+    const title = Text.capitalize(spec.itemNounPlural);
     const shown = spec.fields.filter(f => f.name !== spec.idField);
     return section("catalog", title, html`
 <p>Everything the assistant knows about your ${spec.itemNounPlural}. However they come in, the assistant reads them the same way.</p>

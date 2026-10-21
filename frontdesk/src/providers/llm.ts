@@ -7,6 +7,8 @@
  * That split is what lets voice replies stream straight to text-to-speech.
  */
 
+import { z } from "zod";
+
 import type { Channel, Purpose, TenantId, UsageRecord, ValueOf } from "../core/index.ts";
 
 /**
@@ -55,6 +57,14 @@ export type ToolDefinition = {
     readonly description: string;
     readonly parameters:  Readonly<Record<string, unknown>>;
 };
+
+/**
+ * The JSON Schema of a zod schema, as tool parameters and structured outputs take it.
+ */
+export function jsonSchemaOf(schema: z.ZodType): Readonly<Record<string, unknown>> {
+    const { $schema: _, ...rest } = z.toJSONSchema(schema);
+    return rest;
+}
 
 /**
  * `json_schema` constrains the whole reply to a JSON document matching `schema` (structured output).

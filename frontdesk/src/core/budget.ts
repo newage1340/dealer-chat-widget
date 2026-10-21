@@ -9,7 +9,7 @@
  */
 
 import type { Channel } from "./channel.ts";
-import type { Block, Contact, ContactChanges } from "./contact.ts";
+import { Block, type Contact, type ContactChanges } from "./contact.ts";
 import type { ValueOf } from "./lang.ts";
 import { Plan } from "./plan.ts";
 import { LocalClock, ServiceSchedule } from "./schedule.ts";
@@ -147,11 +147,13 @@ export type BudgetInput = {
  * Where a tenant stands against its monthly cap.
  * `warning` starts at 80% of the assistant's share; `assistant_used` leaves only the voicemail reserve.
  */
-export type CapStatus =
-    | "ok"
-    | "warning"
-    | "assistant_used"
-    | "exceeded";
+export const CapStatus = {
+    Ok:            "ok",
+    Warning:       "warning",
+    AssistantUsed: "assistant_used",
+    Exceeded:      "exceeded",
+} as const;
+export type CapStatus = ValueOf<typeof CapStatus>;
 
 const CAP_WARNING_SHARE = 0.8;
 
@@ -212,7 +214,7 @@ export const Budget = {
      * Whether a new session may use the assistant at all.
      */
     admit(block: Block | null, input: BudgetInput): Admission {
-        if (block !== null && (block.until === null || block.until > input.now)) {
+        if (Block.isActive(block, input.now)) {
             return { kind: "refuse", reason: "blocked" };
         }
         if (!input.billingActive) {

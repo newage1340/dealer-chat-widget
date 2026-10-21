@@ -22,6 +22,9 @@ export const TWILIO_LANGUAGES: Readonly<Record<Language, { readonly gather: stri
     pt: { gather: "pt-BR", voice: "Polly.Camila-Neural", say: "pt-BR" },
 };
 
+/**
+ * XML escaping for TwiML. Apostrophes stay as they are, so the TwiML (and its logs) read naturally.
+ */
 function escape(text: string): string {
     return text
         .replaceAll("&", "&amp;")

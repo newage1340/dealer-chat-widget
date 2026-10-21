@@ -5,7 +5,7 @@
 
 import nodemailer, { type Transporter } from "nodemailer";
 
-import type { UsageRecord } from "../core/index.ts";
+import { errorMessage, UsageRecord } from "../core/index.ts";
 import type { EmailProvider, EmailReceipt, OutboundEmail } from "./email.ts";
 import { ProviderError } from "./errors.ts";
 
@@ -43,21 +43,19 @@ export class SmtpEmail implements EmailProvider {
                 ...(email.replyTo !== null ? { replyTo: email.replyTo } : {}),
             });
         } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
+            const message = errorMessage(e);
             throw new ProviderError(this.name, /auth|535|534/i.test(message) ? "auth" : "unavailable", message, { cause: e });
         }
-        const usage: UsageRecord = {
-            provider:   this.name,
-            model:      "",
-            service:    "email",
-            purpose:    email.purpose,
-            occurredAt: new Date(),
-            units:      { requests: 1 },
-            costUsd:    null,
-            latencyMs:  performance.now() - started,
-            tenantId:   email.tenantId,
-            channel:    null,
-        };
+        const usage = UsageRecord.measured({
+            provider:  this.name,
+            model:     "",
+            service:   "email",
+            purpose:   email.purpose,
+            units:     { requests: 1 },
+            tenantId:  email.tenantId,
+            channel:   null,
+            startedAt: started,
+        });
         return { providerMessageId: info.messageId ?? "", usage };
     }
 }

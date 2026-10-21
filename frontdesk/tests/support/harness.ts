@@ -2,7 +2,7 @@
  * A full pipeline over an in-memory Postgres, with a scripted model and recording messengers.
  */
 
-import { Address, type Inbound, type Tenant } from "../../src/core/index.ts";
+import { Address, PhoneNumber, type Inbound, type Tenant } from "../../src/core/index.ts";
 import { DomainRegistry } from "../../src/domains/index.ts";
 import { TurnEngine, collect, type RunOptions, type TurnResult } from "../../src/pipeline/engine.ts";
 import { DEFAULT_POLICIES } from "../../src/pipeline/policies.ts";
@@ -65,16 +65,17 @@ export async function harness(
         transcriber:    new FakeTranscriber("Hi, this is Sam, my basement is flooding, call me back at 317-555-0111."),
         fetchRecording: async () => new Uint8Array([1, 2, 3]),
         emailFrom:      "assistant@frontdesk.example",
-        defaultSmsFrom: "+13175550000",
+        defaultSmsFrom: PhoneNumber.parse("+13175550000"),
         dashboardUrl:   "",
     });
     const first = tenants[0]!;
     return {
         store, services, engine, worker, llm, messaging, email, clock,
-        turn: (partial, options) => {
+        turn: async (partial, options) => {
+            // Read back each time, so tests that change the tenant's settings see them.
+            const tenant = await store.tenants.byId(first.id) ?? first;
             const inbound: Inbound = {
                 channel:           "sms",
-                tenant:            { kind: "endpoint", address: Address.phone(first.endpoints.sms?.[0]?.value ?? "+13175550200")! },
                 sender:            Address.phone("+13175550111")!,
                 receivedAt:        clock.now,
                 dedupeKey:         `msg-${++counter}`,
@@ -84,7 +85,7 @@ export async function harness(
                 forwardedFrom:     null,
                 ...partial,
             };
-            return collect(engine.run(inbound, options));
+            return await collect(engine.run(inbound, tenant, options));
         },
     };
 }

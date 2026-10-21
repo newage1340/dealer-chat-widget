@@ -17,6 +17,7 @@ import {
     LocalizedText,
     LocalTime,
     PhoneNumber,
+    Text,
     type BudgetVerdict,
     type Channel,
     type Contact,
@@ -25,7 +26,7 @@ import {
     type PromptVariant,
     type Tenant,
 } from "../core/index.ts";
-import { Catalog, DomainPack, Template, type FollowupKind } from "../domains/index.ts";
+import { Catalog, DomainPack, Template, type FollowupKind, type IntakeField } from "../domains/index.ts";
 import type { ChatMessage } from "../providers/index.ts";
 import type { TurnContext } from "../turn/index.ts";
 import { Hours } from "./hours.ts";
@@ -125,21 +126,11 @@ export class PromptComposer {
     values(tenant: Tenant, pack: DomainPack, channel: Channel): Values {
         const voice = channel === "voice";
         const values: Values = {
+            ...this.#packValues(pack, channel),
             business_name:    tenant.name,
-            business_noun:    pack.businessNoun,
             agent_name:       voice
                 ? tenant.voiceAgentName || pack.defaultVoiceAgentName
                 : tenant.agentName || pack.defaultAgentName,
-            agent_role:       voice
-                ? pack.voiceAgentRole
-                : pack.agentRole,
-            staff_noun:       pack.staffNoun,
-            item_noun:        pack.catalog.itemNoun,
-            item_noun_plural: pack.catalog.itemNounPlural,
-            spoken_item_noun: pack.catalog.spokenNoun,
-            visit_noun:       pack.booking.visitNoun,
-            general_subject:  pack.booking.generalSubject,
-            subject_label:    pack.booking.subjectLabel,
             phone:            tenant.phone === null
                 ? ""
                 : PhoneNumber.display(tenant.phone),
@@ -176,20 +167,25 @@ export class PromptComposer {
 
     // --- base templates --------------------------------------------------------------
 
-    #bookingValues(pack: DomainPack, voice: boolean): Values {
+    /**
+     * `packValues` fill the pack's own placeholders in the intake questions.
+     */
+    #bookingValues(pack: DomainPack, voice: boolean, packValues: Values): Values {
         const b = pack.booking;
         const intake = DomainPack.intakeFor(pack, voice ? "voice" : "chat");
         const customerSite = b.location === "customer";
+        const ask = (f: IntakeField) => Template.render(f.ask, packValues);
+        const skipWhen = Template.render(b.skipIntakeWhen, packValues);
         let steps: string;
         if (voice) {
-            steps = intake.map((f, i) => `b${i + 1}. ${f.label}: ${f.ask}`).join("\n        ");
-            if (b.skipIntakeWhen) {
-                steps += `\n        (Skip the b-steps when ${b.skipIntakeWhen}.)`;
+            steps = intake.map((f, i) => `b${i + 1}. ${f.label}: ${ask(f)}`).join("\n        ");
+            if (skipWhen) {
+                steps += `\n        (Skip the b-steps when ${skipWhen}.)`;
             }
         } else if (intake.length > 0) {
-            steps = intake.map(f => `-   ${f.label}: ${f.ask}`).join("\n");
-            if (b.skipIntakeWhen) {
-                steps += `\n-   SKIP this step entirely when ${b.skipIntakeWhen}.`;
+            steps = intake.map(f => `-   ${f.label}: ${ask(f)}`).join("\n");
+            if (skipWhen) {
+                steps += `\n-   SKIP this step entirely when ${skipWhen}.`;
             }
         } else {
             steps = "-   Nothing extra to ask for this business - go straight to STEP 2.";
@@ -217,16 +213,17 @@ export class PromptComposer {
         const { pack } = ctx;
         const channel = ctx.inbound.channel;
         const voice = channel === "voice";
+        const packValues = this.#packValues(pack, channel);
         const values: Values = {
-            ...this.#packValues(pack, channel),
-            ...this.#bookingValues(pack, voice),
+            ...packValues,
+            ...this.#bookingValues(pack, voice, packValues),
             channel_label:       { sms: "SMS", web: "web chat", voice: "phone" }[channel],
             catalog_heading:     pack.catalog.heading,
-            goal:                pack.goal,
+            goal:                Template.render(pack.goal, packValues),
             upsell_clause:       pack.upsellTopics
                 ? ` - ${pack.upsellTopics} -`
                 : "",
-            business_noun_title: pack.businessNoun.charAt(0).toUpperCase() + pack.businessNoun.slice(1),
+            business_noun_title: Text.capitalize(pack.businessNoun),
             phone_detail:        channel === "web"
                 ? ", or phone number"
                 : "",
@@ -236,7 +233,7 @@ export class PromptComposer {
     }
 
     /**
-     * Placeholder values that come from the pack alone (no tenant names, phone or settings).
+     * Placeholder values that come from the pack alone (PACK_FIELDS: no tenant names, phone or settings).
      */
     #packValues(pack: DomainPack, channel: Channel): Values {
         const voice = channel === "voice";

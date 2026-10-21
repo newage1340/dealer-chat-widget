@@ -61,6 +61,10 @@ export type SpeechChunk =
 
 export interface TextToSpeech {
     readonly name: string;
+    /**
+     * Whether this voice can speak `language` (calls pick the first voice that can).
+     */
+    supports(language: Language): boolean;
     synthesize(
         text:    AsyncIterable<string>,
         voice:   string,

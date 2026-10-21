@@ -10,22 +10,15 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { Hono } from "hono";
+import { z } from "zod";
 
 import { Address, PhoneNumber, type Inbound, type Tenant } from "../core/index.ts";
 import { Catalog, type WidgetTopic } from "../domains/index.ts";
-import { collect, UnknownTenant } from "../pipeline/engine.ts";
-import type { ChannelDeps } from "./context.ts";
+import { collect } from "../pipeline/engine.ts";
+import { jsonBody, type ChannelDeps } from "./context.ts";
+import { escape } from "./html.ts";
 
 const PUBLIC = new URL("../../public/", import.meta.url);
-
-function escape(text: string): string {
-    return text
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll("\"", "&quot;")
-        .replaceAll("'", "&#39;");
-}
 
 function sessionAddress(sessionId: string): Address {
     return Address.webSession(sessionId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64));
@@ -34,21 +27,29 @@ function sessionAddress(sessionId: string): Address {
 /**
  * A US phone number from what a visitor typed, or null.
  */
-function usPhone(raw: unknown): PhoneNumber | null {
-    const digits = String(raw ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+function usPhone(raw: string): PhoneNumber | null {
+    const digits = raw.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
     return digits.length === 10
         ? PhoneNumber.parse(digits)
         : null;
 }
 
-type Body = {
-    readonly session_id?: string;
-    readonly slug?:       string;
-    readonly message?:    string;
-    readonly name?:       string;
-    readonly phone?:      string;
-    readonly real_phone?: string;
-};
+/**
+ * What a widget field may arrive as; missing and null read as "".
+ */
+const field = z.string().nullish().transform(v => v?.trim() ?? "");
+
+/**
+ * Every widget request's JSON body (each endpoint uses some of the fields).
+ */
+const WidgetBody = z.object({
+    session_id: field,
+    slug:       field,
+    message:    field,
+    name:       field,
+    phone:      field,
+    real_phone: field,
+});
 
 function page(tenant: Tenant, sections: [string, WidgetTopic[]][], widget: { icon: string; tagline: string; headerTitle: string; inputPlaceholder: string }, terms: string, privacy: string): string {
     const e = escape;
@@ -132,8 +133,8 @@ export function webRoutes(deps: ChannelDeps): Hono {
     const { services, config, engine } = deps;
     const { store, registry } = services;
 
-    const tenantFor = async (slug: string | undefined): Promise<Tenant | null> => {
-        const s = slug?.trim() || config.defaultSlug;
+    const tenantFor = async (slug: string): Promise<Tenant | null> => {
+        const s = slug || config.defaultSlug;
         return s
             ? await store.tenants.bySlug(s)
             : null;
@@ -187,7 +188,7 @@ export function webRoutes(deps: ChannelDeps): Hono {
 
     app.get("/widget-config", async c => {
         c.header("Access-Control-Allow-Origin", "*");
-        const tenant = await tenantFor(c.req.query("dealer") ?? c.req.query("business"));
+        const tenant = await tenantFor(c.req.query("dealer") ?? c.req.query("business") ?? "");
         if (tenant === null) {
             return c.json({ error: "business not found" }, 404);
         }
@@ -201,8 +202,11 @@ export function webRoutes(deps: ChannelDeps): Hono {
     });
 
     app.post("/chat", async c => {
-        const body = await c.req.json<Body>().catch((): Body => ({}));
-        const message = body.message?.trim() ?? "";
+        const body = await jsonBody(c, WidgetBody);
+        if (body === null) {
+            return c.json({ error: "invalid request body" }, 400);
+        }
+        const message = body.message;
         const tenant = await tenantFor(body.slug);
         if (tenant === null) {
             return c.json({ error: "no business resolved (missing or unknown slug)" }, 400);
@@ -210,7 +214,7 @@ export function webRoutes(deps: ChannelDeps): Hono {
         if (!message) {
             return c.json({ error: "empty message" }, 400);
         }
-        const sessionId = body.session_id?.trim() || randomUUID().replaceAll("-", "");
+        const sessionId = body.session_id || randomUUID().replaceAll("-", "");
 
         // Self-heal: the widget echoes the phone it cached, in case the server lost it.
         const cached = usPhone(body.real_phone);
@@ -221,7 +225,6 @@ export function webRoutes(deps: ChannelDeps): Hono {
 
         const inbound: Inbound = {
             channel:           "web",
-            tenant:            { kind: "slug", slug: tenant.slug },
             sender:            sessionAddress(sessionId),
             text:              message,
             receivedAt:        services.clock(),
@@ -232,7 +235,7 @@ export function webRoutes(deps: ChannelDeps): Hono {
             forwardedFrom:     null,
         };
         try {
-            const result = await collect(engine.run(inbound, { tenant }));
+            const result = await collect(engine.run(inbound, tenant));
             if (result.data["needs_profile"]) {
                 return c.json({
                     reply:           result.outcome.reply,
@@ -244,16 +247,16 @@ export function webRoutes(deps: ChannelDeps): Hono {
             }
             return c.json({ reply: result.outcome.reply, primer: null, silent: result.silent, session_id: sessionId });
         } catch (e) {
-            if (e instanceof UnknownTenant) {
-                return c.json({ error: e.message }, 400);
-            }
             console.error("chat turn failed:", e);
             return c.json({ error: "processing error" }, 500);
         }
     });
 
     app.post("/widget/welcome", async c => {
-        const body = await c.req.json<Body>().catch((): Body => ({}));
+        const body = await jsonBody(c, WidgetBody);
+        if (body === null) {
+            return c.json({ error: "invalid request body" }, 400);
+        }
         const tenant = await tenantFor(body.slug);
         if (!body.session_id || tenant === null) {
             return c.json({ error: "missing session_id or unknown slug" }, 400);
@@ -273,7 +276,10 @@ export function webRoutes(deps: ChannelDeps): Hono {
     });
 
     app.post("/widget/history", async c => {
-        const body = await c.req.json<Body>().catch((): Body => ({}));
+        const body = await jsonBody(c, WidgetBody);
+        if (body === null) {
+            return c.json({ error: "invalid request body" }, 400);
+        }
         const tenant = await tenantFor(body.slug);
         if (!body.session_id || tenant === null) {
             return c.json({ messages: [] });
@@ -288,9 +294,12 @@ export function webRoutes(deps: ChannelDeps): Hono {
     });
 
     app.post("/widget/profile", async c => {
-        const body = await c.req.json<Body>().catch((): Body => ({}));
+        const body = await jsonBody(c, WidgetBody);
+        if (body === null) {
+            return c.json({ error: "invalid request body" }, 400);
+        }
         const tenant = await tenantFor(body.slug);
-        const name = body.name?.trim() ?? "";
+        const name = body.name;
         const phone = usPhone(body.phone);
         if (!body.session_id || tenant === null) {
             return c.json({ error: "missing session_id or unknown slug" }, 400);
@@ -308,7 +317,10 @@ export function webRoutes(deps: ChannelDeps): Hono {
     });
 
     app.post("/widget/register-phone", async c => {
-        const body = await c.req.json<Body>().catch((): Body => ({}));
+        const body = await jsonBody(c, WidgetBody);
+        if (body === null) {
+            return c.json({ error: "invalid request body" }, 400);
+        }
         const tenant = await tenantFor(body.slug);
         const phone = usPhone(body.phone);
         if (!body.session_id || tenant === null || phone === null) {
@@ -320,7 +332,10 @@ export function webRoutes(deps: ChannelDeps): Hono {
     });
 
     app.post("/widget/clear-session", async c => {
-        const body = await c.req.json<Body>().catch((): Body => ({}));
+        const body = await jsonBody(c, WidgetBody);
+        if (body === null) {
+            return c.json({ error: "invalid request body" }, 400);
+        }
         const tenant = await tenantFor(body.slug);
         if (!body.session_id || tenant === null) {
             return c.json({ error: "missing session_id or unknown slug" }, 400);

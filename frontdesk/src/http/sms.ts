@@ -33,7 +33,6 @@ export function smsRoutes(deps: ChannelDeps): Hono {
 
         const inbound: Inbound = {
             channel:           "sms",
-            tenant:            { kind: "endpoint", address: recipient },
             sender,
             text:              (f["Body"] ?? "").trim(),
             receivedAt:        services.clock(),
@@ -45,7 +44,7 @@ export function smsRoutes(deps: ChannelDeps): Hono {
         };
         let text: string;
         try {
-            const result = await collect(engine.run(inbound, { tenant }));
+            const result = await collect(engine.run(inbound, tenant));
             if (result.silent || !result.outcome.reply) {
                 return xml(c, messageResponse(null));
             }

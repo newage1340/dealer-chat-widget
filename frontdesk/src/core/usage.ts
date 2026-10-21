@@ -64,3 +64,29 @@ export type UsageRecord = {
     readonly tenantId:   TenantId | null;
     readonly channel:    Channel | null;
 };
+
+export const UsageRecord = {
+    /**
+     * The record of a call that just finished. `startedAt` is a `performance.now()` reading taken before it;
+     * the price is filled in later from the price table.
+     */
+    measured(call: {
+        readonly provider:  string;
+        readonly model:     string;
+        readonly service:   ServiceKind;
+        readonly purpose:   Purpose;
+        readonly units:     Readonly<Partial<Record<UsageUnit, number>>>;
+        readonly tenantId:  TenantId | null;
+        readonly channel:   Channel | null;
+        readonly startedAt: number;
+    }): UsageRecord
+    {
+        const { startedAt, ...rest } = call;
+        return {
+            ...rest,
+            occurredAt: new Date(),
+            costUsd:    null,
+            latencyMs:  performance.now() - startedAt,
+        };
+    },
+} as const;

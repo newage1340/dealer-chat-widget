@@ -5,8 +5,10 @@
  * goes to the backup transcriber (Deepgram) instead, so a caller never waits on the GPU box.
  */
 
-import type { Language, UsageRecord } from "../core/index.ts";
+import { errorMessage, UsageRecord, type Language } from "../core/index.ts";
 import { MuLaw, Pcm, VoiceActivity } from "./audio.ts";
+import { checkStatus, providerFetch, readJson } from "./http.ts";
+import { TranscriptionReply } from "./openai-stt.ts";
 import type { AudioFormat, BatchTranscriber, Recognition, SpeechContext, SpeechToText } from "./speech.ts";
 
 export type LocalWhisperOptions = {
@@ -74,13 +76,13 @@ export class LocalWhisperStt implements SpeechToText {
             const started = performance.now();
             try {
                 const text = await this.#local(wav, language, context.hints);
-                yield { kind: "usage", usage: this.#usage(context, seconds, performance.now() - started) };
+                yield { kind: "usage", usage: this.#usage(context, seconds, started) };
                 if (text) {
                     yield { kind: "final", text, confidence: 1, language };
                 }
                 return;
             } catch (e) {
-                console.warn(`local speech-to-text failed, using the backup: ${e instanceof Error ? e.message : String(e)}`);
+                console.warn(`local speech-to-text failed, using the backup: ${errorMessage(e)}`);
             } finally {
                 this.#inFlight--;
             }
@@ -95,7 +97,7 @@ export class LocalWhisperStt implements SpeechToText {
                 yield { kind: "final", text: result.text, confidence: 1, language: result.language };
             }
         } catch (e) {
-            console.error(`backup speech-to-text failed too: ${e instanceof Error ? e.message : String(e)}`);
+            console.error(`backup speech-to-text failed too: ${errorMessage(e)}`);
         }
     }
 
@@ -110,23 +112,26 @@ export class LocalWhisperStt implements SpeechToText {
             // Whisper uses the prompt as context, which nudges it toward these spellings.
             body.set("prompt", hints.slice(0, 40).join(", "));
         }
-        const response = await fetch(`${this.#o.baseUrl.replace(/\/$/, "")}/audio/transcriptions`, {
+        const response = await providerFetch(this.name, `${this.#o.baseUrl.replace(/\/$/, "")}/audio/transcriptions`, {
             method:  "POST",
             headers: { Authorization: `Bearer ${this.#o.apiKey || "none"}` },
             body,
-            signal:  AbortSignal.timeout(this.#o.timeoutMs),
-        });
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        const json = await response.json() as { text?: string };
+        }, { timeoutMs: this.#o.timeoutMs });
+        checkStatus(this.name, response);
+        const json = await readJson(this.name, response, TranscriptionReply);
         return (json.text ?? "").trim();
     }
 
-    #usage(context: SpeechContext, seconds: number, latencyMs: number): UsageRecord {
-        return {
-            provider: this.name, model: this.#o.model, service: "stt", purpose: context.purpose, occurredAt: new Date(),
-            units: { audio_seconds: seconds }, costUsd: null, latencyMs, tenantId: context.tenantId, channel: "voice",
-        };
+    #usage(context: SpeechContext, seconds: number, started: number): UsageRecord {
+        return UsageRecord.measured({
+            provider:  this.name,
+            model:     this.#o.model,
+            service:   "stt",
+            purpose:   context.purpose,
+            units:     { audio_seconds: seconds },
+            tenantId:  context.tenantId,
+            channel:   "voice",
+            startedAt: started,
+        });
     }
 }

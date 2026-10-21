@@ -43,10 +43,3 @@ export type Appointment = {
     readonly sentNotices:    readonly AppointmentNotice[];
     readonly createdAt:      Date;
 };
-
-export const Appointment = {
-    isUpcoming(appointment: Appointment, now: Date): boolean {
-        return appointment.status === "confirmed"
-            && (appointment.startsAt === null || appointment.startsAt > now);
-    },
-} as const;

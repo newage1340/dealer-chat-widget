@@ -36,11 +36,14 @@ export {
     type WidgetTopic,
 } from "./pack.ts";
 export {
+    PriceRange,
+} from "./price.ts";
+export {
     PackFile,
-    type PackProblem,
 } from "./schema.ts";
 export {
     FOLLOWUP_FIELDS,
+    PACK_FIELDS,
     PROMPT_FIELDS,
     Template,
 } from "./template.ts";

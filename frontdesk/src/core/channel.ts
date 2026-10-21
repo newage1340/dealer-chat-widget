@@ -101,9 +101,4 @@ export const Address = {
     key(address: Address): string {
         return `${address.kind}:${address.value}`;
     },
-
-    equals(a: Address, b: Address): boolean {
-        return a.kind === b.kind
-			&& a.value === b.value;
-    },
 } as const;

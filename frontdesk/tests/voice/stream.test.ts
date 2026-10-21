@@ -10,6 +10,9 @@ import { lastUser } from "../support/harness.ts";
 
 function script(request: LlmRequest): ScriptedReply | string {
     const said = lastUser(request);
+    if (said.includes("explode")) {
+        throw new Error("a bug in the turn");
+    }
     if (said.includes("real person")) {
         return { text: "Okay, connecting you now.", tools: [{ name: "transfer_call", arguments: { reason: "asked for a person" } }] };
     }
@@ -127,6 +130,15 @@ describe("media streams", () => {
         const usage = await app.store.spend.summary(null, new Date(0));
         expect(usage.some(u => u.provider === "twilio-media-streams")).toBe(true);
         expect(usage.some(u => u.provider === "fake-tts")).toBe(true);
+    });
+
+    it("keeps answering after a turn fails", async () => {
+        const c = await call("CA5");
+        await c.play();
+        stt.hear("please explode");
+        await c.play();
+        stt.hear("my kitchen sink is leaking");
+        await until(() => tts.spoken.some(t => t.includes("we can help")));
     });
 
     it("asks if the caller is still there, then says goodbye and hangs up", async () => {

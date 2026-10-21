@@ -7,7 +7,7 @@ import type { UpgradeWebSocket } from "hono/ws";
 
 import { TwilioSignature } from "../providers/twilio.ts";
 import { StreamCall } from "../voice/stream.ts";
-import type { VoicePipeline } from "../voice/pipeline.ts";
+import type { StreamingPipeline } from "../voice/pipeline.ts";
 import type { ChannelDeps } from "./context.ts";
 
 /**
@@ -20,7 +20,7 @@ export function streamUrl(publicBaseUrl: string, host: string): string {
 
 export function streamUpgrade(
     deps: ChannelDeps,
-    pipeline: Extract<VoicePipeline, { kind: "media_streams" | "media_streams_local" }>,
+    pipeline: StreamingPipeline,
     upgrade: UpgradeWebSocket
 )
 {

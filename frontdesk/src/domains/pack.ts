@@ -226,4 +226,23 @@ export const DomainPack = {
     intakeFor(pack: DomainPack, channel: IntakeChannel): readonly IntakeField[] {
         return pack.booking.intake.filter(f => f.channels.includes(channel));
     },
+
+    /**
+     * Every piece of pack text the model reads, with its path in the pack file, for checks over all of them.
+     */
+    promptTexts(pack: DomainPack): [path: string, text: string][] {
+        return [
+            ["domain.goal", pack.goal],
+            ["prompts.chat", pack.prompts.chat],
+            ["prompts.voice", pack.prompts.voice],
+            ["prompts.summary_focus", pack.prompts.summaryFocus],
+            ["booking.skip_intake_when", pack.booking.skipIntakeWhen],
+            ["widget.capabilities", pack.widget.capabilities],
+            ...pack.booking.intake.map((f, i): [string, string] => [`booking.intake.${i}.ask`, f.ask]),
+            ...pack.prompts.toggles.map((t, i): [string, string] => [
+                `prompts.toggles.${i}`,
+                [t.chat, t.voice, t.elseChat, t.elseVoice].join("\n"),
+            ]),
+        ];
+    },
 } as const;

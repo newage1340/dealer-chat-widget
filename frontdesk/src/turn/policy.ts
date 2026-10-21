@@ -28,8 +28,8 @@ export interface Policy {
 }
 
 export const PolicyDecision = {
-    continue: { kind: "continue" } as PolicyDecision,
-    silence:  { kind: "silence" }  as PolicyDecision,
+    continue: { kind: "continue" } satisfies PolicyDecision,
+    silence:  { kind: "silence" }  satisfies PolicyDecision,
 
     answer(
         outcome: TurnOutcome,

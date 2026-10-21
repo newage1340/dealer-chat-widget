@@ -183,7 +183,7 @@ export const Hours = {
                     : Hours.isClosed(h)
                         ? "CLOSED - never offer a time on this day"
                         : h.text;
-            const iso = `${d.year}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
+            const iso = LocalTime.isoDate(d);
             lines.push(`- ${label} (${day} ${LocalTime.monthName(d)} ${String(d.day).padStart(2, "0")}, date ${iso}): ${status}`);
         }
         return lines.join("\n");

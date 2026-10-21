@@ -5,6 +5,7 @@
 import {
     CatalogItem,
     CatalogItemId,
+    Text,
     type FieldSpec,
     type FieldValue,
     type TenantId,
@@ -106,7 +107,7 @@ export const Catalog = {
     title(item: CatalogItem, spec: CatalogSpec): string {
         const values = Object.fromEntries(spec.fields.map(f => [f.name, CatalogItem.text(item, f.name)]));
         const title = Template.render(spec.titleTemplate, values).split(/\s+/).filter(Boolean).join(" ");
-        return title || spec.itemNoun.charAt(0).toUpperCase() + spec.itemNoun.slice(1);
+        return title || Text.capitalize(spec.itemNoun);
     },
 
     /**

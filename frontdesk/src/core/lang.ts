@@ -18,6 +18,18 @@ export type Brand<T, Name extends string> = T & { readonly [brand]: Name };
 export type ValueOf<T> = T[keyof T];
 
 /**
+ * `raw` as a member of an `as const` enum object, or null when it isn't one (for untrusted input).
+ */
+export function enumValue<E extends Readonly<Record<string, string>>>(values: E, raw: unknown): ValueOf<E> | null {
+    return (Object.values(values) as ValueOf<E>[]).find(v => v === raw) ?? null;
+}
+
+/**
+ * A writable copy of a readonly object type, for building one up field by field.
+ */
+export type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+/**
  * The member of a tagged union whose `kind` is `K`.
  */
 export type Variant<
@@ -29,4 +41,13 @@ export type Variant<
  */
 export function assertNever(value: never, message = "unexpected variant"): never {
     throw new Error(`${message}: ${JSON.stringify(value)}`);
+}
+
+/**
+ * The message of a caught value, for logs and error results.
+ */
+export function errorMessage(error: unknown): string {
+    return error instanceof Error
+        ? error.message
+        : String(error);
 }

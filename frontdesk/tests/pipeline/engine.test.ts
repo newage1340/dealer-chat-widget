@@ -69,7 +69,7 @@ describe("TurnEngine", () => {
         const toolMessage = h.llm.requests[1]!.messages.find(m => m.role === "tool");
         expect(toolMessage?.role === "tool" && toolMessage.output).toContain("closed on Sundays");
 
-        const booked = await h.turn({ text: "Monday at 10 works, book it", channel: "web", tenant: { kind: "slug", slug: "demo-plumber" }, sender: Address.webSession("w1"), externalSessionId: "w1" }, {});
+        const booked = await h.turn({ text: "Monday at 10 works, book it", channel: "web", sender: Address.webSession("w1"), externalSessionId: "w1" }, {});
         // The web profile gate asks first: no name or phone yet.
         expect(booked.data["needs_profile"]).toBe(true);
 

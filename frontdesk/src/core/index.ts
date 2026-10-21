@@ -3,9 +3,9 @@
  */
 
 export {
-    Appointment,
     AppointmentNotice,
     AppointmentStatus,
+    type Appointment,
 } from "./appointment.ts";
 export {
     MIN_PASSWORD_LENGTH,
@@ -25,6 +25,7 @@ export {
 export {
     Abuse,
     Budget,
+    CapStatus,
     ClosingReason,
     DEFAULT_ABUSE_POLICY,
     DEFAULT_SESSION_LIMITS,
@@ -35,7 +36,6 @@ export {
     type Admission,
     type BudgetInput,
     type BudgetVerdict,
-    type CapStatus,
     type Closing,
     type SessionLimits,
 } from "./budget.ts";
@@ -64,6 +64,7 @@ export {
 } from "./channel.ts";
 export {
     Block,
+    BlockSource,
     Contact,
     type ContactChanges,
 } from "./contact.ts";
@@ -105,7 +106,6 @@ export {
 } from "./ids.ts";
 export {
     type Inbound,
-    type TenantRef,
 } from "./inbound.ts";
 export {
     type Job,
@@ -116,7 +116,10 @@ export {
 } from "./jobs.ts";
 export {
     assertNever,
+    enumValue,
+    errorMessage,
     type Brand,
+    type Mutable,
     type ValueOf,
     type Variant,
 } from "./lang.ts";
@@ -142,6 +145,9 @@ export {
     type Redacted,
 } from "./privacy.ts";
 export {
+    Problem,
+} from "./problem.ts";
+export {
     CONTROL_VARIANT,
     PromptVariant,
     type EvalRecord,
@@ -163,9 +169,10 @@ export {
     type WeeklyWindow,
 } from "./schedule.ts";
 export {
+    DEFAULT_CALL_SETTINGS,
+    HiddenCallerId,
     NotifyVia,
     Professionalism,
-    DEFAULT_CALL_SETTINGS,
     StaffNotice,
     Tenant,
     type AgentStyle,
@@ -175,6 +182,9 @@ export {
     type TenantLink,
     type TenantSettings,
 } from "./tenant.ts";
+export {
+    Text,
+} from "./text.ts";
 export {
     LocalTime,
     WEEKDAY_NAMES,
@@ -190,8 +200,8 @@ export {
 export {
     Purpose,
     ServiceKind,
+    UsageRecord,
     UsageUnit,
-    type UsageRecord,
 } from "./usage.ts";
 export {
     MAX_VOICEMAIL_SECONDS,

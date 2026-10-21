@@ -9,13 +9,15 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 
 import type { Config, LlmConfig } from "./config.ts";
+import { errorMessage, PhoneNumber, type Language } from "./core/index.ts";
 import { DomainRegistry } from "./domains/index.ts";
 import { adminRoutes } from "./http/admin.ts";
-import type { ChannelDeps } from "./http/context.ts";
 import { billingRoutes } from "./http/billing.ts";
+import type { ChannelDeps } from "./http/context.ts";
 import { onboardingRoutes } from "./http/onboarding.ts";
 import { settingsRoutes } from "./http/settings/routes.ts";
 import { smsRoutes } from "./http/sms.ts";
+import { streamUpgrade } from "./http/stream.ts";
 import { vapiRoutes } from "./http/vapi.ts";
 import { voiceRoutes } from "./http/voice.ts";
 import { webRoutes } from "./http/web.ts";
@@ -25,30 +27,28 @@ import type { Services } from "./pipeline/services.ts";
 import { DEFAULT_SUBSCRIBERS } from "./pipeline/subscribers.ts";
 import { Worker } from "./pipeline/worker.ts";
 import { PromptComposer } from "./prompts/composer.ts";
+import { DeepgramStreamingStt, DeepgramTranscriber, DeepgramTts } from "./providers/deepgram.ts";
 import {
     LlmRouter,
     LoggingEmail,
     LoggingMessaging,
+    PriceTable,
     type BatchTranscriber,
     type EmailProvider,
     type LlmProvider,
     type MessagingProvider,
-    type PriceTable,
     type Route,
     type UsageSink,
 } from "./providers/index.ts";
-import type { Language } from "./core/index.ts";
-import { streamUpgrade } from "./http/stream.ts";
-import { DeepgramStreamingStt, DeepgramTranscriber, DeepgramTts } from "./providers/deepgram.ts";
 import { OpenAiTranscriber } from "./providers/openai-stt.ts";
 import { OpenAiCompatibleTts } from "./providers/openai-tts.ts";
-import { LocalWhisperStt } from "./providers/whisper.ts";
-import { VoicePipeline } from "./voice/pipeline.ts";
 import { OpenAiCompatibleLlm } from "./providers/openai.ts";
 import { ResendEmail } from "./providers/resend.ts";
 import { SmtpEmail } from "./providers/smtp.ts";
 import { TwilioSms } from "./providers/twilio.ts";
+import { LocalWhisperStt } from "./providers/whisper.ts";
 import { openStore, type Store } from "./storage/index.ts";
+import { VoicePipeline } from "./voice/pipeline.ts";
 
 export type Overrides = {
     readonly voice?:          VoicePipeline;
@@ -75,13 +75,19 @@ export type App = {
 };
 
 export async function loadPrices(path: string): Promise<PriceTable> {
+    let data: unknown;
     try {
-        const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-        return Object.fromEntries(Object.entries(raw).filter(([k]) => !k.startsWith("_"))) as PriceTable;
+        data = JSON.parse(await readFile(path, "utf8"));
     } catch (e) {
-        console.warn(`no price table loaded from ${path}: ${String(e)}`);
+        console.warn(`no price table loaded from ${path}: ${errorMessage(e)}`);
         return {};
     }
+    const table = PriceTable.parse(data);
+    if (!table.ok) {
+        console.warn(`no price table loaded from ${path}: ${table.error}`);
+        return {};
+    }
+    return table.value;
 }
 
 /**
@@ -205,12 +211,12 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
 				? (url: string) => twilio.recording(url)
 				: null,
         emailFrom:      config.emailFrom,
-        defaultSmsFrom: config.twilioDefaultFrom,
+        defaultSmsFrom: PhoneNumber.parse(config.twilioDefaultFrom),
         dashboardUrl:   config.dashboardUrl,
     });
 
     const voice = overrides.voice ?? buildVoicePipeline(config);
-    if (voice.kind !== "twilio_gather") {
+    if (VoicePipeline.streams(voice)) {
         console.info(`voice pipeline: ${voice.kind} (listening with ${voice.stt.name}; voices ${voice.voices.map(v => v.name).join(", ")})`);
     }
     const deps: ChannelDeps = { config, services, engine, voice, ...(overrides.fetch !== undefined ? { fetch: overrides.fetch } : {}) };
@@ -228,7 +234,7 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
     http.route("/", voiceRoutes(deps));
     http.route("/", vapiRoutes(deps));
     http.route("/", webRoutes(deps));
-    if (voice.kind !== "twilio_gather") {
+    if (VoicePipeline.streams(voice)) {
         http.get("/voice/stream", streamUpgrade(deps, voice, upgradeWebSocket));
     }
     return { http, injectWebSocket, services, engine, worker, store };

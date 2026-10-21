@@ -8,7 +8,7 @@
 
 import type { RefusalReason } from "./budget.ts";
 import type { PhoneNumber } from "./channel.ts";
-import type { ValueOf } from "./lang.ts";
+import { assertNever, type ValueOf } from "./lang.ts";
 
 /**
  * What a call gets when the assistant cannot take it.
@@ -87,6 +87,7 @@ export const Coverage = {
                 case "allowance_used": return "voicemail";
                 case "off_schedule":   return fallbacks.offSchedule;
                 case "line_busy":      return fallbacks.lineBusy;
+                default:               return assertNever(reason);
             }
         })();
         return chosen === "forward" && !Coverage.canForward(route)

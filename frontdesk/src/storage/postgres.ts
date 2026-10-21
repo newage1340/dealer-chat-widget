@@ -7,27 +7,36 @@ import { randomUUID } from "node:crypto";
 import {
     Address,
     AppointmentId,
+    AppointmentStatus,
+    assertNever,
+    BlockSource,
+    CallHandling,
     CallState,
+    CallVendor,
     CatalogItemId,
+    Channel,
     ContactId,
     ConversationId,
+    enumValue,
     JobId,
+    Language,
     LocalTime,
     MessageId,
+    PhoneNumber,
+    Role,
     SessionId,
     SessionMeter,
     Tenant,
     TenantId,
+    type Account,
     type Appointment,
     type AppointmentNotice,
     type Block,
     type CatalogItem,
-    type Channel,
     type Classification,
     type Contact,
     type ContactChanges,
     type Conversation,
-    type Account,
     type DomainEvent,
     type EvalSummary,
     type FieldValue,
@@ -37,6 +46,7 @@ import {
     type Session,
     type Transcript,
     type UsageRecord,
+    type ValueOf,
     type Voicemail,
 } from "../core/index.ts";
 import { PriceTable } from "../providers/usage.ts";
@@ -52,7 +62,6 @@ import type {
     Outbox,
     Participants,
     QualityLog,
-    SessionDefaults,
     SessionKey,
     SpendLedger,
     Store,
@@ -72,6 +81,27 @@ const maybeDate = (value: unknown): Date | null => value === null || value === u
 const str = (value: unknown): string => value === null || value === undefined ? "" : String(value);
 const parsed = <T>(value: unknown): T => (typeof value === "string" ? JSON.parse(value) : value) as T;
 
+/**
+ * The first row mapped by `map`, or null when the query found nothing.
+ */
+function firstOrNull<T>(rows: readonly Row[], map: (row: Row) => T): T | null {
+    const row = rows[0];
+    return row === undefined
+        ? null
+        : map(row);
+}
+
+/**
+ * A stored value of an `as const` enum, checked; a value the code doesn't know is a bug, not a row to guess at.
+ */
+function member<E extends Readonly<Record<string, string>>>(values: E, raw: unknown): ValueOf<E> {
+    const value = enumValue(values, raw);
+    if (value === null) {
+        throw new Error(`unexpected stored value '${str(raw)}' (expected one of ${Object.values(values).join(", ")})`);
+    }
+    return value;
+}
+
 // --- Row mapping --------------------------------------------------------------------
 
 const CONTACT_COLUMNS = `c.*, (
@@ -84,7 +114,7 @@ function toContact(r: Row): Contact {
         ? null
         : {
             until:     maybeDate(r["block_until"]),
-            source:    r["block_source"] as Block["source"],
+            source:    member(BlockSource, r["block_source"]),
             reason:    str(r["block_reason"]),
             createdAt: date(r["block_created_at"]),
         };
@@ -94,11 +124,13 @@ function toContact(r: Row): Contact {
         firstName:         str(r["first_name"]),
         lastName:          str(r["last_name"]),
         email:             str(r["email"]),
-        phone:             (r["phone"] as Contact["phone"]) ?? null,
+        phone:             PhoneNumber.parse(str(r["phone"])),
         addresses:         parsed<Address[]>(r["addresses"] ?? []),
         optedOut:          Boolean(r["opted_out"]),
         termsAcceptedAt:   maybeDate(r["terms_accepted_at"]),
-        preferredLanguage: (r["preferred_language"] as Contact["preferredLanguage"]) ?? null,
+        preferredLanguage: r["preferred_language"] === null || r["preferred_language"] === undefined
+            ? null
+            : member(Language, r["preferred_language"]),
         block,
         abuseStrikes:      parsed<string[]>(r["abuse_strikes"] ?? []).map(date),
         attributes:        parsed<Record<string, string>>(r["attributes"] ?? {}),
@@ -124,10 +156,11 @@ function toSession(r: Row): Session {
         startedAt:      date(r["started_at"]),
         endedAt:        maybeDate(r["ended_at"]),
         sentUrls:       parsed<string[]>(r["sent_urls"] ?? []),
-        language:       r["language"] as Session["language"],
+        language:       member(Language, r["language"]),
         meter:          { ...meter, startedAt: date(meter.startedAt) },
     };
-    switch (r["channel"] as Channel) {
+    const channel = member(Channel, r["channel"]);
+    switch (channel) {
         case "web":
             return { ...base, channel: "web", externalId: str(r["external_id"]) };
         case "sms":
@@ -137,10 +170,14 @@ function toSession(r: Row): Session {
                 ...base,
                 channel:    "voice",
                 externalId: str(r["external_id"]),
-                vendor:     r["vendor"] as "twilio" | "vapi",
-                handling:   (r["handling"] as "assistant") ?? "assistant",
+                vendor:     member(CallVendor, r["vendor"]),
+                handling:   r["handling"] === null || r["handling"] === undefined
+                    ? CallHandling.Assistant
+                    : member(CallHandling, r["handling"]),
                 call:       parsed<CallState>(r["call"] ?? CallState.start()),
             };
+        default:
+            return assertNever(channel);
     }
 }
 
@@ -149,9 +186,9 @@ function toMessage(r: Row): Message {
         id:             MessageId(str(r["id"])),
         conversationId: ConversationId(str(r["conversation_id"])),
         sessionId:      SessionId(str(r["session_id"])),
-        role:           r["role"] as Message["role"],
+        role:           member(Role, r["role"]),
         text:           str(r["text"]),
-        channel:        r["channel"] as Channel,
+        channel:        member(Channel, r["channel"]),
         createdAt:      date(r["created_at"]),
     };
 }
@@ -168,7 +205,7 @@ function toAppointment(r: Row): Appointment {
         location:       str(r["location"]),
         details:        parsed<Record<string, string>>(r["details"] ?? {}),
         itemIds:        parsed<string[]>(r["item_ids"] ?? []).map(CatalogItemId),
-        status:         r["status"] as Appointment["status"],
+        status:         member(AppointmentStatus, r["status"]),
         sentNotices:    parsed<AppointmentNotice[]>(r["sent_notices"] ?? []),
         createdAt:      date(r["created_at"]),
     };
@@ -280,9 +317,7 @@ export class PostgresStore implements Store {
         const db = this.#db;
         const one = async (sql: string, params: unknown[]) => {
             const rows = await db.query(sql, params);
-            return rows[0] === undefined
-                ? null
-                : Tenant.upgrade(parsed<Tenant>(rows[0]["data"]));
+            return firstOrNull(rows, r => Tenant.upgrade(parsed<Tenant>(r["data"])));
         };
         return {
             byId:       id => one("select data from tenants where id = $1", [id]),
@@ -353,15 +388,11 @@ export class PostgresStore implements Store {
         const db = this.#db;
         const contactById = async (id: string, q: Db = db) => {
             const rows = await q.query(`select ${CONTACT_COLUMNS} from contacts c where c.id = $1`, [id]);
-            return rows[0] === undefined
-                ? null
-                : toContact(rows[0]);
+            return firstOrNull(rows, toContact);
         };
         const sessionById = async (id: string) => {
             const rows = await db.query("select * from sessions where id = $1", [id]);
-            return rows[0] === undefined
-                ? null
-                : toSession(rows[0]);
+            return firstOrNull(rows, toSession);
         };
         const findSession = async (tenantId: string, key: SessionKey, conversationId: string | null, idleSince: Date | null) => {
             const rows = key.channel === "sms"
@@ -374,9 +405,7 @@ export class PostgresStore implements Store {
                     "select * from sessions where tenant_id = $1 and channel = $2 and external_id = $3 and ended_at is null",
                     [tenantId, key.channel, key.externalId],
                 );
-            return rows[0] === undefined
-                ? null
-                : toSession(rows[0]);
+            return firstOrNull(rows, toSession);
         };
 
         return {
@@ -476,9 +505,7 @@ export class PostgresStore implements Store {
                 const rows = await db.query(
                     "update sessions set ended_at = $2 where id = $1 and ended_at is null returning *", [id, at],
                 );
-                return rows[0] === undefined
-                    ? null
-                    : toSession(rows[0]);
+                return firstOrNull(rows, toSession);
             },
 
             idleSessions: async (before, limit) => (await db.query(
@@ -513,16 +540,12 @@ export class PostgresStore implements Store {
                 const rows = await db.query(
                     "select * from messages where conversation_id = $1 order by created_at desc limit 1", [conversationId],
                 );
-                return rows[0] === undefined
-                    ? null
-                    : toMessage(rows[0]);
+                return firstOrNull(rows, toMessage);
             },
 
             conversation: async id => {
                 const rows = await db.query("select * from conversations where id = $1", [id]);
-                return rows[0] === undefined
-                    ? null
-                    : toConversation(rows[0]);
+                return firstOrNull(rows, toConversation);
             },
 
             contact: id => contactById(id),
@@ -533,9 +556,7 @@ export class PostgresStore implements Store {
                      where ca.tenant_id = $1 and ca.address = $2`,
                     [tenantId, Address.key(address)],
                 );
-                return rows[0] === undefined
-                    ? null
-                    : toContact(rows[0]);
+                return firstOrNull(rows, toContact);
             },
 
             updateContact: async (id, changes) => {
@@ -586,9 +607,7 @@ export class PostgresStore implements Store {
         const db = this.#db;
         const one = async (sql: string, params: unknown[]) => {
             const rows = await db.query(sql, params);
-            return rows[0] === undefined
-                ? null
-                : toAppointment(rows[0]);
+            return firstOrNull(rows, toAppointment);
         };
         return {
             latest:     conversationId => one(
@@ -755,7 +774,7 @@ export class PostgresStore implements Store {
             monthToDate: async (tenant, now) => {
                 const local = LocalTime.of(now, tenant.timezone);
                 const monthStart = LocalTime.parseLocalIso(
-                    `${local.year}-${String(local.month).padStart(2, "0")}-01T00:00`, tenant.timezone,
+                    `${LocalTime.isoMonth(local)}-01T00:00`, tenant.timezone,
                 ) ?? new Date(0);
                 const rows = await db.query<{ total: number | null }>(
                     "select coalesce(sum(cost_usd), 0)::float8 as total from usage where tenant_id = $1 and occurred_at >= $2",
@@ -789,8 +808,7 @@ export class PostgresStore implements Store {
             lastLoginAt:  r["last_login_at"] === null ? null : date(r["last_login_at"]),
         });
         const one = async (sql: string, params: unknown[]) => {
-            const row = (await db.query(sql, params))[0];
-            return row === undefined ? null : toAccount(row);
+            return firstOrNull(await db.query(sql, params), toAccount);
         };
         return {
             byEmail:   email => one("select * from accounts where email = $1", [email.trim().toLowerCase()]),
@@ -874,7 +892,7 @@ export class PostgresStore implements Store {
             )).map((r): QualityRow => ({
                 variant:        str(r["variant"]),
                 model:          str(r["model"]),
-                channel:        str(r["channel"]) as QualityRow["channel"],
+                channel:        member(Channel, r["channel"]),
                 turns:          Number(r["turns"]),
                 sessions:       Number(r["sessions"]),
                 avgLatencyMs:   Number(r["avg_latency"]),

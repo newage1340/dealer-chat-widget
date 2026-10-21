@@ -5,8 +5,10 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import type { UsageRecord } from "../core/index.ts";
-import { ProviderError } from "./errors.ts";
+import { z } from "zod";
+
+import { UsageRecord } from "../core/index.ts";
+import { checkStatus, providerFetch, readJson } from "./http.ts";
 import type { MessagingProvider, OutboundSms, SendReceipt } from "./messaging.ts";
 
 export type TwilioCredentials = {
@@ -57,6 +59,14 @@ function authHeader(c: TwilioCredentials): string {
     return "Basic " + Buffer.from(`${c.accountSid}:${c.authToken}`).toString("base64");
 }
 
+/**
+ * The parts of Twilio's reply to a sent message we use: its id, or the error message.
+ */
+const TwilioReply = z.object({
+    sid:     z.string().nullish(),
+    message: z.string().nullish(),
+});
+
 export class TwilioSms implements MessagingProvider {
     readonly name = "twilio";
     readonly #credentials: TwilioCredentials;
@@ -75,40 +85,23 @@ export class TwilioSms implements MessagingProvider {
             body.set("From", message.from);
         }
         const started = performance.now();
-        let response: Response;
-        try {
-            response = await fetch(`${API}/Accounts/${c.accountSid}/Messages.json`, {
-                method:  "POST",
-                headers: { Authorization: authHeader(c), "Content-Type": "application/x-www-form-urlencoded" },
-                body,
-                signal:  signal ?? AbortSignal.timeout(15_000),
-            });
-        } catch (e) {
-            throw new ProviderError(this.name, "unavailable", String(e), { cause: e });
-        }
-        const json = await response.json().catch(() => ({})) as { sid?: string; message?: string };
-        if (!response.ok) {
-            const failure = response.status === 429
-                ? "rate_limited"
-                : response.status === 401
-                    ? "auth"
-                    : response.status >= 500
-                        ? "unavailable"
-                        : "bad_request";
-            throw new ProviderError(this.name, failure, json.message ?? `HTTP ${response.status}`);
-        }
-        const usage: UsageRecord = {
-            provider:   this.name,
-            model:      "",
-            service:    "messaging",
-            purpose:    message.purpose,
-            occurredAt: new Date(),
-            units:      { sms_segments: smsSegments(text) },
-            costUsd:    null,
-            latencyMs:  performance.now() - started,
-            tenantId:   message.tenantId,
-            channel:    "sms",
-        };
+        const response = await providerFetch(this.name, `${API}/Accounts/${c.accountSid}/Messages.json`, {
+            method:  "POST",
+            headers: { Authorization: authHeader(c), "Content-Type": "application/x-www-form-urlencoded" },
+            body,
+        }, { timeoutMs: 15_000, signal });
+        const json = await readJson(this.name, response, TwilioReply);
+        checkStatus(this.name, response, json.message);
+        const usage = UsageRecord.measured({
+            provider:  this.name,
+            model:     "",
+            service:   "messaging",
+            purpose:   message.purpose,
+            units:     { sms_segments: smsSegments(text) },
+            tenantId:  message.tenantId,
+            channel:   "sms",
+            startedAt: started,
+        });
         return { providerMessageId: json.sid ?? "", usage };
     }
 
@@ -119,13 +112,10 @@ export class TwilioSms implements MessagingProvider {
         const target = /\.(mp3|wav)$/.test(url)
             ? url
             : `${url}.mp3`;
-        const response = await fetch(target, {
+        const response = await providerFetch(this.name, target, {
             headers: { Authorization: authHeader(this.#credentials) },
-            signal:  signal ?? AbortSignal.timeout(30_000),
-        });
-        if (!response.ok) {
-            throw new ProviderError(this.name, response.status >= 500 ? "unavailable" : "bad_request", `recording HTTP ${response.status}`);
-        }
+        }, { timeoutMs: 30_000, signal });
+        checkStatus(this.name, response, `recording HTTP ${response.status}`);
         return new Uint8Array(await response.arrayBuffer());
     }
 }

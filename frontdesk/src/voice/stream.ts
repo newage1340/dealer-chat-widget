@@ -13,12 +13,12 @@
 import {
     Address,
     AsyncQueue,
+    errorMessage,
     LanguageGuess,
     Tenant,
     type CallDirective,
     type Inbound,
     type Language,
-    type Session,
     type UsageRecord,
 } from "../core/index.ts";
 import type { DomainPack } from "../domains/index.ts";
@@ -26,8 +26,8 @@ import type { TurnEngine } from "../pipeline/engine.ts";
 import type { Services } from "../pipeline/services.ts";
 import { Speech } from "../prompts/speech.ts";
 import { STRINGS, say } from "../prompts/strings.ts";
-import type { AudioFormat, SpeechContext } from "../providers/index.ts";
-import { VoicePipeline, type Voice } from "./pipeline.ts";
+import type { AudioFormat, SpeechContext, TextToSpeech } from "../providers/index.ts";
+import { VoicePipeline, type StreamingPipeline } from "./pipeline.ts";
 
 const PHONE_AUDIO: AudioFormat = { encoding: "mulaw", sampleRate: 8000 };
 
@@ -73,7 +73,7 @@ export type StreamTransport = {
 export type StreamDeps = {
     readonly services: Services;
     readonly engine:   TurnEngine;
-    readonly pipeline: Extract<VoicePipeline, { kind: "media_streams" | "media_streams_local" }>;
+    readonly pipeline: StreamingPipeline;
 };
 
 /**
@@ -124,7 +124,6 @@ export class StreamCall {
     #forwardedFrom: string | null = null;
     #tenant: Tenant | null = null;
     #pack: DomainPack | null = null;
-    #session: Session | null = null;
     #language: Language = "en";
     #audio: AsyncQueue<Uint8Array> | null = null;
     #speech: AbortController | null = null;
@@ -226,7 +225,6 @@ export class StreamCall {
         }
         this.#tenant = tenant;
         this.#pack = registry.get(tenant.domain);
-        this.#session = session;
         this.#language = session.language;
         this.#listen();
         const greeting = [...await store.conversations.sessionMessages(session.id)].reverse().find(m => m.role === "assistant");
@@ -296,7 +294,6 @@ export class StreamCall {
         const tenant = this.#tenant!;
         const inbound: Inbound = {
             channel:           "voice",
-            tenant:            { kind: "slug", slug: tenant.slug },
             sender:            this.#caller!,
             text,
             receivedAt:        this.#d.services.clock(),
@@ -312,7 +309,7 @@ export class StreamCall {
         let directive: CallDirective = { kind: "continue" };
         let language = this.#language;
         try {
-            for await (const part of this.#d.engine.run(inbound, { tenant, vendor: "twilio" })) {
+            for await (const part of this.#d.engine.run(inbound, tenant, { vendor: "twilio" })) {
                 if (part.kind === "text") {
                     splitter.push(part.delta).forEach(s => sentences.push(s));
                 } else {
@@ -320,6 +317,9 @@ export class StreamCall {
                     language = part.result.session.language;
                 }
             }
+        } catch (e) {
+            // Say whatever was ready and keep listening; a turn that fails must not leave the call stuck as busy.
+            console.error(`stream turn failed on call ${this.#callId}:`, e);
         } finally {
             const rest = splitter.flush();
             if (rest) {
@@ -365,7 +365,7 @@ export class StreamCall {
     async #play(sentences: AsyncIterable<string>): Promise<void> {
         const controller = new AbortController();
         this.#speech = controller;
-        let voices: readonly Voice[] | null = null;
+        let voices: readonly TextToSpeech[] | null = null;
         let language = this.#language;
         try {
             for await (const raw of sentences) {
@@ -398,7 +398,7 @@ export class StreamCall {
      */
     async #synthesize(
         text: string,
-        voices: readonly Voice[],
+        voices: readonly TextToSpeech[],
         language: Language,
         signal: AbortSignal
     ): Promise<void> {
@@ -437,7 +437,7 @@ export class StreamCall {
                 if (signal.aborted || sent) {
                     return;
                 }
-                console.warn(`${voice.name} could not speak on call ${this.#callId}, trying the next voice: ${e instanceof Error ? e.message : String(e)}`);
+                console.warn(`${voice.name} could not speak on call ${this.#callId}, trying the next voice: ${errorMessage(e)}`);
             }
         }
     }

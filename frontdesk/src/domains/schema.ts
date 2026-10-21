@@ -9,8 +9,15 @@
 
 import { z } from "zod";
 
-import { DomainId, FieldType, Language, Professionalism, type LocalizedText } from "../core/index.ts";
-import type { DomainPack } from "./pack.ts";
+import {
+    DomainId,
+    FieldType,
+    Language,
+    Professionalism,
+    type LocalizedText,
+    type Problem,
+} from "../core/index.ts";
+import { IntakeChannel, VisitLocation, type DomainPack } from "./pack.ts";
 import { FOLLOWUP_FIELDS, Template } from "./template.ts";
 
 const text = z.string();
@@ -18,7 +25,6 @@ const flag = z.boolean().default(false);
 const texts = z.array(z.string()).default([]);
 const optionalName = z.string().optional().transform(v => v || null);
 
-const LANGUAGES = Object.values(Language) as [Language, ...Language[]];
 
 /**
  * A plain string (English) or a table of translations that includes English:
@@ -28,7 +34,7 @@ const localized = z.preprocess(
     v => typeof v === "string"
         ? { en: v }
         : v,
-    z.partialRecord(z.enum(LANGUAGES), z.string())
+    z.partialRecord(z.enum(Language), z.string())
         .refine(t => typeof t.en === "string", { message: "translations must include English (en)" })
         .transform(t => t as LocalizedText),
 );
@@ -45,7 +51,7 @@ const DomainSection = z.strictObject({
     default_voice_agent_name: text,
     goal:                     text,
     upsell_topics:            text.default(""),
-    professionalism:          z.enum(Object.values(Professionalism) as [Professionalism, ...Professionalism[]]).optional().transform(v => v ?? null),
+    professionalism:          z.enum(Professionalism).optional().transform(v => v ?? null),
     honest_about_ai:          flag,
     sensitive:                flag,
 });
@@ -59,7 +65,7 @@ const ProfileQuestion = z.strictObject({
 
 const CatalogField = z.strictObject({
     name:       text,
-    type:       z.enum(Object.values(FieldType) as [FieldType, ...FieldType[]]).default("text"),
+    type:       z.enum(FieldType).default("text"),
     label:      text.default(""),
     required:   flag,
     searchable: flag,
@@ -96,7 +102,7 @@ const IntakeField = z.strictObject({
     label:    text,
     ask:      text,
     required: flag,
-    channels: z.array(z.enum(["chat", "voice"])).min(1).default(["chat", "voice"]),
+    channels: z.array(z.enum(IntakeChannel)).min(1).default(Object.values(IntakeChannel)),
 });
 
 const BookingSection = z.strictObject({
@@ -104,7 +110,7 @@ const BookingSection = z.strictObject({
     subject_label:    text,
     subject_hint:     text,
     general_subject:  text,
-    location:         z.enum(["business", "customer"]).default("business"),
+    location:         z.enum(VisitLocation).default("business"),
     skip_intake_when: text.default(""),
     intake:           z.array(IntakeField).default([]),
 });
@@ -190,18 +196,10 @@ function isRegex(pattern: string): boolean {
 }
 
 /**
- * A problem found in a pack file. `path` is dotted, e.g. "catalog.fields.2.name".
- */
-export type PackProblem = {
-    readonly path:    string;
-    readonly message: string;
-};
-
-/**
  * Cross-reference problems in a pack that already has the right shape.
  */
-export function crossCheck(file: PackFile): PackProblem[] {
-    const problems: PackProblem[] = [];
+export function crossCheck(file: PackFile): Problem[] {
+    const problems: Problem[] = [];
     const add = (path: string, message: string) => problems.push({ path, message });
     const fieldNames = new Set(file.catalog.fields.map(f => f.name));
 
@@ -256,14 +254,20 @@ export function crossCheck(file: PackFile): PackProblem[] {
         fields.value.forEach(name => checkField(name, path));
     }
 
-    const promptTexts: [string, string][] = [
+    // These go into the base prompt every tenant of the type shares, so only pack values are filled in.
+    const baseTexts: [string, string][] = [
         ["domain.goal", file.domain.goal],
+        ["booking.skip_intake_when", file.booking.skip_intake_when],
+        ...file.booking.intake.map((f, i): [string, string] => [`booking.intake.${i}.ask`, f.ask]),
+    ];
+    for (const [path, template] of baseTexts) {
+        Template.packProblems(template).forEach(message => add(path, message));
+    }
+    const promptTexts: [string, string][] = [
         ["prompts.chat", file.prompts.chat],
         ["prompts.voice", file.prompts.voice],
         ["prompts.summary_focus", file.prompts.summary_focus],
-        ["booking.skip_intake_when", file.booking.skip_intake_when],
         ["widget.capabilities", file.widget.capabilities],
-        ...file.booking.intake.map((f, i): [string, string] => [`booking.intake.${i}.ask`, f.ask]),
         ...file.prompts.toggles.flatMap((t, i): [string, string][] => [
             [`prompts.toggles.${i}.chat`, t.chat],
             [`prompts.toggles.${i}.voice`, t.voice],

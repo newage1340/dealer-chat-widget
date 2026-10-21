@@ -12,9 +12,8 @@ import { randomUUID } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { stream } from "hono/streaming";
 
-import { Address, type Inbound, type Tenant } from "../core/index.ts";
+import { Address, CallState, type Inbound, type Tenant } from "../core/index.ts";
 import type { DomainPack } from "../domains/index.ts";
-import type { EnginePart } from "../pipeline/engine.ts";
 import { closeSession } from "../pipeline/sessions.ts";
 import { Speech } from "../prompts/speech.ts";
 import { STRINGS, say } from "../prompts/strings.ts";
@@ -133,7 +132,6 @@ export function vapiRoutes(deps: ChannelDeps): Hono {
 
             const inbound: Inbound = {
                 channel:           "voice",
-                tenant:            { kind: "endpoint", address: called! },
                 sender:            caller,
                 text:              lastUser.content.trim(),
                 receivedAt:        services.clock(),
@@ -167,7 +165,7 @@ export function vapiRoutes(deps: ChannelDeps): Hono {
         const buffer = { text: "" };
         let action: Action = { kind: "continue" };
         try {
-            for await (const part of engine.run(inbound, { tenant, vendor: "vapi" }) as AsyncIterable<EnginePart>) {
+            for await (const part of engine.run(inbound, tenant, { vendor: "vapi" })) {
                 if (part.kind === "text") {
                     buffer.text += part.delta;
                     for (const piece of sentences(buffer, false)) {
@@ -196,7 +194,7 @@ export function vapiRoutes(deps: ChannelDeps): Hono {
      * Vapi server messages: close the session at the end of the call and record what the call cost.
      */
     app.post("/vapi/events", async c => {
-        const body = await c.req.json<{ message?: { type?: string; call?: VapiRequest["call"]; cost?: number; durationSeconds?: number; endedReason?: string } }>()
+        const body = await c.req.json<{ message?: { type?: string; call?: VapiRequest["call"]; cost?: number; durationSeconds?: number } }>()
             .catch(() => ({ message: undefined }));
         const message = body.message;
         if (message?.type !== "end-of-call-report") {
@@ -222,12 +220,7 @@ export function vapiRoutes(deps: ChannelDeps): Hono {
         });
         const session = await store.conversations.findSession(tenant.id, { channel: "voice", externalId: callId, vendor: "vapi", handling: "assistant" });
         if (session !== null && session.channel === "voice") {
-            const reason = session.call.status === "ended"
-                ? session.call.reason
-                : session.call.status === "transferring"
-                    ? "transferred"
-                    : "caller_hung_up";
-            await closeSession(services, session.id, reason);
+            await closeSession(services, session.id, CallState.endReason(session.call));
         }
         return c.json({ ok: true });
     });

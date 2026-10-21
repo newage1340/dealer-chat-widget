@@ -3,7 +3,13 @@
  * the jobs run later in the worker, so replies never wait on texts, emails or summaries.
  */
 
-import { Contact, PhoneNumber, type Job, type JobBody } from "../core/index.ts";
+import {
+    Contact,
+    LocalTime,
+    Text,
+    type Job,
+    type JobBody,
+} from "../core/index.ts";
 import { Subscriber, type SubscriberContext } from "../turn/index.ts";
 
 /**
@@ -13,18 +19,6 @@ export const REMINDER_LEAD_MS = 60 * 60_000;
 
 function job(ctx: SubscriberContext, dedupeKey: string, body: JobBody, runAt: Date | null = null): Job {
     return { ...body, tenantId: ctx.tenant.id, dedupeKey, runAt } as Job;
-}
-
-function who(ctx: SubscriberContext): string {
-    const c = ctx.contact;
-    if (c === null) {
-        return "(unknown)";
-    }
-    const name = Contact.displayName(c) || "(name not given)";
-    const phone = c.phone !== null
-        ? PhoneNumber.display(c.phone)
-        : c.email || "(no phone)";
-    return `${name} - ${phone}`;
 }
 
 export const bookingNotices = Subscriber.define({
@@ -43,8 +37,8 @@ export const bookingNotices = Subscriber.define({
             }));
         }
         const lines = [
-            `[${ctx.tenant.name} AI] ${b.visitNoun.charAt(0).toUpperCase() + b.visitNoun.slice(1)} ${event.replaces !== null ? "rescheduled" : "booked"}`,
-            `Customer: ${who(ctx)}`,
+            `[${ctx.tenant.name} AI] ${Text.capitalize(b.visitNoun)} ${event.replaces !== null ? "rescheduled" : "booked"}`,
+            `Customer: ${Contact.describe(ctx.contact)}`,
             ...(ctx.contact?.email ? [`Email: ${ctx.contact.email}`] : []),
             `Time: ${a.timeText}`,
             `${b.subjectLabel}: ${a.subject}`,
@@ -82,8 +76,8 @@ export const handoffAlerts = Subscriber.define({
         return [job(ctx, `handoff:${event.id}`, {
             kind:    "notify_staff",
             notice:  "handoff",
-            subject: `${headline}: ${who(ctx)}`,
-            text:    `[${ctx.tenant.name} AI] ${headline}\nCustomer: ${who(ctx)}\n\n${event.note}`,
+            subject: `${headline}: ${Contact.describe(ctx.contact)}`,
+            text:    `[${ctx.tenant.name} AI] ${headline}\nCustomer: ${Contact.describe(ctx.contact)}\n\n${event.note}`,
         })];
     },
 });
@@ -132,7 +126,7 @@ export const capAlerts = Subscriber.define({
     name:   "cap_alerts",
     events: ["tenant_cap"],
     react(event, ctx) {
-        const month = `${ctx.now.getUTCFullYear()}-${ctx.now.getUTCMonth() + 1}`;
+        const month = LocalTime.isoMonth(LocalTime.of(ctx.now, ctx.tenant.timezone));
         const text = event.status === "warning"
             ? "Your assistant has used 80% of this month's allowance. Add a top-up to keep it answering for the rest of the month."
             : "Your assistant has used this month's allowance. Callers can still leave voicemails; add a top-up to turn it back on.";
@@ -152,8 +146,8 @@ export const blockAlerts = Subscriber.define({
         return [job(ctx, `block:${event.id}`, {
             kind:    "notify_staff",
             notice:  "handoff",
-            subject: `Caller blocked: ${who(ctx)}`,
-            text:    `[${ctx.tenant.name} AI] ${who(ctx)} was blocked until ${event.block.until?.toISOString() ?? "further notice"} (${event.block.reason}). You can lift the block from the dashboard.`,
+            subject: `Caller blocked: ${Contact.describe(ctx.contact)}`,
+            text:    `[${ctx.tenant.name} AI] ${Contact.describe(ctx.contact)} was blocked until ${event.block.until?.toISOString() ?? "further notice"} (${event.block.reason}). You can lift the block from the dashboard.`,
         })];
     },
 });

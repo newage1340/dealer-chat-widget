@@ -10,24 +10,48 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Hono, type Context } from "hono";
+import { z } from "zod";
 
 import {
     Address,
+    Channel,
     ContactId,
-    LocalTime,
+    enumValue,
     SessionId,
-    SessionMeter,
+    SessionOutcome,
     TenantId,
     type Contact,
-    type Conversation,
-    type Inbound,
-    type SessionOutcome,
-    type Tenant,
 } from "../core/index.ts";
 import { DATASETS_DIR, importRows, syncCatalog } from "../catalogs/index.ts";
+import { previewPrompt, SAMPLE_MESSAGE } from "../prompts/preview.ts";
 import { parseTenant } from "../tenants/schema.ts";
-import type { TurnContext } from "../turn/index.ts";
-import { adminOnly, type ChannelDeps } from "./context.ts";
+import { adminOnly, jsonBody, sameSecret, type ChannelDeps } from "./context.ts";
+
+/**
+ * A catalog upload from the scraper job: the tenant by slug or number, and the rows ("vehicles" is the legacy name).
+ */
+const CatalogUpload = z.object({
+    token:         z.string().optional(),
+    slug:          z.string().optional(),
+    twilio_number: z.string().optional(),
+    items:         z.array(z.unknown()).optional(),
+    vehicles:      z.array(z.unknown()).optional(),
+});
+
+const ResetLanguages = z.object({
+    phone: z.string().optional(),
+});
+
+/**
+ * Block a caller by contact id or phone; `hours` omitted or null blocks indefinitely.
+ */
+const BlockRequest = z.object({
+    tenant:    z.string().min(1),
+    phone:     z.string().optional(),
+    contactId: z.string().optional(),
+    hours:     z.number().nullish(),
+    reason:    z.string().optional(),
+});
 
 export function adminRoutes(deps: ChannelDeps): Hono {
     const app = new Hono();
@@ -44,15 +68,13 @@ export function adminRoutes(deps: ChannelDeps): Hono {
     app.put("/admin/tenants", admin, async c => {
         const result = parseTenant(await c.req.json().catch(() => null));
         if (!result.ok) {
-            return c.json({ error: "invalid tenant", problems: result.problems }, 400);
+            return c.json({ error: "invalid tenant", problems: result.error }, 400);
         }
-        try {
-            registry.get(result.tenant.domain);
-        } catch (e) {
-            return c.json({ error: String(e) }, 400);
+        if (registry.find(result.value.domain) === null) {
+            return c.json({ error: `unknown business type '${result.value.domain}'` }, 400);
         }
-        await store.tenants.save(result.tenant);
-        return c.json({ ok: true, tenant: result.tenant.id });
+        await store.tenants.save(result.value);
+        return c.json({ ok: true, tenant: result.value.id });
     });
 
     /**
@@ -61,22 +83,27 @@ export function adminRoutes(deps: ChannelDeps): Hono {
      * An empty list is refused so a failed scrape can never wipe a live catalog.
      */
     const upload = async (c: Context) => {
-        const data = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
-        const token = c.req.header("X-Upload-Token") ?? String(data["token"] ?? "");
+        const data = await jsonBody(c, CatalogUpload);
+        if (data === null) {
+            return c.json({ error: "invalid request body" }, 400);
+        }
+        const token = c.req.header("X-Upload-Token") ?? data.token ?? "";
         const accepted = [config.uploadToken, config.adminToken].filter(Boolean);
-        if (!token || !accepted.includes(token)) {
+        if (!token || !accepted.some(secret => sameSecret(token, secret))) {
             return c.json({ error: "unauthorized" }, 401);
         }
-        let tenant: Tenant | null = typeof data["slug"] === "string" ? await store.tenants.bySlug(data["slug"]) : null;
-        const number = Address.phone(String(data["twilio_number"] ?? ""));
+        let tenant = data.slug === undefined
+            ? null
+            : await store.tenants.bySlug(data.slug);
+        const number = Address.phone(data.twilio_number ?? "");
         if (tenant === null && number !== null) {
             tenant = await store.tenants.byEndpoint("sms", number) ?? await store.tenants.byEndpoint("voice", number);
         }
         if (tenant === null) {
             return c.json({ error: "unknown tenant" }, 404);
         }
-        const rows = data["items"] ?? data["vehicles"];
-        if (!Array.isArray(rows) || rows.length === 0) {
+        const rows = data.items ?? data.vehicles ?? [];
+        if (rows.length === 0) {
             return c.json({ error: "no items - refusing to wipe the existing catalog" }, 400);
         }
         const result = await importRows(services, tenant, rows.filter((r): r is Record<string, unknown> => typeof r === "object" && r !== null));
@@ -141,7 +168,10 @@ export function adminRoutes(deps: ChannelDeps): Hono {
         if (tenant === null) {
             return c.notFound();
         }
-        const body = await c.req.json<{ phone?: string }>().catch(() => ({} as { phone?: string }));
+        const body = await jsonBody(c, ResetLanguages);
+        if (body === null) {
+            return c.json({ error: "invalid request body" }, 400);
+        }
         if (!body.phone) {
             return c.json({ ok: true, reset: await store.conversations.resetLanguages(tenant.id, null, tenant.defaultLanguage) });
         }
@@ -177,8 +207,8 @@ export function adminRoutes(deps: ChannelDeps): Hono {
         if (tenant === null) {
             return c.notFound();
         }
-        const channel = (c.req.query("channel") ?? "sms") as Inbound["channel"];
-        return c.text(await previewPrompt(deps, tenant, channel, c.req.query("message") || SAMPLE_MESSAGE));
+        const channel = enumValue(Channel, c.req.query("channel")) ?? Channel.Sms;
+        return c.text(await previewPrompt(services, tenant, channel, c.req.query("message") || SAMPLE_MESSAGE));
     });
 
     /**
@@ -203,7 +233,7 @@ export function adminRoutes(deps: ChannelDeps): Hono {
         if (!tenant) {
             return c.json({ error: "tenant is required" }, 400);
         }
-        const outcomes = (c.req.query("outcome") ?? "").split(",").filter(Boolean) as SessionOutcome[];
+        const outcomes = (c.req.query("outcome") ?? "").split(",").flatMap(o => enumValue(SessionOutcome, o) ?? []);
         const since = c.req.query("since");
         const transcripts = await store.transcripts.list({
             tenantId: TenantId(tenant),
@@ -246,15 +276,14 @@ export function adminRoutes(deps: ChannelDeps): Hono {
      * Posting again for a blocked contact replaces (extends or shortens) the block.
      */
     app.post("/admin/blocks", admin, async c => {
-        const body = await c.req.json<{ tenant?: string; phone?: string; contactId?: string; hours?: number | null; reason?: string }>()
-            .catch(() => ({} as { tenant?: string }));
-        if (!body.tenant) {
-            return c.json({ error: "tenant is required" }, 400);
+        const body = await jsonBody(c, BlockRequest);
+        if (body === null) {
+            return c.json({ error: "tenant is required, with a phone or contactId" }, 400);
         }
         let contact: Contact | null = null;
-        if ("contactId" in body && body.contactId) {
+        if (body.contactId) {
             contact = await store.conversations.contact(ContactId(body.contactId));
-        } else if ("phone" in body && body.phone) {
+        } else if (body.phone) {
             const address = Address.phone(body.phone);
             contact = address === null
                 ? null
@@ -265,11 +294,10 @@ export function adminRoutes(deps: ChannelDeps): Hono {
             return c.json({ error: "unknown contact" }, 404);
         }
         const now = services.clock();
-        const hours = "hours" in body ? body.hours : null;
         await store.blocks.block(contact.id, {
-            until:     typeof hours === "number" ? new Date(now.getTime() + hours * 3600_000) : null,
+            until:     typeof body.hours === "number" ? new Date(now.getTime() + body.hours * 3600_000) : null,
             source:    "staff",
-            reason:    ("reason" in body ? body.reason : undefined) ?? "blocked by staff",
+            reason:    body.reason || "blocked by staff",
             createdAt: now,
         });
         return c.json({ ok: true, contactId: contact.id });
@@ -281,48 +309,4 @@ export function adminRoutes(deps: ChannelDeps): Hono {
     });
 
     return app;
-}
-
-/**
- * The customer message a prompt preview uses when none is given. Part of the prompt (the matching
- * catalog details) depends on what the customer said, so a preview always needs one.
- */
-export const SAMPLE_MESSAGE = "Hi, I have a question.";
-
-/**
- * The prompt a turn would get for a sample customer, as text.
- */
-export async function previewPrompt(deps: ChannelDeps, tenant: Tenant, channel: Inbound["channel"], message: string): Promise<string> {
-    const { services } = deps;
-    const now = services.clock();
-    const sender = channel === "web" ? Address.webSession("preview") : Address.phone("+13175550199")!;
-    const contact: Contact = {
-        id: ContactId("preview"), tenantId: tenant.id, firstName: "Alex", lastName: "", email: "", phone: Address.phone("+13175550199")!.value as Contact["phone"],
-        addresses: [sender], optedOut: false, termsAcceptedAt: null, preferredLanguage: null, block: null, abuseStrikes: [], attributes: {},
-    };
-    const conversation: Conversation = { id: "preview" as Conversation["id"], tenantId: tenant.id, contactId: contact.id, createdAt: now, lastMessageAt: null };
-    const base = { id: SessionId("preview"), conversationId: conversation.id, tenantId: tenant.id, startedAt: now, endedAt: null, sentUrls: [], language: tenant.defaultLanguage, meter: SessionMeter.start(now) };
-    const ctx: TurnContext = {
-        inbound:       {
-            channel, tenant: { kind: "slug", slug: tenant.slug }, sender, text: message, receivedAt: now, dedupeKey: "preview",
-            externalSessionId: null, confidence: null, language: null, forwardedFrom: null,
-        },
-        tenant,
-        pack:          services.registry.get(tenant.domain),
-        catalog:       await services.store.tenants.catalog(tenant.id),
-        contact,
-        conversation,
-        session:       channel === "voice"
-            ? { ...base, channel: "voice", externalId: "preview", vendor: "twilio", handling: "assistant", call: { status: "listening", turns: 0, silentTurns: 0 } }
-            : channel === "web"
-                ? { ...base, channel: "web", externalId: "preview" }
-                : { ...base, channel: "sms", externalId: null },
-        history:       [],
-        appointment:   null,
-        costThisMonth: 0,
-        now,
-        local:         LocalTime.of(now, tenant.timezone),
-    };
-    const messages = services.composer.turn(ctx, { kind: "ok" });
-    return messages.map(m => `##### ${m.role}\n${"text" in m ? m.text : m.output}`).join("\n\n");
 }

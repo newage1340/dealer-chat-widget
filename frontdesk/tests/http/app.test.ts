@@ -141,3 +141,14 @@ describe("call settings", () => {
         expect(twiml).not.toContain("<Gather");
     });
 });
+
+describe("web widget", () => {
+    it("answers a malformed chat request with 400, not a server error", async () => {
+        const response = await app.http.request("/chat", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ slug: "plumber", message: 5 }),
+        });
+        expect(response.status).toBe(400);
+    });
+});

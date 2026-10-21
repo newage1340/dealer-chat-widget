@@ -126,7 +126,7 @@ ask   = "For color, balayage, highlights, extensions, keratin and long-hair cuts
 [[booking.intake]]
 key   = "first_visit"
 label = "First visit?"
-ask   = "Ask whether this is their first visit to {business_name}. If it is and they're booking any color service, follow the PATCH TEST rules."
+ask   = "Ask whether this is their first visit with us. If it is and they're booking any color service, follow the PATCH TEST rules."
 
 [[booking.intake]]
 key   = "stylist"

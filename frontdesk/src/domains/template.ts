@@ -9,10 +9,12 @@
 
 import { Result } from "../core/index.ts";
 
-export const PROMPT_FIELDS: ReadonlySet<string> = new Set([
-    "business_name",
+/**
+ * Fields that come from the domain pack alone. Text that goes into the base prompt
+ * (shared by every tenant of a business type) may only use these.
+ */
+export const PACK_FIELDS: ReadonlySet<string> = new Set([
     "business_noun",
-    "agent_name",
     "agent_role",
     "staff_noun",
     "item_noun",
@@ -21,6 +23,12 @@ export const PROMPT_FIELDS: ReadonlySet<string> = new Set([
     "visit_noun",
     "general_subject",
     "subject_label",
+]);
+
+export const PROMPT_FIELDS: ReadonlySet<string> = new Set([
+    ...PACK_FIELDS,
+    "business_name",
+    "agent_name",
     "phone",
     "address",
     "website",
@@ -112,6 +120,19 @@ export const Template = {
                 && !OPEN_PREFIXES.some(p => name.startsWith(p))
             )
             .map(name => `unknown placeholder {${name}}`);
+    },
+
+    /**
+     * Problems with text that goes into the shared base prompt, where only PACK_FIELDS are filled in.
+     */
+    packProblems(template: string): string[] {
+        const fields = Template.fields(template);
+        if (!fields.ok) {
+            return [fields.error];
+        }
+        return fields.value
+            .filter(name => !PACK_FIELDS.has(name))
+            .map(name => `{${name}} can't be used here: this text is shared by every business of this type`);
     },
 
     /**

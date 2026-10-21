@@ -48,6 +48,19 @@ functions. Anything from outside the process (webhooks, model output, database r
 files) is parsed with zod before it becomes a core type. Expected failures are returned as
 `Result<T, E>`; exceptions are for bugs and for provider failures (`ProviderError`).
 
+## Shared building blocks
+
+Reach for these before writing the same thing inline:
+
+- `z.enum(X)` validates an `as const` enum object directly; `enumValue(X, raw)` reads one from untrusted
+  input (query strings, env vars), returning null for anything else.
+- `Problem` (`{ path, message }`, `Problem.fromIssues`, `Problem.format`) for everything wrong with a file or form;
+  parsers return `Result<T, Problem[]>`.
+- `jsonBody(c, Schema)` and `formBody(c)` with `one`/`many`/`on`/`num` (http/) read request bodies.
+- `providerFetch`, `checkStatus` and `readJson` (providers/http.ts) call vendor APIs, and
+  `UsageRecord.measured` meters them.
+- `publishEvents` / `eventsAndJobs` / `recordMessage` (pipeline/services.ts) write events and messages outside a turn.
+
 ## Style
 
 - Doc comments open with `/**` on its own line and wrap at clause boundaries.

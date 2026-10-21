@@ -7,24 +7,27 @@
  */
 
 import {
+    assertNever,
     Billing,
     Budget,
     CallState,
+    Contact,
     Crisis,
     LanguageGuess,
     LocalTime,
     Pii,
     PromptVariant,
-    PhoneNumber,
     SessionMeter,
     Tenant,
+    Text,
     TurnAssessment,
     type BudgetInput,
     type BudgetVerdict,
     type CallDirective,
     type CallVendor,
-    type Contact,
     type ContactChanges,
+    type Conversation,
+    type ConversationId,
     type EventBody,
     type Inbound,
     type Job,
@@ -32,7 +35,7 @@ import {
     type RefusalReason,
     type Session,
 } from "../core/index.ts";
-import { STRINGS, say } from "../prompts/strings.ts";
+import { STRINGS, phoneSentence, say } from "../prompts/strings.ts";
 import {
     ProviderError,
     type ChatMessage,
@@ -41,14 +44,13 @@ import {
 import type { NewMessage, SessionKey } from "../storage/index.ts";
 import { definitions, toolsFor } from "../tools/index.ts";
 import {
-    Subscriber,
+    ToolResult,
     TurnOutcome,
     type Tool,
-    type ToolResult,
     type TurnContext,
 } from "../turn/index.ts";
 import { closeSession } from "./sessions.ts";
-import { stamp, type Services } from "./services.ts";
+import { eventsAndJobs, type Services } from "./services.ts";
 
 const MAX_TOOL_ROUNDS = 4;
 /**
@@ -57,10 +59,6 @@ const MAX_TOOL_ROUNDS = 4;
 const TURN_TEMPERATURE = 0.2;
 const HISTORY_LIMIT = 40;
 const URL_RE = /\b(?:https?:\/\/|www\.)\S+/gi;
-
-export class UnknownTenant extends Error {
-    override readonly name = "UnknownTenant";
-}
 
 /**
  * The finished turn, for the channel to render.
@@ -85,10 +83,9 @@ export type EnginePart =
     };
 
 /**
- * `vendor` names who placed a call (required for voice); `tenant` skips the lookup when the channel already has it.
+ * `vendor` names who placed a call (required for voice); `variant` forces a prompt variant (evals).
  */
 export type RunOptions = {
-    readonly tenant?:  Tenant;
     readonly vendor?:  CallVendor;
     readonly variant?: string;
 };
@@ -123,6 +120,8 @@ function sessionKey(inbound: Inbound, vendor: CallVendor | undefined): SessionKe
                 vendor:     vendor ?? "twilio",
                 handling:   "assistant",
             };
+        default:
+            return assertNever(inbound.channel);
     }
 }
 
@@ -131,6 +130,26 @@ function worse(a: TurnAssessment, b: TurnAssessment | null): TurnAssessment {
     return b !== null && rank[b] > rank[a]
         ? b
         : a;
+}
+
+/**
+ * Move requested links into the reply text, for channels that can show them.
+ * `appended` is the text added to the reply ("" when there were no links).
+ */
+function inlineLinks(outcome: TurnOutcome): { readonly outcome: TurnOutcome; readonly appended: string } {
+    const links = outcome.events.filter(e => e.kind === "link_requested");
+    if (links.length === 0) {
+        return { outcome, appended: "" };
+    }
+    const appended = `\n\n${links.map(l => `${Text.capitalize(l.label)}: ${l.url}`).join("\n")}`;
+    return {
+        outcome:  {
+            ...outcome,
+            reply:  `${outcome.reply}${appended}`,
+            events: outcome.events.filter(e => e.kind !== "link_requested"),
+        },
+        appended,
+    };
 }
 
 /**
@@ -152,47 +171,135 @@ export class TurnEngine {
         this.#s = services;
     }
 
-    async *run(received: Inbound, options: RunOptions = {}): AsyncGenerator<EnginePart> {
-        const { store } = this.#s;
+    async *run(
+        received: Inbound,
+        tenant: Tenant,
+        options: RunOptions = {}
+    ): AsyncGenerator<EnginePart>
+    {
         const now = this.#s.clock();
-
-        const tenant = options.tenant ?? await this.#tenant(received);
         // Card numbers and the like never reach the model or the database.
         const inbound: Inbound = { ...received, text: Pii.redact(received.text, tenant.settings.privacy.redact).text };
-        const pack = this.#s.registry.get(tenant.domain);
-        const { contact, conversation } = await store.conversations.resolve(tenant.id, inbound.sender, now);
+        const { contact, conversation } = await this.#s.store.conversations.resolve(tenant.id, inbound.sender, now);
 
-        const previous = await store.turns.find(inbound.dedupeKey);
-        if (previous !== null) {
-            const session = await store.conversations.sessionById(previous.sessionId);
-            if (session !== null) {
-                yield { kind: "text", delta: previous.reply };
-                yield {
-                    kind:   "done",
-                    result: {
-                        outcome:  TurnOutcome.reply(previous.reply, session.language),
-                        tenant,
-                        contact,
-                        session,
-                        data:     {},
-                        silent:   previous.reply === "",
-                        replayed: true,
-                    },
-                };
-                return;
+        const replayed = await this.#replay(inbound, tenant, contact);
+        if (replayed !== null) {
+            yield { kind: "text", delta: replayed.outcome.reply };
+            yield { kind: "done", result: replayed };
+            return;
+        }
+
+        const ctx = await this.#context(inbound, tenant, contact, conversation, options.vendor, now);
+        const { session } = ctx;
+
+        // Policies: compliance, blocks, the web profile gate.
+        for (const policy of this.#s.policies) {
+            const decision = await policy.check(ctx);
+            switch (decision.kind) {
+                case "continue":
+                    continue;
+                case "silence":
+                    yield* this.#answer(ctx, TurnOutcome.reply("", session.language));
+                    return;
+                case "answer":
+                    yield* this.#answer(ctx, decision.outcome, { ephemeral: decision.ephemeral, data: decision.data });
+                    return;
+                default:
+                    assertNever(decision);
             }
         }
 
+        // Budget: whether this session may use the model, and whether it is winding down.
+        const input = this.#budgetInput(ctx);
+        if (inbound.channel !== "voice" && session.meter.turns === 0) {
+            const admission = Budget.admit(contact.block, input);
+            if (admission.kind === "refuse") {
+                yield* this.#answer(ctx, this.#refusal(ctx, admission.reason));
+                return;
+            }
+        }
+        const verdict = Budget.check(session.meter, tenant.settings.limits, input);
+        if (verdict.kind === "end") {
+            const goodbye: TurnOutcome = { ...this.#goodbye(ctx), directive: { kind: "end" } };
+            yield* this.#answer(ctx, goodbye, { recordCall: true, closeText: true });
+            return;
+        }
+
+        // The model, with this conversation's prompt variant.
+        const variant = this.#variant(conversation.id, options.variant);
+        const { outcome: generated, costUsd, measured } = yield* this.#generate(ctx, verdict, variant);
+        let outcome = generated;
+
+        // Links in text channels go into the reply itself; on calls they're texted (link_requested -> job).
+        if (inbound.channel !== "voice") {
+            const inlined = inlineLinks(outcome);
+            if (inlined.appended !== "") {
+                yield { kind: "text", delta: inlined.appended };
+                outcome = inlined.outcome;
+            }
+        }
+
+        // A wind-down's last turn ends the session, whatever the model did.
+        const lastClosingTurn = verdict.kind === "closing" && verdict.turnsLeft <= 1;
+        if (lastClosingTurn && inbound.channel === "voice" && outcome.directive.kind === "continue") {
+            outcome = { ...outcome, directive: { kind: "end" } };
+        }
+
+        const meter = SessionMeter.record(session.meter, verdict, outcome.assessment, costUsd);
+        const committed = { ...outcome, events: [...outcome.events, ...this.#sideEvents(ctx, verdict, costUsd)] };
+        const saved = await this.#commit(ctx, committed, { ...session, meter }, true);
+        if (lastClosingTurn && inbound.channel !== "voice") {
+            await closeSession(this.#s, session.id, "budget");
+        }
+        await this.#measure(ctx, variant, measured, outcome, costUsd);
+        yield { kind: "done", result: this.#result(ctx, committed, saved, {}, false) };
+    }
+
+    // --- the steps of a turn --------------------------------------------------------
+
+    /**
+     * The stored answer to a message we already handled (a retried webhook), or null.
+     */
+    async #replay(inbound: Inbound, tenant: Tenant, contact: Contact): Promise<TurnResult | null> {
+        const { store } = this.#s;
+        const previous = await store.turns.find(inbound.dedupeKey);
+        const session = previous === null
+            ? null
+            : await store.conversations.sessionById(previous.sessionId);
+        if (previous === null || session === null) {
+            return null;
+        }
+        return {
+            outcome:  TurnOutcome.reply(previous.reply, session.language),
+            tenant,
+            contact,
+            session,
+            data:     {},
+            silent:   previous.reply === "",
+            replayed: true,
+        };
+    }
+
+    async #context(
+        inbound: Inbound,
+        tenant: Tenant,
+        contact: Contact,
+        conversation: Conversation,
+        vendor: CallVendor | undefined,
+        now: Date
+    ): Promise<TurnContext>
+    {
+        const { store } = this.#s;
         const session = await store.conversations.session(
             conversation,
-            sessionKey(inbound, options.vendor),
+            sessionKey(inbound, vendor),
             { language: Tenant.startLanguage(tenant, contact.preferredLanguage ?? inbound.language), smsIdleMs: this.#s.smsIdleMs },
             now,
         );
-        const ctx: TurnContext = {
+        return {
             inbound,
             tenant,
-            pack,
+            pack:          this.#s.registry.get(tenant.domain),
             catalog:       await store.tenants.catalog(tenant.id),
             contact,
             conversation,
@@ -203,31 +310,39 @@ export class TurnEngine {
             now,
             local:         LocalTime.of(now, tenant.timezone),
         };
+    }
 
-        // Policies: compliance, blocks, the web profile gate.
-        for (const policy of this.#s.policies) {
-            const decision = await policy.check(ctx);
-            if (decision.kind === "continue") {
-                continue;
-            }
-            if (decision.kind === "silence") {
-                await this.#commit(ctx, TurnOutcome.reply("", session.language), session, false);
-                yield { kind: "done", result: this.#result(ctx, TurnOutcome.reply("", session.language), session, {}, true) };
-                return;
-            }
-            if (decision.outcome.reply) {
-                yield { kind: "text", delta: decision.outcome.reply };
-            }
-            const saved = decision.ephemeral
-                ? session
-                : await this.#commit(ctx, decision.outcome, session, false);
-            yield { kind: "done", result: this.#result(ctx, decision.outcome, saved, decision.data, false) };
-            return;
+    /**
+     * Finish a turn without the model: send `outcome`'s reply and store it.
+     * `ephemeral` answers are not stored; `closeText` ends a text session after storing.
+     */
+    async *#answer(
+        ctx: TurnContext,
+        outcome: TurnOutcome,
+        options: {
+            readonly recordCall?: boolean;
+            readonly ephemeral?:  boolean;
+            readonly closeText?:  boolean;
+            readonly data?:       Readonly<Record<string, unknown>>;
+        } = {}
+    ): AsyncGenerator<EnginePart>
+    {
+        if (outcome.reply) {
+            yield { kind: "text", delta: outcome.reply };
         }
+        const saved = options.ephemeral === true
+            ? ctx.session
+            : await this.#commit(ctx, outcome, ctx.session, options.recordCall ?? false);
+        if (options.closeText === true && ctx.inbound.channel !== "voice") {
+            await closeSession(this.#s, ctx.session.id, "budget");
+        }
+        yield { kind: "done", result: this.#result(ctx, outcome, saved, options.data ?? {}, outcome.reply === "") };
+    }
 
-        // Budget: whether this session may use the model, and whether it is winding down.
-        const input: BudgetInput = {
-            channel:       inbound.channel,
+    #budgetInput(ctx: TurnContext): BudgetInput {
+        const { tenant } = ctx;
+        return {
+            channel:       ctx.inbound.channel,
             plan:          tenant.plan,
             schedule:      tenant.schedule,
             timeZone:      tenant.timezone,
@@ -235,88 +350,40 @@ export class TurnEngine {
             costThisMonth: ctx.costThisMonth,
             activeCalls:   0,
             billingActive: Billing.serves(tenant.billing),
-            now,
+            now:           ctx.now,
         };
-        if (inbound.channel !== "voice" && session.meter.turns === 0) {
-            const admission = Budget.admit(contact.block, input);
-            if (admission.kind === "refuse") {
-                const outcome = this.#refusal(ctx, admission.reason);
-                if (outcome.reply) {
-                    yield { kind: "text", delta: outcome.reply };
-                }
-                const saved = await this.#commit(ctx, outcome, session, false);
-                yield { kind: "done", result: this.#result(ctx, outcome, saved, {}, outcome.reply === "") };
-                return;
-            }
-        }
-        const verdict = Budget.check(session.meter, tenant.settings.limits, input);
-        if (verdict.kind === "end") {
-            const outcome = { ...this.#goodbye(ctx), directive: { kind: "end" } as const };
-            yield { kind: "text", delta: outcome.reply };
-            const saved = await this.#commit(ctx, outcome, session, true);
-            if (inbound.channel !== "voice") {
-                await closeSession(this.#s, session.id, "budget");
-            }
-            yield { kind: "done", result: this.#result(ctx, outcome, saved, {}, false) };
-            return;
-        }
+    }
 
-        // The model, with this conversation's prompt variant.
+    /**
+     * The variant asked for by name (evals), else the one this conversation is assigned to.
+     */
+    #variant(conversationId: ConversationId, requested: string | undefined): PromptVariant {
         const { composer } = this.#s;
-        const variant = (options.variant !== undefined ? composer.variant(options.variant) : null)
-            ?? PromptVariant.assign(composer.variants, composer.experiment, conversation.id);
-        let outcome: TurnOutcome;
-        let costUsd = 0;
-        let measured: Measured;
-        const generated = this.#generate(ctx, verdict, variant);
-        for (;;) {
-            const step = await generated.next();
-            if (step.done) {
-                ({ outcome, costUsd, measured } = step.value);
-                break;
-            }
-            yield step.value;
-        }
+        const named = requested === undefined
+            ? null
+            : composer.variant(requested);
+        return named ?? PromptVariant.assign(composer.variants, composer.experiment, conversationId);
+    }
 
-        // Links in text channels go into the reply itself; on calls they're texted (link_requested -> job).
-        if (inbound.channel !== "voice") {
-            const links = outcome.events.filter(e => e.kind === "link_requested");
-            if (links.length > 0) {
-                const lines = links.map(l => `${l.label.charAt(0).toUpperCase()}${l.label.slice(1)}: ${l.url}`).join("\n");
-                yield { kind: "text", delta: `\n\n${lines}` };
-                outcome = {
-                    ...outcome,
-                    reply:  `${outcome.reply}\n\n${lines}`,
-                    events: outcome.events.filter(e => e.kind !== "link_requested"),
-                };
-            }
+    /**
+     * Events the turn causes besides the model's own: the start of a wind-down,
+     * a possible crisis for staff, and the tenant crossing a spending threshold.
+     */
+    #sideEvents(ctx: TurnContext, verdict: BudgetVerdict, costUsd: number): EventBody[] {
+        const { tenant } = ctx;
+        const events: EventBody[] = [];
+        if (verdict.kind === "closing" && ctx.session.meter.closing === null) {
+            events.push({ kind: "session_closing", reason: verdict.reason });
         }
-
-        // A wind-down's last turn ends the session, whatever the model did.
-        const lastClosingTurn = verdict.kind === "closing" && verdict.turnsLeft <= 1;
-        if (lastClosingTurn && inbound.channel === "voice" && outcome.directive.kind === "continue") {
-            outcome = { ...outcome, directive: { kind: "end" } };
-        }
-        const extra: EventBody[] = verdict.kind === "closing" && session.meter.closing === null
-            ? [{ kind: "session_closing", reason: verdict.reason }]
-            : [];
-        if (tenant.settings.privacy.crisisSupport && Crisis.suspected(inbound.text)) {
-            extra.push({ kind: "handoff_requested", reason: "crisis", note: "A message in this conversation may indicate a safety concern. Please reach out as soon as possible." });
+        if (tenant.settings.privacy.crisisSupport && Crisis.suspected(ctx.inbound.text)) {
+            events.push({ kind: "handoff_requested", reason: "crisis", note: "A message in this conversation may indicate a safety concern. Please reach out as soon as possible." });
         }
         const capBefore = Budget.capStatus(ctx.costThisMonth, tenant.plan);
         const capAfter = Budget.capStatus(ctx.costThisMonth + costUsd, tenant.plan);
         if (capAfter !== capBefore && (capAfter === "warning" || capAfter === "assistant_used")) {
-            extra.push({ kind: "tenant_cap", status: capAfter });
+            events.push({ kind: "tenant_cap", status: capAfter });
         }
-
-        const meter = SessionMeter.record(session.meter, verdict, outcome.assessment, costUsd);
-        const committed = { ...outcome, events: [...outcome.events, ...extra] };
-        const saved = await this.#commit(ctx, committed, { ...session, meter }, true);
-        if (lastClosingTurn && inbound.channel !== "voice") {
-            await closeSession(this.#s, session.id, "budget");
-        }
-        await this.#measure(ctx, variant, measured, outcome, costUsd);
-        yield { kind: "done", result: this.#result(ctx, committed, saved, {}, false) };
+        return events;
     }
 
     // --- the model loop -------------------------------------------------------------
@@ -519,28 +586,18 @@ export class TurnEngine {
     }
 
     async #runTool(tool: Tool | undefined, call: ToolCall, ctx: TurnContext): Promise<ToolResult> {
-        const failed = (message: string): ToolResult => ({
-            output:         { error: message },
-            failed:         true,
-            events:         [],
-            contactChanges: {},
-            sentUrls:       [],
-            directive:      null,
-            assessment:     null,
-            language:       null,
-        });
         if (tool === undefined) {
-            return failed(`There is no tool called ${call.name}.`);
+            return ToolResult.error(`There is no tool called ${call.name}.`);
         }
         const args = tool.parameters.safeParse(call.arguments);
         if (!args.success) {
-            return failed(args.error.issues.map(i => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; "));
+            return ToolResult.error(args.error.issues.map(i => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; "));
         }
         try {
             return await tool.run(args.data, ctx);
         } catch (e) {
             console.error(`tool ${call.name} failed:`, e);
-            return failed("That didn't work; continue without it.");
+            return ToolResult.error("That didn't work; continue without it.");
         }
     }
 
@@ -549,9 +606,7 @@ export class TurnEngine {
     #values(ctx: TurnContext): Record<string, string> {
         return {
             ...this.#s.composer.values(ctx.tenant, ctx.pack, ctx.inbound.channel),
-            phone_sentence: ctx.tenant.phone !== null
-                ? ` at ${PhoneNumber.display(ctx.tenant.phone)}`
-                : "",
+            phone_sentence: phoneSentence(ctx.tenant),
             hours_sentence: ctx.tenant.hoursText
                 ? say(STRINGS.hoursSentence, ctx.session.language, { hours: ctx.tenant.hoursText })
                 : "",
@@ -577,6 +632,8 @@ export class TurnEngine {
                     ...TurnOutcome.reply(say(STRINGS.awayText, language, this.#values(ctx)), language),
                     events: [{ kind: "handoff_requested", reason: "take_message", note: `Message while the assistant was off: "${ctx.inbound.text}"` }],
                 };
+            default:
+                return assertNever(reason);
         }
     }
 
@@ -608,24 +665,14 @@ export class TurnEngine {
         if (outcome.reply) {
             messages.push({ conversationId: ctx.conversation.id, sessionId: session.id, role: "assistant", text: outcome.reply, channel: ctx.inbound.channel });
         }
-        const events = stamp(outcome.events, {
-            tenantId:       ctx.tenant.id,
+        const { events, jobs } = eventsAndJobs(this.#s, {
+            tenant:         ctx.tenant,
             conversationId: ctx.conversation.id,
             sessionId:      session.id,
-            occurredAt:     now,
+            contact:        Contact.apply(ctx.contact, outcome.contactChanges),
+            channel:        ctx.inbound.channel,
             causedBy:       ctx.inbound.dedupeKey,
-        });
-        const contact = { ...ctx.contact, ...outcome.contactChanges };
-        const jobs = [
-            ...Subscriber.jobsFor(this.#s.subscribers, events, {
-                tenant:  ctx.tenant,
-                pack:    ctx.pack,
-                contact,
-                channel: ctx.inbound.channel,
-                now,
-            }),
-            ...this.#coldFollowup(ctx, outcome),
-        ];
+        }, outcome.events, now);
         await this.#s.store.turns.commit({
             dedupeKey:      ctx.inbound.dedupeKey,
             reply:          outcome.reply,
@@ -634,7 +681,7 @@ export class TurnEngine {
             session:        next,
             messages,
             events,
-            jobs,
+            jobs:           [...jobs, ...this.#coldFollowup(ctx, outcome)],
             at:             now,
         });
         return next;
@@ -670,22 +717,11 @@ export class TurnEngine {
         return {
             outcome,
             tenant:   ctx.tenant,
-            contact:  { ...ctx.contact, ...outcome.contactChanges },
+            contact:  Contact.apply(ctx.contact, outcome.contactChanges),
             session,
             data,
             silent,
             replayed: false,
         };
-    }
-
-    async #tenant(inbound: Inbound): Promise<Tenant> {
-        const ref = inbound.tenant;
-        const tenant = ref.kind === "slug"
-            ? await this.#s.store.tenants.bySlug(ref.slug)
-            : await this.#s.store.tenants.byEndpoint(inbound.channel, ref.address);
-        if (tenant === null) {
-            throw new UnknownTenant(ref.kind === "slug" ? `no tenant '${ref.slug}'` : `no tenant for ${inbound.channel} ${ref.address.value}`);
-        }
-        return tenant;
     }
 }

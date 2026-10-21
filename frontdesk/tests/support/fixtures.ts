@@ -17,9 +17,9 @@ export function tenant(overrides: Partial<TenantFile> & Pick<TenantFile, "id" | 
         ...overrides,
     });
     if (!result.ok) {
-        throw new Error(JSON.stringify(result.problems));
+        throw new Error(JSON.stringify(result.error));
     }
-    return result.tenant;
+    return result.value;
 }
 
 export function plumber(overrides: Partial<TenantFile> = {}): Tenant {

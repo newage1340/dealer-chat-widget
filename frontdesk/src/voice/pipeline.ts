@@ -9,7 +9,7 @@
  *   TTS speaks), with Deepgram as the backup when the machine is busy or down.
  */
 
-import type { Language } from "../core/index.ts";
+import type { Language, ValueOf } from "../core/index.ts";
 import type { SpeechToText, TextToSpeech } from "../providers/index.ts";
 
 export const VoicePipelineKind = {
@@ -17,32 +17,37 @@ export const VoicePipelineKind = {
     MediaStreams:      "media_streams",
     MediaStreamsLocal: "media_streams_local",
 } as const;
-export type VoicePipelineKind = (typeof VoicePipelineKind)[keyof typeof VoicePipelineKind];
+export type VoicePipelineKind = ValueOf<typeof VoicePipelineKind>;
 
 /**
- * A text-to-speech provider that says which languages it can speak.
- */
-export type Voice = TextToSpeech & {
-    supports(language: Language): boolean;
-};
-
-/**
+ * The pipelines where Twilio streams call audio to our WebSocket.
  * `voices` are tried in order: the first that supports the language speaks, and the next takes over if it fails.
  */
+export type StreamingPipeline = {
+    readonly kind:   typeof VoicePipelineKind.MediaStreams | typeof VoicePipelineKind.MediaStreamsLocal;
+    readonly stt:    SpeechToText;
+    readonly voices: readonly TextToSpeech[];
+};
+
 export type VoicePipeline =
-    | { readonly kind: "twilio_gather" }
-    | { readonly kind: "media_streams" | "media_streams_local";
-        readonly stt:    SpeechToText;
-        readonly voices: readonly Voice[]
-    };
+    | { readonly kind: typeof VoicePipelineKind.TwilioGather }
+    | StreamingPipeline;
 
 export const VoicePipeline = {
-    gather: { kind: "twilio_gather" } as VoicePipeline,
+    gather: { kind: VoicePipelineKind.TwilioGather } satisfies VoicePipeline,
+
+    /**
+     * Whether calls stream audio to us (rather than Twilio's <Gather> listening for us).
+     */
+    streams(pipeline: VoicePipeline | undefined): pipeline is StreamingPipeline {
+        return pipeline !== undefined
+            && pipeline.kind !== VoicePipelineKind.TwilioGather;
+    },
 
     /**
      * Voices that can speak `language`, best first; the full list when none claims it.
      */
-    voicesFor(voices: readonly Voice[], language: Language): readonly Voice[] {
+    voicesFor(voices: readonly TextToSpeech[], language: Language): readonly TextToSpeech[] {
         const able = voices.filter(v => v.supports(language));
         return able.length > 0
             ? able

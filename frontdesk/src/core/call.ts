@@ -5,9 +5,9 @@
  * Time limits and the polite wind-down are the budget's job (budget.ts), not the call's.
  */
 
-import type { SessionLimits } from "./budget.ts";
+import { DEFAULT_SESSION_LIMITS, type SessionLimits } from "./budget.ts";
 import type { PhoneNumber } from "./channel.ts";
-import type { ValueOf } from "./lang.ts";
+import { assertNever, type ValueOf } from "./lang.ts";
 import { Result } from "./result.ts";
 
 export const CallEndReason = {
@@ -66,7 +66,7 @@ export type InvalidCallTransition = {
 };
 
 const DEFAULT_LIMITS: CallLimits = {
-    maxSilentTurns: 3,
+    maxSilentTurns: DEFAULT_SESSION_LIMITS.maxSilentTurns,
 };
 
 export const CallState = {
@@ -81,9 +81,19 @@ export const CallState = {
         };
     },
 
-    isLive(state: CallState): boolean {
-        return state.status === "listening"
-			|| state.status === "responding";
+    /**
+     * Why the call is over once it has ended or the line dropped: its recorded reason,
+     * a completed transfer, or the caller hanging up.
+     */
+    endReason(state: CallState): CallEndReason {
+        switch (state.status) {
+            case "ended":
+                return state.reason;
+            case "transferring":
+                return "transferred";
+            default:
+                return "caller_hung_up";
+        }
     },
 
     next(
@@ -105,9 +115,7 @@ export const CallState = {
             return Result.ok({
                 status: "ended",
                 turns,
-                reason: state.status === "transferring"
-					? "transferred"
-					: "caller_hung_up"
+                reason: CallState.endReason(state)
             });
         }
         if (event.kind === "failed") {
@@ -154,10 +162,14 @@ export const CallState = {
                         turns,
                         reason: "completed"
                     });
+                    default: return assertNever(event.directive);
                 }
 
             case "transferring":
                 return invalid;
+
+            default:
+                return assertNever(state);
         }
     },
 } as const;

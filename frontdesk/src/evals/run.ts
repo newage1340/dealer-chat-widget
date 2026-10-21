@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
-import { Address, Language, type EventKind, type Inbound, type Tenant } from "../core/index.ts";
+import { Address, Channel, Language, PhoneNumber, type EventKind, type Inbound, type Tenant } from "../core/index.ts";
 import { DomainRegistry } from "../domains/index.ts";
 import { collect, TurnEngine } from "../pipeline/engine.ts";
 import { DEFAULT_POLICIES } from "../pipeline/policies.ts";
@@ -21,7 +21,11 @@ import { PromptComposer } from "../prompts/composer.ts";
 import type { LlmProvider, PriceTable } from "../providers/index.ts";
 import { openStore, type Store } from "../storage/index.ts";
 
-const LANGUAGES = Object.values(Language) as [Language, ...Language[]];
+
+/**
+ * The phone number eval customers text from (and give, on the web).
+ */
+const EVAL_PHONE = "+13175550123";
 
 const Expectation = z.strictObject({
     events:        z.array(z.string()).default([]),
@@ -29,14 +33,14 @@ const Expectation = z.strictObject({
     replyIncludes: z.array(z.string()).default([]),
     replyExcludes: z.array(z.string()).default([]),
     replyMatches:  z.string().optional(),
-    language:      z.enum(LANGUAGES).optional(),
+    language:      z.enum(Language).optional(),
     directive:     z.enum(["continue", "transfer", "end"]).optional(),
 });
 
 const Scenario = z.strictObject({
     name:    z.string(),
     tenant:  z.string().describe("slug of a tenant in the configured database"),
-    channel: z.enum(["web", "sms", "voice"]).default("sms"),
+    channel: z.enum(Channel).default("sms"),
     profile: z.strictObject({ firstName: z.string().optional(), phone: z.string().optional() }).default({}),
     privacy: z.strictObject({ sensitive: z.boolean().optional(), crisisSupport: z.boolean().optional() }).default({}).describe("tenant privacy settings to override for this scenario"),
     turns:   z.array(z.strictObject({ say: z.string(), expect: Expectation.prefault({}) })).min(1),
@@ -108,13 +112,14 @@ export async function runScenario(
         smsIdleMs:   30 * 60_000,
     };
     const engine = new TurnEngine(services);
-    const sender = scenario.channel === "web"
+    const phone = PhoneNumber.parse(scenario.profile.phone ?? EVAL_PHONE);
+    const sender = scenario.channel === "web" || phone === null
         ? Address.webSession("eval")
-        : Address.phone("+13175550123")!;
+        : { kind: "phone" as const, value: phone };
     const { contact } = await store.conversations.resolve(tenant.id, sender, new Date());
     await store.conversations.updateContact(contact.id, {
         firstName: scenario.profile.firstName ?? (scenario.channel === "web" ? "Alex" : ""),
-        ...(scenario.channel === "web" ? { phone: Address.phone(scenario.profile.phone ?? "+13175550123")!.value as never } : {}),
+        ...(scenario.channel === "web" ? { phone } : {}),
     });
 
     const failures: string[] = [];
@@ -122,7 +127,6 @@ export async function runScenario(
     for (const [i, turn] of scenario.turns.entries()) {
         const inbound: Inbound = {
             channel:           scenario.channel,
-            tenant:            { kind: "slug", slug: tenant.slug },
             sender,
             text:              turn.say,
             receivedAt:        new Date(),
@@ -132,7 +136,7 @@ export async function runScenario(
             language:          null,
             forwardedFrom:     null,
         };
-        const result = await collect(engine.run(inbound, { tenant, vendor: "twilio", ...(variant !== undefined ? { variant } : {}) }));
+        const result = await collect(engine.run(inbound, tenant, { vendor: "twilio", ...(variant !== undefined ? { variant } : {}) }));
         const reply = result.outcome.reply;
         const kinds = new Set<string>(result.outcome.events.map(e => e.kind));
         const at = `turn ${i + 1} ("${turn.say.slice(0, 40)}")`;

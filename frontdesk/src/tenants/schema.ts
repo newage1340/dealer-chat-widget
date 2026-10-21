@@ -8,26 +8,30 @@ import { z } from "zod";
 import {
     Address,
     BillingStatus,
-    Tenant,
+    CallFallback,
     DEFAULT_ABUSE_POLICY,
     DEFAULT_CALL_FALLBACKS,
     DEFAULT_PRICING,
     DEFAULT_PRIVACY,
     DEFAULT_SESSION_LIMITS,
     DomainId,
+    HiddenCallerId,
     Language,
+    NotifyVia,
     PhoneNumber,
     PiiKind,
     PLATFORM_BOUNDS,
+    Problem,
     Professionalism,
+    Result,
     ServiceSchedule,
+    Tenant,
     TenantId,
     type Bound,
     type CatalogSource,
     type LocalizedText,
 } from "../core/index.ts";
 
-const LANGUAGES = Object.values(Language) as [Language, ...Language[]];
 const phone = z.string().transform((raw, ctx) => {
     const parsed = PhoneNumber.parse(raw);
     if (parsed === null) {
@@ -47,10 +51,8 @@ const optionalPhone = z.string().optional().transform((raw, ctx) => {
     }
     return parsed;
 });
-const PII_KINDS = Object.values(PiiKind) as [PiiKind, ...PiiKind[]];
-const LEVELS = Object.values(Professionalism) as [Professionalism, ...Professionalism[]];
-const notices = z.array(z.enum(["email", "sms"])).min(1);
-const fallback = z.enum(["voicemail", "forward", "reject"]);
+const notices = z.array(z.enum(NotifyVia)).min(1);
+const fallback = z.enum(CallFallback);
 
 const DEFAULT_DISCLOSURE: LocalizedText = {
     en: "Just so you know, this call is recorded and transcribed.",
@@ -111,8 +113,8 @@ export const TenantFile = z.strictObject({
         logoUrl: z.string().default(""),
     }).prefault({}),
     hoursText:       z.string().default(""),
-    defaultLanguage: z.enum(LANGUAGES).default("en"),
-    staffLanguage:   z.enum(LANGUAGES).default("en"),
+    defaultLanguage: z.enum(Language).default("en"),
+    staffLanguage:   z.enum(Language).default("en"),
     profile:         z.record(z.string(), z.string()).default({}),
     options:         z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
     plan:            z.strictObject({
@@ -122,7 +124,7 @@ export const TenantFile = z.strictObject({
         topUpsMonth:      z.string().regex(/^(\d{4}-\d{2})?$/).default(""),
     }).prefault({}),
     billing:         z.strictObject({
-        status:           z.enum(Object.values(BillingStatus) as [BillingStatus, ...BillingStatus[]]).default("none"),
+        status:           z.enum(BillingStatus).default("none"),
         customerId:       z.string().nullable().default(null),
         subscriptionId:   z.string().nullable().default(null),
         currentPeriodEnd: z.string().nullable().default(null),
@@ -147,20 +149,20 @@ export const TenantFile = z.strictObject({
         maxSessionMinutes:   bounded(PLATFORM_BOUNDS.maxSessionMinutes),
         recordingDisclosure: z.boolean().default(false),
         recordingNotice:     z.string().max(300).default("").describe("custom wording for the recording notice; blank uses the standard one"),
-        languages:           z.array(z.enum(LANGUAGES)).min(1).default(LANGUAGES),
+        languages:           z.array(z.enum(Language)).min(1).default(Object.values(Language)),
         privacy:             z.strictObject({
-            redact:    z.array(z.enum(PII_KINDS)).default([...DEFAULT_PRIVACY.redact]),
+            redact:    z.array(z.enum(PiiKind)).default([...DEFAULT_PRIVACY.redact]),
             sensitive:     z.boolean().default(false),
             crisisSupport: z.boolean().default(false),
         }).prefault({}),
         style:               z.strictObject({
-            professionalism: z.enum(LEVELS).nullable().default(null),
+            professionalism: z.enum(Professionalism).nullable().default(null),
             honestAboutAi:   z.boolean().nullable().default(null),
         }).prefault({}),
         calls:               z.strictObject({
             silenceSeconds:    bounded(PLATFORM_BOUNDS.silenceSeconds),
             stillTherePrompts: bounded(PLATFORM_BOUNDS.stillTherePrompts),
-            hiddenCallerId:    z.enum(["assistant", "voicemail", "reject"]).default("assistant"),
+            hiddenCallerId:    z.enum(HiddenCallerId).default("assistant"),
         }).prefault({}),
         catalog:             z.strictObject({
             source:   CatalogSourceFile.default({ kind: "manual" }),
@@ -310,18 +312,9 @@ export function fromTenant(tenant: Tenant) {
  */
 export type TenantDraft = ReturnType<typeof fromTenant>;
 
-export type TenantProblem = {
-    readonly path:    string;
-    readonly message: string;
-};
-
-export function parseTenant(data: unknown): { ok: true; tenant: Tenant } | { ok: false; problems: TenantProblem[] } {
+export function parseTenant(data: unknown): Result<Tenant, Problem[]> {
     const parsed = TenantFile.safeParse(data);
-    if (!parsed.success) {
-        return {
-            ok:       false,
-            problems: parsed.error.issues.map(i => ({ path: i.path.join("."), message: i.message })),
-        };
-    }
-    return { ok: true, tenant: toTenant(parsed.data) };
+    return parsed.success
+        ? Result.ok(toTenant(parsed.data))
+        : Result.err(Problem.fromIssues(parsed.error.issues));
 }

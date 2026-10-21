@@ -4,9 +4,8 @@
  */
 
 import { Tenant, type CatalogItem } from "../core/index.ts";
-import type { DomainPack } from "../domains/index.ts";
+import { PriceRange, type DomainPack } from "../domains/index.ts";
 import { Hours } from "../prompts/hours.ts";
-import { parsePrice } from "../tools/index.ts";
 
 export function lintTenant(tenant: Tenant, pack: DomainPack, items: readonly CatalogItem[]): string[] {
     const warnings: string[] = [];
@@ -36,7 +35,7 @@ export function lintTenant(tenant: Tenant, pack: DomainPack, items: readonly Cat
         const spec = pack.catalog.fields.find(f => f.name === field);
         const unreadable = items.filter(i => {
             const value = String(i.fields[field] ?? "").trim();
-            return value !== "" && parsePrice(value) === null;
+            return value !== "" && PriceRange.parse(value) === null;
         });
         if (unreadable.length > 0) {
             warnings.push(`${unreadable.length} ${pack.catalog.itemNounPlural} have a ${spec?.label || field} that isn't a dollar amount (e.g. "${String(unreadable[0]!.fields[field])}"), so totals skip them.`);

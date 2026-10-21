@@ -9,6 +9,7 @@ import { join } from "node:path";
 
 import { fetchRows, mapColumns } from "../catalogs/index.ts";
 import { ROOT } from "../config.ts";
+import { Problem } from "../core/index.ts";
 import { Catalog, DomainRegistry } from "../domains/index.ts";
 import { Hours } from "../prompts/hours.ts";
 import { lintTenant } from "../tenants/lint.ts";
@@ -30,15 +31,13 @@ const fail = (path: string, message: string) => {
 for (const path of paths) {
     const parsed = parseTenant(JSON.parse(await readFile(path, "utf8")));
     if (!parsed.ok) {
-        fail(path, parsed.problems.map(p => `${p.path}: ${p.message}`).join("; "));
+        fail(path, parsed.error.map(Problem.format).join("; "));
         continue;
     }
-    const tenant = parsed.tenant;
-    let pack;
-    try {
-        pack = registry.get(tenant.domain);
-    } catch (e) {
-        fail(path, String(e));
+    const tenant = parsed.value;
+    const pack = registry.find(tenant.domain);
+    if (pack === null) {
+        fail(path, `unknown business type '${tenant.domain}'`);
         continue;
     }
     const days = Object.keys(Hours.parse(tenant.hoursText));

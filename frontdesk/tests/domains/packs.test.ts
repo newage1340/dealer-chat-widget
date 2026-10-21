@@ -103,8 +103,11 @@ describe("lint", () => {
 
     it("knows every tool the model can be given", async () => {
         const { TOOL_NAMES, toolsFor } = await import("../../src/tools/index.ts");
-        const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../../src/tools/index.ts", import.meta.url), "utf8"));
-        const defined = [...source.matchAll(/name:\s+"([a-z_]+)",\n\s+(?:promise|description)/g)].map(m => m[1]);
+        const { readdir, readFile } = await import("node:fs/promises");
+        const dir = new URL("../../src/tools/", import.meta.url);
+        const files = (await readdir(dir)).filter(f => f.endsWith(".ts"));
+        const sources = await Promise.all(files.map(f => readFile(new URL(f, dir), "utf8")));
+        const defined = sources.flatMap(source => [...source.matchAll(/name:\s+"([a-z_]+)",\n\s+(?:promise|description)/g)].map(m => m[1]));
         expect(new Set(defined)).toEqual(TOOL_NAMES);
         expect(typeof toolsFor).toBe("function");
     });

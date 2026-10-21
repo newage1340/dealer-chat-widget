@@ -19,8 +19,9 @@ import type {
     ChatCompletionTool,
 } from "openai/resources/chat/completions";
 
-import type { UsageRecord } from "../core/index.ts";
+import { UsageRecord } from "../core/index.ts";
 import { ProviderError } from "./errors.ts";
+import { deadlineSignal } from "./http.ts";
 import type {
     ChatMessage,
     FinishReason,
@@ -141,10 +142,7 @@ export class OpenAiCompatibleLlm implements LlmProvider {
     async *stream(request: LlmRequest, signal?: AbortSignal): AsyncIterable<LlmStreamPart> {
         const model = this.model(request.tier);
         const started = performance.now();
-        const timeout = AbortSignal.timeout(request.timeoutMs);
-        const combined = signal === undefined
-            ? timeout
-            : AbortSignal.any([signal, timeout]);
+        const combined = deadlineSignal({ timeoutMs: request.timeoutMs, signal });
 
         const params: ChatCompletionCreateParamsStreaming = {
             model,
@@ -220,22 +218,20 @@ export class OpenAiCompatibleLlm implements LlmProvider {
         }
 
         const cached = usage?.prompt_tokens_details?.cached_tokens ?? 0;
-        const record: UsageRecord = {
-            provider:   this.name,
+        const record = UsageRecord.measured({
+            provider:  this.name,
             model,
-            service:    "llm",
-            purpose:    request.purpose,
-            occurredAt: new Date(),
-            units:      {
+            service:   "llm",
+            purpose:   request.purpose,
+            units:     {
                 input_tokens:        Math.max(0, (usage?.prompt_tokens ?? 0) - cached),
                 cached_input_tokens: cached,
                 output_tokens:       usage?.completion_tokens ?? 0,
             },
-            costUsd:    null,
-            latencyMs:  performance.now() - started,
-            tenantId:   request.tenantId,
-            channel:    request.channel,
-        };
+            tenantId:  request.tenantId,
+            channel:   request.channel,
+            startedAt: started,
+        });
         yield { kind: "finish", reason, usage: record };
     }
 }

@@ -20,22 +20,23 @@ import {
     PhoneNumber,
     Tenant,
     TenantId,
+    type CallSettings,
+    type CallVendor,
     type Contact,
     type Conversation,
     type EventBody,
     type Inbound,
-    type CallSettings,
     type Language,
     type Session,
 } from "../core/index.ts";
 import type { DomainPack } from "../domains/index.ts";
 import { collect } from "../pipeline/engine.ts";
 import { closeSession } from "../pipeline/sessions.ts";
-import { stamp, type Services } from "../pipeline/services.ts";
+import { publishEvents, recordMessage, type Services } from "../pipeline/services.ts";
 import { Speech } from "../prompts/speech.ts";
 import { STRINGS, say } from "../prompts/strings.ts";
-import { Subscriber } from "../turn/index.ts";
 import { absolute, form, twilioSignature, xml, type ChannelDeps } from "./context.ts";
+import { VoicePipeline } from "../voice/pipeline.ts";
 import { PENDING_DIRECTIVES } from "../voice/stream.ts";
 import { streamUrl } from "./stream.ts";
 import { VoiceResponse } from "./twiml.ts";
@@ -68,46 +69,60 @@ export function greeting(tenant: Tenant, pack: DomainPack, language: Language, n
 /**
  * Publish events about a call (and the jobs they cause) outside a turn.
  */
-async function publish(services: Services, tenant: Tenant, contact: Contact, conversation: Conversation, session: Session | null, bodies: readonly EventBody[]): Promise<void> {
-    const now = services.clock();
-    const events = stamp(bodies, {
-        tenantId:       tenant.id,
+async function publish(
+    services: Services,
+    tenant: Tenant,
+    contact: Contact,
+    conversation: Conversation,
+    session: Session | null,
+    bodies: readonly EventBody[]
+): Promise<void>
+{
+    await publishEvents(services, {
+        tenant,
         conversationId: conversation.id,
         sessionId:      session?.id ?? null,
-        occurredAt:     now,
-        causedBy:       null,
-    });
-    const jobs = Subscriber.jobsFor(services.subscribers, events, {
-        tenant,
-        pack:    services.registry.get(tenant.domain),
         contact,
-        channel: "voice",
-        now,
-    });
-    await services.store.outbox.publish(events, jobs);
+        channel:        "voice",
+        causedBy:       null,
+    }, bodies);
 }
 
 /**
- * Record the assistant's opening line as the first message of the call.
+ * How a new call is handled: the assistant answers (with its greeting already recorded),
+ * it goes to the business's own line, to our voicemail, or gets a busy signal.
  */
-async function recordGreeting(services: Services, contact: Contact, conversation: Conversation, session: Session, text: string): Promise<void> {
-    await services.store.turns.commit({
-        dedupeKey:      `greeting:${session.id}`,
-        reply:          text,
-        contactId:      contact.id,
-        contactChanges: {},
-        session,
-        messages:       [{ conversationId: conversation.id, sessionId: session.id, role: "assistant", text, channel: "voice" }],
-        events:         [],
-        jobs:           [],
-        at:             services.clock(),
-    });
-}
+export type CallStart =
+    | { readonly kind: "assistant";
+		readonly session: Session;
+		readonly text: string;
+		readonly contact: Contact
+	}
+    | { readonly kind: "forward";
+		readonly session: Session;
+		readonly to: PhoneNumber;
+		readonly contact: Contact
+	}
+    | { readonly kind: "voicemail";
+		readonly session: Session;
+		readonly contact: Contact
+	}
+    | { readonly kind: "reject";
+		readonly contact: Contact
+	};
 
 /**
  * What to do with a call the assistant answers or not: shared by Twilio and Vapi.
  */
-export async function startCall(services: Services, tenant: Tenant, caller: Address, callId: string, forwardedFrom: PhoneNumber | null, vendor: "twilio" | "vapi") {
+export async function startCall(
+    services: Services,
+    tenant: Tenant,
+    caller: Address,
+    callId: string,
+    forwardedFrom: PhoneNumber | null,
+    vendor: CallVendor
+): Promise<CallStart>
+{
     const { store } = services;
     const now = services.clock();
     const { contact, conversation } = await store.conversations.resolve(tenant.id, caller, now);
@@ -126,31 +141,31 @@ export async function startCall(services: Services, tenant: Tenant, caller: Addr
     // Robocalls usually hide their caller ID; the tenant decides whether those reach the assistant.
     if (caller.kind !== "phone" && tenant.settings.calls.hiddenCallerId !== "assistant") {
         if (tenant.settings.calls.hiddenCallerId === "reject") {
-            return { kind: "reject" as const, contact };
+            return { kind: "reject", contact };
         }
         const session = await store.conversations.session(conversation, { channel: "voice", externalId: callId, vendor, handling: "voicemail" }, { language, smsIdleMs: services.smsIdleMs }, now);
-        return { kind: "voicemail" as const, session, contact };
+        return { kind: "voicemail", session, contact };
     }
     const defaults = { language, smsIdleMs: services.smsIdleMs };
     if (admission.kind === "admit") {
         const session = await store.conversations.session(conversation, { channel: "voice", externalId: callId, vendor, handling: "assistant" }, defaults, now);
         const text = greeting(tenant, services.registry.get(tenant.domain), session.language, now);
-        await recordGreeting(services, contact, conversation, session, text);
+        await recordMessage(services, session, contact.id, "assistant", text, `greeting:${session.id}`);
         await publish(services, tenant, contact, conversation, session, [{ kind: "call_started", from: caller }]);
-        return { kind: "assistant" as const, session, text, contact };
+        return { kind: "assistant", session, text, contact };
     }
     const forwardTo = tenant.settings.transferTo ?? tenant.phone;
     const fallback = Coverage.fallbackFor(tenant.settings.callFallbacks, admission.reason, { forwardTo, forwardedFrom });
     if (fallback === "reject") {
-        return { kind: "reject" as const, contact };
+        return { kind: "reject", contact };
     }
     const handling = fallback === "forward" ? "forwarded" : "voicemail";
     const session = await store.conversations.session(conversation, { channel: "voice", externalId: callId, vendor, handling }, defaults, now);
     if (fallback === "forward" && forwardTo !== null) {
         await publish(services, tenant, contact, conversation, session, [{ kind: "call_forwarded", to: forwardTo, reason: admission.reason }]);
-        return { kind: "forward" as const, session, to: forwardTo, contact };
+        return { kind: "forward", session, to: forwardTo, contact };
     }
-    return { kind: "voicemail" as const, session, contact };
+    return { kind: "voicemail", session, contact };
 }
 
 /**
@@ -223,7 +238,7 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
                     .hangup());
             }
             case "assistant":
-                if (deps.voice !== undefined && deps.voice.kind !== "twilio_gather") {
+                if (VoicePipeline.streams(deps.voice)) {
                     // Our own pipeline: Twilio streams the audio to /voice/stream, which greets the caller;
                     // when we close the stream, Twilio follows the redirect to learn what comes next.
                     return reply(c, new VoiceResponse()
@@ -270,7 +285,6 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
 
         const inbound: Inbound = {
             channel:           "voice",
-            tenant:            { kind: "endpoint", address: Address.phone(f["To"] ?? "")! },
             sender:            callerOf(f, callId),
             text:              said,
             receivedAt:        services.clock(),
@@ -281,7 +295,7 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
             forwardedFrom:     PhoneNumber.parse(f["ForwardedFrom"] ?? ""),
         };
         try {
-            const result = await collect(engine.run(inbound, { tenant, vendor: "twilio" }));
+            const result = await collect(engine.run(inbound, tenant, { vendor: "twilio" }));
             const text = Speech.forPolly(result.outcome.reply, pack);
             const spoken = result.session.language;
             const directive = result.outcome.directive;
@@ -380,7 +394,7 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
         }
         // With <Gather>, Twilio bills each listen and every character <Say> speaks with a neural voice.
         // Streamed calls meter their own speech services (see voice/stream.ts).
-        const gathered = deps.voice === undefined || deps.voice.kind === "twilio_gather";
+        const gathered = !VoicePipeline.streams(deps.voice);
         if (session.handling === "assistant" && gathered) {
             const turns = session.call.turns;
             const spoken = (await store.conversations.sessionMessages(session.id))
@@ -412,12 +426,7 @@ export function voiceRoutes(deps: ChannelDeps): Hono {
             });
         }
         if (session.handling !== "voicemail") {
-            const reason = session.call.status === "ended"
-                ? session.call.reason
-                : session.call.status === "transferring"
-                    ? "transferred"
-                    : "caller_hung_up";
-            await closeSession(services, session.id, reason);
+            await closeSession(services, session.id, CallState.endReason(session.call));
         }
         return c.body(null, 204);
     });

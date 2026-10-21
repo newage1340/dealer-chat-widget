@@ -15,10 +15,14 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { DATASETS_DIR, importRows, parsePastedRows, syncCatalog } from "../../catalogs/index.ts";
 import {
     Address,
+    Channel,
     ContactId,
     DomainId,
+    enumValue,
     Password,
     PhoneNumber,
+    Problem,
+    Result,
     SessionId,
     type CatalogSource,
     type Language,
@@ -31,38 +35,13 @@ import { lintTenant } from "../../tenants/lint.ts";
 import { StripeClient } from "../../providers/stripe.ts";
 import { LoginThrottle, Session, Viewer } from "./auth.ts";
 import { fromTenant, parseTenant, type TenantDraft } from "../../tenants/schema.ts";
-import { previewPrompt, SAMPLE_MESSAGE } from "../admin.ts";
+import { previewPrompt, SAMPLE_MESSAGE } from "../../prompts/preview.ts";
 import type { ChannelDeps } from "../context.ts";
+import { formBody, many, minuteOf, num, on, one, untrimmed, type FormBody } from "../form.ts";
 import { indexPage, loginPage, promptPage, qualityPage, tenantPage, transcriptPage } from "./pages.ts";
 
 const COOKIE = "frontdesk_settings";
 const STATIC = new URL("../../../public/settings/", import.meta.url);
-
-type Body = Record<string, string | File | (string | File)[]>;
-
-function one(body: Body, name: string): string {
-    const value = body[name];
-    const first = Array.isArray(value) ? value[0] : value;
-    return typeof first === "string" ? first.trim() : "";
-}
-
-function many(body: Body, name: string): string[] {
-    const value = body[name];
-    const all = Array.isArray(value) ? value : value === undefined ? [] : [value];
-    return all.filter((v): v is string => typeof v === "string" && v.trim() !== "").map(v => v.trim());
-}
-
-function on(body: Body, name: string): boolean {
-    return one(body, name) !== "";
-}
-
-/**
- * A number field, or undefined when it was left blank (so the current value stays).
- */
-function num(body: Body, name: string): number | undefined {
-    const raw = one(body, name);
-    return raw === "" ? undefined : Number(raw);
-}
 
 function lines(text: string): string[] {
     return text.split(/[\n,]+/).map(l => l.trim()).filter(Boolean);
@@ -78,11 +57,6 @@ function pairs(text: string): [string, string][] {
     }).filter(([k]) => k !== "");
 }
 
-function minutes(clock: string): number {
-    const [h, m] = clock.split(":").map(Number);
-    return (h ?? 0) * 60 + (m ?? 0);
-}
-
 function optionValue(raw: string): string | number | boolean {
     if (/^(true|yes|on)$/i.test(raw)) {
         return true;
@@ -96,9 +70,12 @@ function optionValue(raw: string): string | number | boolean {
 /**
  * A section's edit: change the draft from the form, or return problems to show instead of saving.
  */
-type Edit = (draft: TenantDraft, body: Body, tenant: Tenant, viewer: Viewer) => string[] | void | Promise<string[] | void>;
+type Edit = (draft: TenantDraft, body: FormBody, tenant: Tenant, viewer: Viewer) => string[] | void | Promise<string[] | void>;
 
-type Env = { Variables: { viewer: Viewer } };
+/**
+ * `tenant` is set by the `business` middleware on per-business routes.
+ */
+type Env = { Variables: { viewer: Viewer; tenant: Tenant } };
 
 export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
     const app = new Hono<Env>();
@@ -140,7 +117,6 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
         setCookie(c, COOKIE, value, { httpOnly: true, sameSite: "Lax", path: "/settings", secure: https, maxAge: Session.maxAgeSeconds });
     };
 
-    const domains = () => registry.ids().map(id => [id, registry.get(id).name] as const).sort((a, b) => a[1].localeCompare(b[1]));
     const datasets = async () => (await readdir(DATASETS_DIR).catch(() => [] as string[]))
         .filter(n => n.endsWith(".json") || n.endsWith(".csv"))
         .sort();
@@ -152,7 +128,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
         const html = tenantPage({
             tenant,
             pack,
-            domains:     domains(),
+            domains:     registry.choices(),
             items,
             sync:        await store.tenants.syncStatus(tenant.id),
             datasets:    await datasets(),
@@ -170,12 +146,14 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
     };
     const back = (c: Context, slug: string, section: string, notice = "Saved.") =>
         c.redirect(`/settings/${slug}?notice=${encodeURIComponent(notice)}#${section}`, 303);
-    // Every per-business route goes through this: an owner asking for another business gets a 404.
-    const tenantOr404 = async (c: Context<Env>) => {
+    // Every per-business route goes through this (after `auth`): an owner asking for another business gets a 404.
+    const business: MiddlewareHandler<Env> = async (c, next) => {
         const tenant = await store.tenants.bySlug(c.req.param("slug") ?? "");
-        return tenant !== null && Viewer.canSee(c.get("viewer"), tenant)
-            ? tenant
-            : null;
+        if (tenant === null || !Viewer.canSee(c.get("viewer"), tenant)) {
+            return c.notFound();
+        }
+        c.set("tenant", tenant);
+        return next();
     };
 
     // --- sign in -------------------------------------------------------------------------
@@ -188,9 +166,9 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
      * Owners sign in with email and password; the platform admin leaves email blank and gives the admin token.
      */
     app.post("/settings/login", async c => {
-        const body = await c.req.parseBody();
-        const email = String(body["email"] ?? "").trim().toLowerCase();
-        const password = String(body["password"] ?? body["token"] ?? "");
+        const body = await formBody(c);
+        const email = one(body, "email").toLowerCase();
+        const password = untrimmed(body, "password") || untrimmed(body, "token");
         const now = Date.now();
         const keys = [`ip:${c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "local"}`, ...(email ? [`email:${email}`] : [])];
         if (throttle.blocked(keys, now)) {
@@ -228,14 +206,11 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
             const own = await store.tenants.byId(viewer.account.tenantId);
             return own === null ? c.notFound() : c.redirect(`/settings/${own.slug}`);
         }
-        return c.html(indexPage(await store.tenants.all(), domains(), [], await store.accounts.unreviewed()));
+        return c.html(indexPage(await store.tenants.all(), registry.choices(), [], await store.accounts.unreviewed()));
     });
 
-    app.post("/settings/:slug/reviewed", auth, adminOnly, async c => {
-        const tenant = await tenantOr404(c);
-        if (tenant === null) {
-            return c.notFound();
-        }
+    app.post("/settings/:slug/reviewed", auth, adminOnly, business, async c => {
+        const tenant = c.get("tenant");
         await store.accounts.markReviewed(tenant.id, services.clock());
         return c.redirect("/settings", 303);
     });
@@ -253,47 +228,42 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
     });
 
     app.post("/settings/new", auth, adminOnly, async c => {
-        const body = await c.req.parseBody();
-        const slug = String(body["slug"] ?? "").trim().toLowerCase();
+        const body = await formBody(c);
+        const slug = one(body, "slug").toLowerCase();
         const result = parseTenant({
             id:       slug,
             slug,
-            name:     String(body["name"] ?? "").trim(),
-            domain:   String(body["domain"] ?? ""),
+            name:     one(body, "name"),
+            domain:   one(body, "domain"),
             timezone: "America/Indiana/Indianapolis",
         });
-        const problems = result.ok ? [] : result.problems.map(p => `${p.path}: ${p.message}`);
+        const problems = result.ok ? [] : result.error.map(Problem.format);
         if (result.ok && await store.tenants.bySlug(slug) !== null) {
             problems.push(`'${slug}' is already taken`);
         }
         if (!result.ok || problems.length > 0) {
-            return c.html(indexPage(await store.tenants.all(), domains(), problems, await store.accounts.unreviewed()), 400);
+            return c.html(indexPage(await store.tenants.all(), registry.choices(), problems, await store.accounts.unreviewed()), 400);
         }
-        await store.tenants.save(result.tenant);
+        await store.tenants.save(result.value);
         return c.redirect(`/settings/${slug}`, 303);
     });
 
-    app.get("/settings/:slug", auth, async c => {
-        const tenant = await tenantOr404(c);
-        return tenant === null
-            ? c.notFound()
-            : render(c, tenant, c.req.query("notice") ?? "");
+    app.get("/settings/:slug", auth, business, async c => {
+        const tenant = c.get("tenant");
+        return render(c, tenant, c.req.query("notice") ?? "");
     });
 
-    app.get("/settings/:slug/prompt", auth, async c => {
-        const tenant = await tenantOr404(c);
-        if (tenant === null) {
-            return c.notFound();
-        }
-        const channel = (["sms", "web", "voice"] as const).find(ch => ch === c.req.query("channel")) ?? "sms";
+    app.get("/settings/:slug/prompt", auth, business, async c => {
+        const tenant = c.get("tenant");
+        const channel = enumValue(Channel, c.req.query("channel")) ?? Channel.Sms;
         const message = (c.req.query("message") ?? "").trim().slice(0, 500) || SAMPLE_MESSAGE;
-        return c.html(promptPage(tenant, channel, message, await previewPrompt(deps, tenant, channel, message)));
+        return c.html(promptPage(tenant, channel, message, await previewPrompt(services, tenant, channel, message)));
     });
 
-    app.get("/settings/:slug/conversations/:sessionId", auth, async c => {
-        const tenant = await tenantOr404(c);
+    app.get("/settings/:slug/conversations/:sessionId", auth, business, async c => {
+        const tenant = c.get("tenant");
         const transcript = await store.transcripts.transcript(SessionId(c.req.param("sessionId")));
-        if (tenant === null || transcript === null || transcript.session.tenantId !== tenant.id) {
+        if (transcript === null || transcript.session.tenantId !== tenant.id) {
             return c.notFound();
         }
         return c.html(transcriptPage(tenant, registry.get(tenant.domain), transcript));
@@ -302,12 +272,9 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
     // --- section edits -------------------------------------------------------------------
 
     const edit = (section: string, apply: Edit, after?: (tenant: Tenant, before: Tenant) => Promise<string>, admin = false) => {
-        app.post(`/settings/:slug/${section}`, auth, ...(admin ? [adminOnly] : []), async c => {
-            const tenant = await tenantOr404(c);
-            if (tenant === null) {
-                return c.notFound();
-            }
-            const body = await c.req.parseBody({ all: true });
+        app.post(`/settings/:slug/${section}`, auth, ...(admin ? [adminOnly] : []), business, async c => {
+            const tenant = c.get("tenant");
+            const body = await formBody(c);
             const draft = fromTenant(tenant);
             const problems = await apply(draft, body, tenant, c.get("viewer")) ?? [];
             if (problems.length > 0) {
@@ -315,10 +282,10 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
             }
             const parsed = parseTenant(draft);
             if (!parsed.ok) {
-                return render(c, tenant, "", parsed.problems.map(p => `${p.path || "settings"}: ${p.message}`));
+                return render(c, tenant, "", parsed.error.map(Problem.format));
             }
-            await store.tenants.save(parsed.tenant);
-            const notice = after === undefined ? "Saved." : await after(parsed.tenant, tenant);
+            await store.tenants.save(parsed.value);
+            const notice = after === undefined ? "Saved." : await after(parsed.value, tenant);
             return back(c, tenant.slug, section, notice);
         });
     };
@@ -336,7 +303,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
         draft.hoursText = one(body, "hoursText");
         draft.agentName = one(body, "agentName");
         draft.voiceAgentName = one(body, "voiceAgentName");
-        return registry.ids().includes(draft.domain)
+        return registry.find(draft.domain) !== null
             ? []
             : [`unknown business type '${draft.domain}'`];
     });
@@ -408,13 +375,10 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
             : "Saved.";
     });
 
-    app.post("/settings/:slug/languages/reset", auth, async c => {
-        const tenant = await tenantOr404(c);
-        if (tenant === null) {
-            return c.notFound();
-        }
-        const body = await c.req.parseBody();
-        const raw = String(body["phone"] ?? "").trim();
+    app.post("/settings/:slug/languages/reset", auth, business, async c => {
+        const tenant = c.get("tenant");
+        const body = await formBody(c);
+        const raw = one(body, "phone");
         if (raw === "") {
             const n = await store.conversations.resetLanguages(tenant.id, null, tenant.defaultLanguage);
             return back(c, tenant.slug, "languages", `Reset ${n} customer${n === 1 ? "" : "s"} to the main language.`);
@@ -431,7 +395,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
     edit("schedule", (draft, body) => {
         const windows = [0, 1, 2, 3, 4, 5, 6]
             .filter(day => on(body, `day${day}`))
-            .map(day => ({ day: day as Weekday, startMinute: minutes(one(body, `start${day}`)), endMinute: minutes(one(body, `end${day}`)) }));
+            .map(day => ({ day: day as Weekday, startMinute: minuteOf(one(body, `start${day}`)) ?? 0, endMinute: minuteOf(one(body, `end${day}`)) ?? 0 }));
         if (one(body, "mode") === "windows") {
             if (windows.length === 0) {
                 return ["Pick at least one day, or choose Always."];
@@ -479,11 +443,8 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
             : `Saved, but the sync failed: ${result.error}`;
     });
 
-    app.post("/settings/:slug/catalog/sync", auth, async c => {
-        const tenant = await tenantOr404(c);
-        if (tenant === null) {
-            return c.notFound();
-        }
+    app.post("/settings/:slug/catalog/sync", auth, business, async c => {
+        const tenant = c.get("tenant");
         const result = await syncCatalog(services, tenant);
         const notice = result === null
             ? "This list is entered by hand; there is nothing to sync."
@@ -493,12 +454,9 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
         return back(c, tenant.slug, "catalog", notice);
     });
 
-    app.post("/settings/:slug/catalog/upload", auth, async c => {
-        const tenant = await tenantOr404(c);
-        if (tenant === null) {
-            return c.notFound();
-        }
-        const rows = parsePastedRows(String((await c.req.parseBody())["rows"] ?? ""));
+    app.post("/settings/:slug/catalog/upload", auth, business, async c => {
+        const tenant = c.get("tenant");
+        const rows = parsePastedRows(one(await formBody(c), "rows"));
         if (typeof rows === "string") {
             return render(c, tenant, "", [rows]);
         }
@@ -532,34 +490,28 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
         }
     });
 
-    app.post("/settings/:slug/blocks", auth, async c => {
-        const tenant = await tenantOr404(c);
-        if (tenant === null) {
-            return c.notFound();
-        }
-        const body = await c.req.parseBody();
-        const address = Address.phone(String(body["phone"] ?? ""));
+    app.post("/settings/:slug/blocks", auth, business, async c => {
+        const tenant = c.get("tenant");
+        const body = await formBody(c);
+        const address = Address.phone(one(body, "phone"));
         if (address === null) {
             return render(c, tenant, "", ["Enter a phone number to block."]);
         }
         const now = services.clock();
         const contact = await store.conversations.contactByAddress(tenant.id, address)
             ?? (await store.conversations.resolve(tenant.id, address, now)).contact;
-        const hours = Number(String(body["hours"] ?? "").trim());
+        const hours = Number(one(body, "hours"));
         await store.blocks.block(contact.id, {
             until:     hours > 0 ? new Date(now.getTime() + hours * 3600_000) : null,
             source:    "staff",
-            reason:    String(body["reason"] ?? "").trim() || "blocked by staff",
+            reason:    one(body, "reason") || "blocked by staff",
             createdAt: now,
         });
         return back(c, tenant.slug, "blocks", "Blocked.");
     });
 
-    app.post("/settings/:slug/blocks/:contactId/remove", auth, async c => {
-        const tenant = await tenantOr404(c);
-        if (tenant === null) {
-            return c.notFound();
-        }
+    app.post("/settings/:slug/blocks/:contactId/remove", auth, business, async c => {
+        const tenant = c.get("tenant");
         const contact = await store.conversations.contact(ContactId(c.req.param("contactId")));
         if (contact === null || contact.tenantId !== tenant.id) {
             return c.notFound();
@@ -570,14 +522,24 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
 
     // --- billing ---------------------------------------------------------------------------
 
-    const billing = (name: string, start: (tenant: Tenant, c: Context<Env>, body: Body) => Promise<string>) => {
-        app.post(`/settings/:slug/billing/${name}`, auth, async c => {
-            const tenant = await tenantOr404(c);
-            if (tenant === null || stripe === null) {
+    /**
+     * A billing button: `start` returns the Stripe page to send the owner to, or why it can't.
+     * Stripe itself failing is an exception, shown as a general "try again later".
+     */
+    const billing = (
+        name: string,
+        start: (client: StripeClient, tenant: Tenant, c: Context<Env>, body: FormBody) => Promise<Result<string, string>>
+    ) => {
+        app.post(`/settings/:slug/billing/${name}`, auth, business, async c => {
+            const tenant = c.get("tenant");
+            if (stripe === null) {
                 return c.notFound();
             }
             try {
-                return c.redirect(await start(tenant, c, await c.req.parseBody({ all: true })), 303);
+                const url = await start(stripe, tenant, c, await formBody(c));
+                return url.ok
+                    ? c.redirect(url.value, 303)
+                    : render(c, tenant, "", [url.error]);
             } catch (e) {
                 console.error(`stripe ${name} failed for ${tenant.slug}:`, e);
                 return render(c, tenant, "", ["Billing isn't available right now. Please try again in a few minutes."]);
@@ -587,10 +549,10 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
     const email = (tenant: Tenant) => tenant.staffContacts.find(a => a.kind === "email")?.value ?? null;
     const returnTo = (c: Context, tenant: Tenant, notice: string) => `${origin(c)}/settings/${tenant.slug}?notice=${encodeURIComponent(notice)}#billing`;
 
-    billing("subscribe", async (tenant, c) => {
+    billing("subscribe", async (client, tenant, c) => {
         const p = config.stripe;
         const sub = tenant.plan.subscription;
-        return stripe!.subscriptionCheckout({
+        return Result.ok(await client.subscriptionCheckout({
             tenantId:   tenant.id,
             email:      email(tenant),
             customerId: tenant.billing.customerId,
@@ -601,47 +563,44 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
             ],
             successUrl: returnTo(c, tenant, "Thanks! Your subscription is being set up."),
             cancelUrl:  returnTo(c, tenant, "Checkout canceled."),
-        });
+        }));
     });
 
-    billing("topup", async (tenant, c, body) => {
+    billing("topup", async (client, tenant, c, body) => {
         const amount = Number(one(body, "amount"));
         if (!config.stripe.topUpAmounts.includes(amount)) {
-            throw new Error(`top-up amount ${amount} not offered`);
+            return Result.err("Choose one of the top-up amounts offered.");
         }
-        return stripe!.topUpCheckout({
+        return Result.ok(await client.topUpCheckout({
             tenantId:   tenant.id,
             customerId: tenant.billing.customerId,
             email:      email(tenant),
             amountUsd:  amount,
             successUrl: returnTo(c, tenant, `Thanks! $${amount} will be added to this month's allowance.`),
             cancelUrl:  returnTo(c, tenant, "Top-up canceled."),
-        });
+        }));
     });
 
-    billing("portal", async (tenant, c) => {
+    billing("portal", async (client, tenant, c) => {
         if (tenant.billing.customerId === null) {
-            throw new Error("no Stripe customer yet");
+            return Result.err("There's no subscription to manage yet. Subscribe first.");
         }
-        return stripe!.portal(tenant.billing.customerId, `${origin(c)}/settings/${tenant.slug}#billing`);
+        return Result.ok(await client.portal(tenant.billing.customerId, `${origin(c)}/settings/${tenant.slug}#billing`));
     });
 
     // --- logins ----------------------------------------------------------------------------
 
-    app.post("/settings/:slug/accounts", auth, adminOnly, async c => {
-        const tenant = await tenantOr404(c);
-        if (tenant === null) {
-            return c.notFound();
-        }
-        const body = await c.req.parseBody();
-        const email = String(body["email"] ?? "").trim().toLowerCase();
-        const password = String(body["password"] ?? "");
+    app.post("/settings/:slug/accounts", auth, adminOnly, business, async c => {
+        const tenant = c.get("tenant");
+        const body = await formBody(c);
+        const email = one(body, "email").toLowerCase();
+        const password = untrimmed(body, "password");
         const problem = !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "Enter a valid email address." : Password.problem(password);
         if (problem !== null) {
             return render(c, tenant, "", [problem]);
         }
         const created = await store.accounts.create({
-            id: randomUUID(), tenantId: tenant.id, email, name: String(body["name"] ?? "").trim(),
+            id: randomUUID(), tenantId: tenant.id, email, name: one(body, "name"),
             passwordHash: await Password.hash(password), createdAt: services.clock(), lastLoginAt: null,
         });
         return created
@@ -649,10 +608,10 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
             : render(c, tenant, "", [`${email} already has a login.`]);
     });
 
-    app.post("/settings/:slug/accounts/:id/remove", auth, adminOnly, async c => {
-        const tenant = await tenantOr404(c);
+    app.post("/settings/:slug/accounts/:id/remove", auth, adminOnly, business, async c => {
+        const tenant = c.get("tenant");
         const account = await store.accounts.byId(c.req.param("id"));
-        if (tenant === null || account === null || account.tenantId !== tenant.id) {
+        if (account === null || account.tenantId !== tenant.id) {
             return c.notFound();
         }
         await store.accounts.remove(account.id);
@@ -662,17 +621,17 @@ export function settingsRoutes(deps: ChannelDeps): Hono<Env> {
     /**
      * The admin sets a new password; an owner changes their own, giving the current one.
      */
-    app.post("/settings/:slug/accounts/:id/password", auth, async c => {
-        const tenant = await tenantOr404(c);
+    app.post("/settings/:slug/accounts/:id/password", auth, business, async c => {
+        const tenant = c.get("tenant");
         const account = await store.accounts.byId(c.req.param("id"));
         const viewer = c.get("viewer");
-        if (tenant === null || account === null || account.tenantId !== tenant.id
+        if (account === null || account.tenantId !== tenant.id
             || (viewer.kind === "owner" && viewer.account.id !== account.id)) {
             return c.notFound();
         }
-        const body = await c.req.parseBody();
-        const password = String(body["password"] ?? "");
-        if (viewer.kind === "owner" && !await Password.verify(String(body["current"] ?? ""), account.passwordHash)) {
+        const body = await formBody(c);
+        const password = untrimmed(body, "password");
+        if (viewer.kind === "owner" && !await Password.verify(untrimmed(body, "current"), account.passwordHash)) {
             return render(c, tenant, "", ["Your current password isn't right."]);
         }
         const problem = Password.problem(password);

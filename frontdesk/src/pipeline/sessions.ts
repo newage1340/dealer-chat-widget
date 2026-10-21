@@ -4,8 +4,7 @@
  */
 
 import { Abuse, type EventBody, type SessionCloseReason, type SessionId } from "../core/index.ts";
-import { Subscriber } from "../turn/index.ts";
-import { stamp, type Services } from "./services.ts";
+import { publishEvents, type Services } from "./services.ts";
 
 /**
  * Close a session if it is still open. Returns false when it was already closed.
@@ -39,21 +38,14 @@ export async function closeSession(
         }
     }
 
-    const events = stamp(bodies, {
-        tenantId:       tenant.id,
+    await publishEvents(services, {
+        tenant,
         conversationId: conversation.id,
         sessionId:      session.id,
-        occurredAt:     now,
-        causedBy:       null,
-    });
-    const jobs = Subscriber.jobsFor(services.subscribers, events, {
-        tenant,
-        pack:    services.registry.get(tenant.domain),
         contact,
-        channel: session.channel,
-        now,
-    });
-    await store.outbox.publish(events, jobs);
+        channel:        session.channel,
+        causedBy:       null,
+    }, bodies);
     return true;
 }
 

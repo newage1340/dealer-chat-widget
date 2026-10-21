@@ -2,7 +2,9 @@
  * Where usage records go, and how their cost is estimated.
  */
 
-import type { UsageRecord, UsageUnit } from "../core/index.ts";
+import { z } from "zod";
+
+import { Result, UsageUnit, type UsageRecord } from "../core/index.ts";
 
 export interface UsageSink {
     record(usage: UsageRecord): Promise<void>;
@@ -13,7 +15,24 @@ export interface UsageSink {
  */
 export type PriceTable = Readonly<Record<string, Readonly<Record<string, Readonly<Partial<Record<UsageUnit, number>>>>>>>;
 
+/**
+ * prices.json: provider -> model -> unit -> USD per unit. Keys starting with "_" are comments.
+ */
+const PriceFile = z.record(z.string(), z.unknown()).transform(raw =>
+    Object.fromEntries(Object.entries(raw).filter(([key]) => !key.startsWith("_")))
+).pipe(z.record(z.string(), z.record(z.string(), z.partialRecord(z.enum(UsageUnit), z.number()))));
+
 export const PriceTable = {
+    /**
+     * A price table from prices.json's contents.
+     */
+    parse(data: unknown): Result<PriceTable, string> {
+        const parsed = PriceFile.safeParse(data);
+        return parsed.success
+            ? Result.ok(parsed.data)
+            : Result.err(parsed.error.message);
+    },
+
     /**
      * Prices for a model: an exact entry, else the longest entry the name starts with
      * (so a pinned snapshot like "gpt-4o-mini-2024-07-18" uses the "gpt-4o-mini" prices), else the provider's "" entry.

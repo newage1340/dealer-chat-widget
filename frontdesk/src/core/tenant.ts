@@ -77,15 +77,24 @@ export type AgentStyle = {
 };
 
 /**
+ * What calls without caller ID get (robocalls usually hide it): the assistant, our voicemail, or no answer.
+ */
+export const HiddenCallerId = {
+    Assistant: "assistant",
+    Voicemail: "voicemail",
+    Reject:    "reject",
+} as const;
+export type HiddenCallerId = ValueOf<typeof HiddenCallerId>;
+
+/**
  * How calls avoid paying for dead air, within PLATFORM_BOUNDS.
  * `silenceSeconds` is how long to wait for the caller to speak; `stillTherePrompts` how many times to ask
- * "are you still there?" before hanging up. `hiddenCallerId` is what calls without caller ID get
- * (robocalls usually hide it): the assistant, our voicemail, or no answer.
+ * "are you still there?" before hanging up.
  */
 export type CallSettings = {
     readonly silenceSeconds:    number;
     readonly stillTherePrompts: number;
-    readonly hiddenCallerId:    "assistant" | "voicemail" | "reject";
+    readonly hiddenCallerId:    HiddenCallerId;
 };
 
 export const DEFAULT_CALL_SETTINGS: CallSettings = {

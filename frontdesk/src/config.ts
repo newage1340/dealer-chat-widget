@@ -5,6 +5,9 @@
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
+import { enumValue } from "./core/index.ts";
+import { VoicePipelineKind } from "./voice/pipeline.ts";
+
 export const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 /**
@@ -93,7 +96,7 @@ export type Config = {
     readonly onboardingNotifyEmail: string;
     readonly sessionSecret:        string;
     readonly stripe:               StripeConfig;
-    readonly voicePipeline:        "twilio_gather" | "media_streams" | "media_streams_local";
+    readonly voicePipeline:        VoicePipelineKind;
     readonly openaiTtsModel:       string;
     readonly openaiTtsVoice:       string;
     readonly localSpeech:          LocalSpeechConfig;
@@ -196,7 +199,7 @@ export function loadConfig(): Config {
         },
         // Signs business-owner sessions. Derived from the admin token when not set, so it is never empty in practice.
         sessionSecret:      env("SESSION_SECRET") || createHash("sha256").update(`session:${env("ADMIN_TOKEN")}`).digest("hex"),
-        voicePipeline:      (["media_streams", "media_streams_local"] as const).find(p => p === env("VOICE_PIPELINE").toLowerCase()) ?? "twilio_gather",
+        voicePipeline:      enumValue(VoicePipelineKind, env("VOICE_PIPELINE").toLowerCase()) ?? VoicePipelineKind.TwilioGather,
         openaiTtsModel:     env("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
         openaiTtsVoice:     env("OPENAI_TTS_VOICE", "coral"),
         localSpeech:        {

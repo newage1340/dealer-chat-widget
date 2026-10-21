@@ -2,9 +2,19 @@
  * The people tenants talk to.
  */
 
-import type { Address, PhoneNumber } from "./channel.ts";
+import { Address, PhoneNumber } from "./channel.ts";
 import type { ContactId, TenantId } from "./ids.ts";
+import type { ValueOf } from "./lang.ts";
 import type { Language } from "./language.ts";
+
+/**
+ * Who set a block: automatic after repeated abuse, or staff.
+ */
+export const BlockSource = {
+    Auto:  "auto",
+    Staff: "staff",
+} as const;
+export type BlockSource = ValueOf<typeof BlockSource>;
 
 /**
  * A ban on a contact. `until` null means indefinitely.
@@ -12,7 +22,7 @@ import type { Language } from "./language.ts";
  */
 export type Block = {
     readonly until:     Date | null;
-    readonly source:    "auto" | "staff";
+    readonly source:    BlockSource;
     readonly reason:    string;
     readonly createdAt: Date;
 };
@@ -69,6 +79,19 @@ export type ContactChanges = Partial<Pick<Contact,
 export const Contact = {
     displayName(contact: Contact): string {
         return [contact.firstName, contact.lastName].filter(Boolean).join(" ");
+    },
+
+    /**
+     * How staff see a contact in notices and transcripts: "Maria Lopez - (317) 555-0142".
+     */
+    describe(contact: Contact | null): string {
+        if (contact === null) {
+            return "Unknown";
+        }
+        const reach = contact.phone !== null
+            ? PhoneNumber.display(contact.phone)
+            : contact.email || contact.addresses.map(a => a.kind === "web_session" ? "web visitor" : Address.key(a))[0] || "";
+        return [Contact.displayName(contact), reach].filter(Boolean).join(" - ") || "Unknown";
     },
 
     apply(contact: Contact, changes: ContactChanges): Contact {
