@@ -147,3 +147,13 @@ describe("OpenAI transcription", () => {
         }
     });
 });
+
+describe("email setup", () => {
+    it("uses Resend, then SMTP (Gmail App Password), then logging", async () => {
+        const { buildEmail } = await import("../../src/server.ts");
+        const { TEST_CONFIG } = await import("../support/config.ts");
+        expect(buildEmail({ ...TEST_CONFIG, resendApiKey: "re_x" }).name).toBe("resend");
+        expect(buildEmail({ ...TEST_CONFIG, smtp: { host: "smtp.gmail.com", port: 587, user: "a@gmail.com", password: "abcd efgh ijkl mnop" } }).name).toBe("smtp");
+        expect(buildEmail(TEST_CONFIG).name).toBe("log-email");
+    });
+});

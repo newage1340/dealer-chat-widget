@@ -45,6 +45,7 @@ import { LocalWhisperStt } from "./providers/whisper.ts";
 import { VoicePipeline } from "./voice/pipeline.ts";
 import { OpenAiCompatibleLlm } from "./providers/openai.ts";
 import { ResendEmail } from "./providers/resend.ts";
+import { SmtpEmail } from "./providers/smtp.ts";
 import { TwilioSms } from "./providers/twilio.ts";
 import { openStore, type Store } from "./storage/index.ts";
 
@@ -148,6 +149,19 @@ export function buildVoicePipeline(config: Config): VoicePipeline {
     };
 }
 
+/**
+ * Resend when its key is set, else SMTP (Gmail App Password or any mail host), else log emails.
+ */
+export function buildEmail(config: Config): EmailProvider {
+    if (config.resendApiKey) {
+        return new ResendEmail(config.resendApiKey);
+    }
+    if (config.smtp.host && config.smtp.user && config.smtp.password) {
+        return new SmtpEmail(config.smtp);
+    }
+    return new LoggingEmail(true);
+}
+
 export async function buildApp(config: Config, overrides: Overrides = {}): Promise<App> {
     const prices = await loadPrices(config.pricesFile);
     const store = overrides.store ?? await openStore(config.databaseUrl, config.embeddedDbDir, prices);
@@ -157,8 +171,8 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
     if (twilio === null && overrides.messaging === undefined) {
         console.warn("Twilio credentials not set; outbound texts will be logged, not sent.");
     }
-    if (!config.resendApiKey && overrides.email === undefined) {
-        console.warn("RESEND_API_KEY not set; emails will be logged, not sent.");
+    if (!config.resendApiKey && !config.smtp.host && overrides.email === undefined) {
+        console.warn("No email set up (RESEND_API_KEY, or SMTP_* / GMAIL_USER + GMAIL_APP_PASSWORD); emails will be logged, not sent.");
     }
 
     const services: Services = {
@@ -175,10 +189,7 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
     const worker = new Worker({
         services,
         messaging:      overrides.messaging ?? twilio ?? new LoggingMessaging(true),
-        email:          overrides.email ??
-			(config.resendApiKey
-				? new ResendEmail(config.resendApiKey)
-				: new LoggingEmail(true)),
+        email:          overrides.email ?? buildEmail(config),
         transcriber:    overrides.transcriber !== undefined
             ? overrides.transcriber
             : config.deepgramApiKey

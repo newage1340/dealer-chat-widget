@@ -66,6 +66,7 @@ export type Config = {
     readonly twilioDefaultFrom:    string;
     readonly validateTwilio:       boolean;
     readonly resendApiKey:         string;
+    readonly smtp:                 { readonly host: string; readonly port: number; readonly user: string; readonly password: string };
     readonly emailFrom:            string;
     readonly deepgramApiKey:       string;
     readonly termsUrl:             string;
@@ -151,7 +152,14 @@ export function loadConfig(): Config {
         twilioDefaultFrom:  env("TWILIO_DEFAULT_FROM"),
         validateTwilio:     flag("TWILIO_VALIDATE_SIGNATURES", twilioAuthToken !== ""),
         resendApiKey:       env("RESEND_API_KEY"),
-        emailFrom:          env("EMAIL_FROM", "Front Desk <assistant@example.com>"),
+        // SMTP_* for any mail host; GMAIL_USER / GMAIL_APP_PASSWORD (the Python app's names) mean Gmail.
+        smtp:               {
+            host:     env("SMTP_HOST", env("GMAIL_USER") ? "smtp.gmail.com" : ""),
+            port:     int("SMTP_PORT", 587),
+            user:     env("SMTP_USER", env("GMAIL_USER")),
+            password: env("SMTP_PASSWORD", env("GMAIL_APP_PASSWORD")),
+        },
+        emailFrom:          env("EMAIL_FROM", env("NOTIFY_FROM_EMAIL", env("GMAIL_USER", "Front Desk <assistant@example.com>"))),
         deepgramApiKey:     env("DEEPGRAM_API_KEY"),
         termsUrl:           env("TERMS_URL", "https://inventiq.net/terms.html"),
         privacyUrl:         env("PRIVACY_URL", "https://inventiq.net/privacy.html"),
