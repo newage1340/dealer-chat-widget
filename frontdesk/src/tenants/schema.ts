@@ -129,6 +129,7 @@ export const TenantFile = z.strictObject({
         }).prefault({}),
         maxSessionMinutes:   bounded(PLATFORM_BOUNDS.maxSessionMinutes),
         recordingDisclosure: z.boolean().default(false),
+        recordingNotice:     z.string().max(300).default("").describe("custom wording for the recording notice; blank uses the standard one"),
         languages:           z.array(z.enum(LANGUAGES)).min(1).default(LANGUAGES),
         privacy:             z.strictObject({
             redact:    z.array(z.enum(PII_KINDS)).default([...DEFAULT_PRIVACY.redact]),
@@ -159,6 +160,16 @@ function isTimeZone(zone: string): boolean {
     } catch {
         return false;
     }
+}
+
+/**
+ * Custom recording-notice wording, or null for the standard (translated) notice.
+ */
+function customNotice(text: string): LocalizedText | null {
+    const t = text.trim();
+    return t === "" || t === DEFAULT_DISCLOSURE.en
+        ? null
+        : { en: t };
 }
 
 export function toTenant(file: z.output<typeof TenantFile>): Tenant {
@@ -207,7 +218,7 @@ export function toTenant(file: z.output<typeof TenantFile>): Tenant {
             notifications:       s.notifications,
             limits:              { ...DEFAULT_SESSION_LIMITS, maxSessionSeconds: s.maxSessionMinutes * 60 },
             abuse:               DEFAULT_ABUSE_POLICY,
-            recordingDisclosure: { enabled: s.recordingDisclosure, text: DEFAULT_DISCLOSURE },
+            recordingDisclosure: { enabled: s.recordingDisclosure, text: customNotice(s.recordingNotice) ?? DEFAULT_DISCLOSURE },
             languages:           [...new Set([file.defaultLanguage, ...s.languages])],
             privacy:             s.privacy,
             style:               s.style,
@@ -265,6 +276,7 @@ export function fromTenant(tenant: Tenant) {
             },
             maxSessionMinutes:   Math.round(s.limits.maxSessionSeconds / 60),
             recordingDisclosure: s.recordingDisclosure.enabled,
+            recordingNotice:     s.recordingDisclosure.text.en === DEFAULT_DISCLOSURE.en ? "" : s.recordingDisclosure.text.en,
             languages:           [...s.languages],
             privacy:             { redact: [...s.privacy.redact], sensitive: s.privacy.sensitive, crisisSupport: s.privacy.crisisSupport },
             style:               { ...s.style },

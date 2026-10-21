@@ -322,6 +322,7 @@ ${field("Calls with hidden caller ID", select("hiddenCallerId", [["assistant", "
 </fieldset>
 ${field("Follow-up text after a quiet chat (minutes)", input("coldFollowupMinutes", s.coldFollowupMinutes, "number", "min=\"1\""), "blank: no follow-up texts")}
 <p>${check("Announce that calls are recorded", "recordingDisclosure", s.recordingDisclosure.enabled)}</p>
+${field("Recording notice wording", input("recordingNotice", s.recordingDisclosure.text.en, "text", "maxlength=\"300\" size=\"60\""), "said at the start of each call when the notice is on; leave the standard wording for the Spanish version")}
 <p>${check("Let web chat visitors skip the name and phone form", "skipProfileGate", s.skipProfileGate)}</p>
 `));
 }

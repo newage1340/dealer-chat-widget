@@ -304,6 +304,7 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
         };
         draft.settings.coldFollowupMinutes = cold === "" ? null : Number(cold);
         draft.settings.recordingDisclosure = on(body, "recordingDisclosure");
+        draft.settings.recordingNotice = one(body, "recordingNotice");
         draft.settings.skipProfileGate = on(body, "skipProfileGate");
     });
 

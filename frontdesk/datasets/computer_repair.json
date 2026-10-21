@@ -203,14 +203,25 @@
   },
   {
     "code": "WTR-1",
-    "name": "Water damage diagnostics & cleaning",
+    "name": "Water damage diagnostic",
     "category": "Repair",
-    "price": "$69 diagnostic, cleaning $99-$199",
+    "price": "$69",
+    "turnaround": "1-2 business days",
+    "device_types": "Phones, laptops, tablets",
+    "warranty": "No warranty on liquid-damaged devices",
+    "description": "Open the device after a spill or drop in water and check for corrosion and damage. We tell you what we find, and the fee goes toward the cleaning if you go ahead.",
+    "keywords": "water damage liquid spill wet dropped in water coffee diagnostic"
+  },
+  {
+    "code": "WTR-2",
+    "name": "Water damage cleaning",
+    "category": "Repair",
+    "price": "$99-$199",
     "turnaround": "2-5 business days",
     "device_types": "Phones, laptops, tablets",
     "warranty": "No warranty on liquid-damaged devices",
-    "description": "Disassemble, clean corrosion, and test after a spill or drop in water. Success varies; we tell you what we find before any repair.",
-    "keywords": "water damage liquid spill wet dropped in water coffee"
+    "description": "Disassemble, clean corrosion, and test after a spill. Done after the diagnostic; success varies with how long the device was wet.",
+    "keywords": "water damage liquid spill wet cleaning corrosion"
   },
   {
     "code": "REP-1",
