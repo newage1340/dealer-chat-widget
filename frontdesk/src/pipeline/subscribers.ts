@@ -73,11 +73,12 @@ export const handoffAlerts = Subscriber.define({
     name:   "handoff_alerts",
     events: ["handoff_requested"],
     react(event, ctx) {
-        const headline = event.reason === "transfer"
-            ? "Call transferred"
-            : event.reason === "missed_call"
-                ? "Missed call"
-                : "Callback requested";
+        const headline = {
+            transfer:     "Call transferred",
+            missed_call:  "Missed call",
+            take_message: "Callback requested",
+            crisis:       "URGENT - possible safety concern",
+        }[event.reason];
         return [job(ctx, `handoff:${event.id}`, {
             kind:    "notify_staff",
             notice:  "handoff",

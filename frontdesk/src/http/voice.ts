@@ -17,6 +17,7 @@ import {
     LocalTime,
     MAX_VOICEMAIL_SECONDS,
     PhoneNumber,
+    Tenant,
     TenantId,
     type Contact,
     type Conversation,
@@ -24,7 +25,6 @@ import {
     type Inbound,
     type Language,
     type Session,
-    type Tenant,
 } from "../core/index.ts";
 import type { DomainPack } from "../domains/index.ts";
 import { collect } from "../pipeline/engine.ts";
@@ -117,7 +117,7 @@ export async function startCall(services: Services, tenant: Tenant, caller: Addr
         activeCalls:   await store.conversations.activeCalls(tenant.id, null),
         now,
     });
-    const language = contact.preferredLanguage ?? tenant.defaultLanguage;
+    const language = Tenant.startLanguage(tenant, contact.preferredLanguage);
     const defaults = { language, smsIdleMs: services.smsIdleMs };
     if (admission.kind === "admit") {
         const session = await store.conversations.session(conversation, { channel: "voice", externalId: callId, vendor, handling: "assistant" }, defaults, now);

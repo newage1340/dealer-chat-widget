@@ -1,6 +1,6 @@
 # DOMAIN PACK TEMPLATE
 # One file = one business type. Copy to <id>.toml, fill every field, then run:
-#   python src/main.py validate-domain src/domains/packs/<id>.toml
+#   pnpm validate-pack packs/<id>.toml
 #
 # Placeholders you may use inside prompt text, intake asks, goal and capabilities:
 #   {business_name} {business_noun} {agent_name} {agent_role} {staff_noun}
@@ -27,6 +27,9 @@ default_agent_name       = "Dave"               # chat persona name (tenants can
 default_voice_agent_name = "Sarah"              # phone persona name (tenants can override)
 goal                     = "What a successful conversation achieves, in one or two sentences."
 upsell_topics            = "things worth asking about when they come up, comma separated"
+professionalism          = "polished"           # casual | friendly | polished | formal (tenants can override)
+honest_about_ai          = false                # true: says it's a virtual assistant when asked, instead of deflecting
+sensitive                = false                # true: confidentiality rules (therapy, medical, legal) - see PrivacySettings
 
 # Questions every tenant of this type answers when onboarding.
 # The answers are shown to the model under `label` in BUSINESS INFO.

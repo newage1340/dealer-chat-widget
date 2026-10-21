@@ -27,6 +27,7 @@ import {
     type Transcript,
 } from "../core/index.ts";
 import { DomainPack, type FollowupKind } from "../domains/index.ts";
+import { Style } from "../prompts/style.ts";
 import {
     LlmProvider,
     type BatchTranscriber,
@@ -249,10 +250,18 @@ export class Worker {
             await this.#email(tenant, emails, subject, text, "staff_alert");
         }
         if (vias.includes("sms")) {
+            // Texts are not a private channel: sensitive businesses only get a pointer to the email.
+            const text = this.#sensitive(tenant)
+                ? `[${tenant.name}] ${subject.split(":")[0]}. Details are in your email.`
+                : smsText;
             for (const phone of phones) {
-                await this.#text(tenant, phone, smsText.slice(0, SMS_LIMIT), "staff_alert");
+                await this.#text(tenant, phone, text.slice(0, SMS_LIMIT), "staff_alert");
             }
         }
+    }
+
+    #sensitive(tenant: Tenant): boolean {
+        return Style.resolve(tenant, this.#d.services.registry.get(tenant.domain)).sensitive;
     }
 
     async #notifyStaff(tenant: Tenant, job: JobOf<"notify_staff">): Promise<void> {
@@ -288,7 +297,7 @@ export class Worker {
 
     async #followupText(tenant: Tenant, kind: FollowupKind, contact: Contact, extra: Record<string, string>): Promise<string | null> {
         const { composer, registry } = this.#d.services;
-        return composer.followup(tenant, registry.get(tenant.domain), kind, contact.preferredLanguage ?? tenant.defaultLanguage, contact, extra);
+        return composer.followup(tenant, registry.get(tenant.domain), kind, Tenant.startLanguage(tenant, contact.preferredLanguage), contact, extra);
     }
 
     async #sendFollowup(tenant: Tenant, job: JobOf<"send_followup">): Promise<void> {
@@ -459,6 +468,22 @@ export class Worker {
             : { web: "Chat", sms: "Text", voice: "Call" }[transcript.session.channel];
         const started = LocalTime.of(transcript.session.startedAt, tenant.timezone);
         const urgent = c.urgency === "urgent" ? "URGENT - " : "";
+        const sensitive = this.#sensitive(tenant);
+        const dashboard = this.#d.dashboardUrl
+            ? [`Dashboard: ${this.#d.dashboardUrl}/transcripts/${transcript.session.id}`]
+            : [];
+        if (sensitive) {
+            // Who and when only; the conversation itself stays in the dashboard.
+            await this.#staff(tenant, "transcript", `${urgent}${kind} - ${topic} - ${who}`, [
+                `Customer: ${who}`,
+                `When: ${LocalTime.long(started)}`,
+                `Outcome: ${c.outcome}${c.followupNeeded ? " (follow up)" : ""} | Topic: ${topic}`,
+                ...dashboard,
+                "",
+                "This business is set to keep conversation details out of email. Open the dashboard to read it.",
+            ].join("\n"), "");
+            return;
+        }
         const subject = `${urgent}${kind} - ${topic} - ${who}: ${c.gist.slice(0, 80)}`;
         const body = [
             c.gist,
@@ -467,7 +492,7 @@ export class Worker {
             `When: ${LocalTime.long(started)}`,
             `Outcome: ${c.outcome}${c.followupNeeded ? " (follow up)" : ""} | Topic: ${topic} | Sentiment: ${c.sentiment} | Language: ${LANGUAGE_NAMES[c.language]}`,
             ...(voicemail !== null ? [`Recording: ${voicemail.recordingUrl}`] : []),
-            ...(this.#d.dashboardUrl ? [`Dashboard: ${this.#d.dashboardUrl}/transcripts/${transcript.session.id}`] : []),
+            ...dashboard,
             "",
             "--- Transcript ---",
             transcriptText(transcript, pack),

@@ -9,9 +9,13 @@
 import {
     Budget,
     CallState,
+    Crisis,
+    LanguageGuess,
     LocalTime,
+    Pii,
     PhoneNumber,
     SessionMeter,
+    Tenant,
     TurnAssessment,
     type BudgetInput,
     type BudgetVerdict,
@@ -24,9 +28,9 @@ import {
     type Job,
     type Language,
     type Session,
-    type Tenant,
 } from "../core/index.ts";
 import { STRINGS, say } from "../prompts/strings.ts";
+import { Style } from "../prompts/style.ts";
 import {
     ProviderError,
     type ChatMessage,
@@ -124,11 +128,13 @@ export class TurnEngine {
         this.#s = services;
     }
 
-    async *run(inbound: Inbound, options: RunOptions = {}): AsyncGenerator<EnginePart> {
+    async *run(received: Inbound, options: RunOptions = {}): AsyncGenerator<EnginePart> {
         const { store } = this.#s;
         const now = this.#s.clock();
 
-        const tenant = options.tenant ?? await this.#tenant(inbound);
+        const tenant = options.tenant ?? await this.#tenant(received);
+        // Card numbers and the like never reach the model or the database.
+        const inbound: Inbound = { ...received, text: Pii.redact(received.text, tenant.settings.privacy.redact).text };
         const pack = this.#s.registry.get(tenant.domain);
         const { contact, conversation } = await store.conversations.resolve(tenant.id, inbound.sender, now);
 
@@ -156,7 +162,7 @@ export class TurnEngine {
         const session = await store.conversations.session(
             conversation,
             sessionKey(inbound, options.vendor),
-            { language: contact.preferredLanguage ?? inbound.language ?? tenant.defaultLanguage, smsIdleMs: this.#s.smsIdleMs },
+            { language: Tenant.startLanguage(tenant, contact.preferredLanguage ?? inbound.language), smsIdleMs: this.#s.smsIdleMs },
             now,
         );
         const ctx: TurnContext = {
@@ -265,6 +271,9 @@ export class TurnEngine {
         const extra: EventBody[] = verdict.kind === "closing" && session.meter.closing === null
             ? [{ kind: "session_closing", reason: verdict.reason }]
             : [];
+        if (Style.resolve(tenant, pack).sensitive && Crisis.suspected(inbound.text)) {
+            extra.push({ kind: "handoff_requested", reason: "crisis", note: "A message in this conversation may indicate a safety concern. Please reach out as soon as possible." });
+        }
         const capBefore = Budget.capStatus(ctx.costThisMonth, tenant.plan);
         const capAfter = Budget.capStatus(ctx.costThisMonth + costUsd, tenant.plan);
         if (capAfter !== capBefore && (capAfter === "warning" || capAfter === "assistant_used")) {
@@ -381,8 +390,19 @@ export class TurnEngine {
             console.error(`LLM turn failed for ${ctx.tenant.id}: ${e.message}`);
         }
 
-        const language = results.reduce<Language>((l, r) => r.language ?? l, ctx.session.language);
-        let reply = text.replace(URL_RE, "").replace(/[ \t]+\n/g, "\n").trim();
+        let reply = Pii.redact(text, ctx.tenant.settings.privacy.redact).text
+            .replace(URL_RE, "")
+            .replace(/[ \t]+\n/g, "\n")
+            .trim();
+        // The reply's own language wins: it is what the caller hears, so the voice must match it,
+        // even when the model switched languages without saying so (or said so and didn't).
+        const switched = results.reduce<Language | null>((l, r) => r.language ?? l, null);
+        const written = LanguageGuess.of(reply);
+        const language = written !== null && Tenant.offers(ctx.tenant, written)
+            ? written
+            : switched !== null && Tenant.offers(ctx.tenant, switched)
+                ? switched
+                : ctx.session.language;
         if (!reply) {
             reply = say(voice ? STRINGS.fallbackVoice : STRINGS.fallbackText, language);
             yield { kind: "text", delta: reply };

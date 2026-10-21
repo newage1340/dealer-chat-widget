@@ -9,6 +9,7 @@
 import { readFile } from "node:fs/promises";
 
 import {
+    Crisis,
     LANGUAGE_NAMES,
     LocalizedText,
     LocalTime,
@@ -25,6 +26,7 @@ import type { ChatMessage } from "../providers/index.ts";
 import type { TurnContext } from "../turn/index.ts";
 import { Hours } from "./hours.ts";
 import { Speech } from "./speech.ts";
+import { Style } from "./style.ts";
 
 const TEMPLATES_DIR = new URL("./templates/", import.meta.url);
 
@@ -157,9 +159,17 @@ export class PromptComposer {
         const { tenant, pack } = ctx;
         const channel = ctx.inbound.channel;
         const voice = channel === "voice";
+        const shared = this.values(tenant, pack, channel);
+        const style = Style.resolve(tenant, pack);
+        const role = shared["agent_role"] ?? "";
         const values: Values = {
-            ...this.values(tenant, pack, channel),
+            ...shared,
             ...this.#bookingValues(pack, voice),
+            agent_article:       /^[aeiou]/i.test(role) ? "an" : "a",
+            persona_rule:        Template.render(Style.persona(style, voice), shared),
+            style_rules:         Style.rules(style, voice),
+            privacy_rules:       Style.privacy(style),
+            language_rules:      Style.languages(tenant, voice),
             channel_label:       { sms: "SMS", web: "web chat", voice: "phone" }[channel],
             catalog_heading:     pack.catalog.heading,
             phone_or_unlisted:   tenant.phone === null
@@ -302,7 +312,18 @@ export class PromptComposer {
     #language(ctx: TurnContext): string {
         const language = ctx.session.language;
         return `=== CONVERSATION LANGUAGE ===\nSo far this conversation has been in ${LANGUAGE_NAMES[language]}. `
-            + "Reply in whatever language the customer uses in their latest message.";
+            + "Reply in the offered language the customer uses in their latest message (see LANGUAGE), and only in that language.";
+    }
+
+    #crisis(ctx: TurnContext): string {
+        if (!Crisis.suspected(ctx.inbound.text)) {
+            return "";
+        }
+        return "=== SAFETY FIRST (CRITICAL) ===\n"
+            + "The customer's latest message may mean they are thinking about harming themselves or are in danger.\n"
+            + "Before anything else, respond with warmth and without judgment. Tell them they can call or text 988 (Suicide & Crisis Lifeline) any time, "
+            + "or call 911 if they are in immediate danger. Don't try to counsel them, don't change the subject to booking, "
+            + `and call \`request_callback\` with the note "urgent: safety concern" so the ${ctx.pack.staffNoun} can reach out.`;
     }
 
     #windDown(ctx: TurnContext, verdict: BudgetVerdict): string {
@@ -363,6 +384,7 @@ export class PromptComposer {
             this.#catalog(ctx, largeCatalog),
         ].join("\n\n");
         const perTurn = [
+            this.#crisis(ctx),
             this.#focus(ctx),
             this.#customer(ctx),
             this.#appointment(ctx),

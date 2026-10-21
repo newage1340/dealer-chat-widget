@@ -3,12 +3,14 @@
  */
 
 import type { AbusePolicy, SessionLimits } from "./budget.ts";
+import { DEFAULT_CATALOG_SETTINGS, type CatalogSettings } from "./catalog.ts";
 import type { Address, Channel, PhoneNumber } from "./channel.ts";
 import type { CallFallbacks } from "./coverage.ts";
 import type { DomainId, TenantId } from "./ids.ts";
 import type { ValueOf } from "./lang.ts";
-import type { Language, LocalizedText } from "./language.ts";
+import { Language, type LocalizedText } from "./language.ts";
 import type { Plan } from "./plan.ts";
+import { DEFAULT_PRIVACY, type PrivacySettings } from "./privacy.ts";
 import type { ServiceSchedule } from "./schedule.ts";
 
 export type Branding = {
@@ -53,6 +55,26 @@ export type RecordingDisclosure = {
 };
 
 /**
+ * How formal the assistant sounds, from a relaxed neighborhood shop to a clinical office.
+ */
+export const Professionalism = {
+    Casual:   "casual",
+    Friendly: "friendly",
+    Polished: "polished",
+    Formal:   "formal",
+} as const;
+export type Professionalism = ValueOf<typeof Professionalism>;
+
+/**
+ * `professionalism` and `honestAboutAi` (whether the assistant says it is a virtual assistant when asked,
+ * instead of staying in character) fall back to the domain pack's defaults when null.
+ */
+export type AgentStyle = {
+    readonly professionalism: Professionalism | null;
+    readonly honestAboutAi:   boolean | null;
+};
+
+/**
  * Options every tenant can set, regardless of domain.
  * `coldFollowupMinutes` null means the tenant does not send cold follow-ups.
  * `notifications` lists, per notice, how staff want to receive it (email by default).
@@ -60,6 +82,8 @@ export type RecordingDisclosure = {
  * `callFallbacks` say what calls get when the assistant cannot take them (our voicemail by default).
  * `textAlwaysOn` keeps web chat and SMS answering outside the call schedule (they cost far less than calls).
  * `limits` and `abuse` have system defaults applied; tenants adjust them from the web app.
+ * `languages` are the languages the assistant offers (always including the default language);
+ *   customers asking for another are told politely which ones are available.
  */
 export type TenantSettings = {
     readonly skipProfileGate:     boolean;
@@ -72,6 +96,10 @@ export type TenantSettings = {
     readonly limits:              SessionLimits;
     readonly abuse:               AbusePolicy;
     readonly recordingDisclosure: RecordingDisclosure;
+    readonly languages:           readonly Language[];
+    readonly privacy:             PrivacySettings;
+    readonly style:               AgentStyle;
+    readonly catalog:             CatalogSettings;
 };
 
 /**
@@ -114,6 +142,23 @@ export type Tenant = {
 
 export const Tenant = {
     /**
+     * A tenant read back from storage, with settings added since it was saved filled in with their defaults.
+     */
+    upgrade(stored: Tenant): Tenant {
+        const s: Partial<TenantSettings> = stored.settings;
+        return {
+            ...stored,
+            settings: {
+                ...stored.settings,
+                languages: s.languages ?? Object.values(Language),
+                privacy:   s.privacy ?? DEFAULT_PRIVACY,
+                style:     s.style ?? { professionalism: null, honestAboutAi: null },
+                catalog:   s.catalog ?? DEFAULT_CATALOG_SETTINGS,
+            },
+        };
+    },
+
+    /**
      * The tenant's primary address on a channel, if it has one.
      */
     endpoint(tenant: Tenant, channel: Channel): Address | null {
@@ -130,6 +175,22 @@ export const Tenant = {
         return allowed.length > 0
             ? allowed
             : ["email"];
+    },
+
+    /**
+     * Whether the assistant may speak `language` for this tenant.
+     */
+    offers(tenant: Tenant, language: Language): boolean {
+        return language === tenant.defaultLanguage || tenant.settings.languages.includes(language);
+    },
+
+    /**
+     * The language to start a conversation in: the customer's last one if it is still offered.
+     */
+    startLanguage(tenant: Tenant, preferred: Language | null): Language {
+        return preferred !== null && Tenant.offers(tenant, preferred)
+            ? preferred
+            : tenant.defaultLanguage;
     },
 
     staffPhones(tenant: Tenant): PhoneNumber[] {

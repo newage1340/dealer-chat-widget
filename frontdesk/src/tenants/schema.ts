@@ -7,17 +7,20 @@ import { z } from "zod";
 
 import {
     Address,
+    Tenant,
     DEFAULT_ABUSE_POLICY,
     DEFAULT_CALL_FALLBACKS,
     DEFAULT_PRICING,
+    DEFAULT_PRIVACY,
     DEFAULT_SESSION_LIMITS,
     DomainId,
     Language,
     PhoneNumber,
+    PiiKind,
+    Professionalism,
     ServiceSchedule,
     TenantId,
     type LocalizedText,
-    type Tenant,
 } from "../core/index.ts";
 
 const LANGUAGES = Object.values(Language) as [Language, ...Language[]];
@@ -40,6 +43,8 @@ const optionalPhone = z.string().optional().transform((raw, ctx) => {
     }
     return parsed;
 });
+const PII_KINDS = Object.values(PiiKind) as [PiiKind, ...PiiKind[]];
+const LEVELS = Object.values(Professionalism) as [Professionalism, ...Professionalism[]];
 const notices = z.array(z.enum(["email", "sms"])).min(1);
 const fallback = z.enum(["voicemail", "forward", "reject"]);
 
@@ -47,6 +52,14 @@ const DEFAULT_DISCLOSURE: LocalizedText = {
     en: "Just so you know, this call is recorded and transcribed.",
     es: "Le informamos que esta llamada se graba y se transcribe.",
 };
+
+const refresh = z.number().int().min(5).max(7 * 24 * 60).default(60);
+const CatalogSourceFile = z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("manual") }),
+    z.strictObject({ kind: z.literal("dataset"), name: z.string().regex(/^[a-z0-9][a-z0-9_.-]*$/, "a file name in datasets/") }),
+    z.strictObject({ kind: z.literal("csv_url"), url: z.url(), refreshMinutes: refresh }),
+    z.strictObject({ kind: z.literal("json_url"), url: z.url(), itemsPath: z.string().default(""), refreshMinutes: refresh }),
+]);
 
 const Window = z.strictObject({
     day:         z.number().int().min(0).max(6),
@@ -106,6 +119,19 @@ export const TenantFile = z.strictObject({
         }).prefault({}),
         maxSessionMinutes:   z.number().int().min(5).max(120).default(DEFAULT_SESSION_LIMITS.maxSessionSeconds / 60),
         recordingDisclosure: z.boolean().default(false),
+        languages:           z.array(z.enum(LANGUAGES)).min(1).default(LANGUAGES),
+        privacy:             z.strictObject({
+            redact:    z.array(z.enum(PII_KINDS)).default([...DEFAULT_PRIVACY.redact]),
+            sensitive: z.boolean().default(false),
+        }).prefault({}),
+        style:               z.strictObject({
+            professionalism: z.enum(LEVELS).nullable().default(null),
+            honestAboutAi:   z.boolean().nullable().default(null),
+        }).prefault({}),
+        catalog:             z.strictObject({
+            source:   CatalogSourceFile.default({ kind: "manual" }),
+            fieldMap: z.record(z.string(), z.string()).default({}),
+        }).prefault({}),
     }).prefault({}),
 });
 export type TenantFile = z.input<typeof TenantFile>;
@@ -166,6 +192,66 @@ export function toTenant(file: z.output<typeof TenantFile>): Tenant {
             limits:              { ...DEFAULT_SESSION_LIMITS, maxSessionSeconds: s.maxSessionMinutes * 60 },
             abuse:               DEFAULT_ABUSE_POLICY,
             recordingDisclosure: { enabled: s.recordingDisclosure, text: DEFAULT_DISCLOSURE },
+            languages:           [...new Set([file.defaultLanguage, ...s.languages])],
+            privacy:             s.privacy,
+            style:               s.style,
+            catalog:             s.catalog,
+        },
+    };
+}
+
+/**
+ * The file form of a stored tenant: what the settings page edits and sends back through `parseTenant`.
+ * Settings without a file form (abuse policy, pricing, disclosure wording) keep their defaults.
+ */
+export function fromTenant(tenant: Tenant): z.input<typeof TenantFile> {
+    const s = tenant.settings;
+    const phones = (channel: "sms" | "voice") => (tenant.endpoints[channel] ?? []).map(a => a.value);
+    return {
+        id:              tenant.id,
+        slug:            tenant.slug,
+        name:            tenant.name,
+        domain:          tenant.domain,
+        timezone:        tenant.timezone,
+        phone:           tenant.phone ?? "",
+        address:         tenant.address,
+        website:         tenant.website,
+        agentName:       tenant.agentName,
+        voiceAgentName:  tenant.voiceAgentName,
+        endpoints:       { sms: phones("sms"), voice: phones("voice") },
+        staff:           {
+            phones: Tenant.staffPhones(tenant),
+            emails: tenant.staffContacts.flatMap(a => a.kind === "email" ? [a.value] : []),
+        },
+        branding:        { ...tenant.branding },
+        hoursText:       tenant.hoursText,
+        defaultLanguage: tenant.defaultLanguage,
+        staffLanguage:   tenant.staffLanguage,
+        profile:         { ...tenant.profile },
+        options:         { ...tenant.options },
+        plan:            { ...tenant.plan.subscription },
+        schedule:        tenant.schedule.kind === "always"
+            ? "always"
+            : tenant.schedule.windows.map(w => ({ ...w })),
+        settings:        {
+            skipProfileGate:     s.skipProfileGate,
+            transferTo:          s.transferTo ?? "",
+            coldFollowupMinutes: s.coldFollowupMinutes,
+            links:               s.links.map(l => ({ ...l })),
+            textAlwaysOn:        s.textAlwaysOn,
+            callFallbacks:       { ...s.callFallbacks },
+            notifications:       {
+                transcript:   [...s.notifications.transcript],
+                booking:      [...s.notifications.booking],
+                handoff:      [...s.notifications.handoff],
+                budget_alert: [...s.notifications.budget_alert],
+            },
+            maxSessionMinutes:   Math.round(s.limits.maxSessionSeconds / 60),
+            recordingDisclosure: s.recordingDisclosure.enabled,
+            languages:           [...s.languages],
+            privacy:             { redact: [...s.privacy.redact], sensitive: s.privacy.sensitive },
+            style:               { ...s.style },
+            catalog:             { source: { ...s.catalog.source }, fieldMap: { ...s.catalog.fieldMap } },
         },
     };
 }

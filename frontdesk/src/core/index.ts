@@ -34,7 +34,11 @@ export {
 } from "./call.ts";
 export {
     CatalogItem,
+    DEFAULT_CATALOG_SETTINGS,
     FieldType,
+    type CatalogSettings,
+    type CatalogSource,
+    type CatalogSyncStatus,
     type FieldSpec,
     type FieldValue,
 } from "./catalog.ts";
@@ -104,6 +108,7 @@ export {
 export {
     LANGUAGE_NAMES,
     Language,
+    LanguageGuess,
     LanguageTag,
     LocalizedText,
 } from "./language.ts";
@@ -113,6 +118,14 @@ export {
     type PlanPricing,
     type Subscription,
 } from "./plan.ts";
+export {
+    Crisis,
+    DEFAULT_PRIVACY,
+    Pii,
+    PiiKind,
+    type PrivacySettings,
+    type Redacted,
+} from "./privacy.ts";
 export {
     Result,
 } from "./result.ts";
@@ -125,8 +138,10 @@ export {
 } from "./schedule.ts";
 export {
     NotifyVia,
+    Professionalism,
     StaffNotice,
     Tenant,
+    type AgentStyle,
     type Branding,
     type RecordingDisclosure,
     type TenantLink,

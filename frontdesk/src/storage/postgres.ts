@@ -16,6 +16,7 @@ import {
     MessageId,
     SessionId,
     SessionMeter,
+    Tenant,
     TenantId,
     type Appointment,
     type AppointmentNotice,
@@ -31,7 +32,6 @@ import {
     type Job,
     type Message,
     type Session,
-    type Tenant,
     type Transcript,
     type UsageRecord,
     type Voicemail,
@@ -265,7 +265,7 @@ export class PostgresStore implements Store {
             const rows = await db.query(sql, params);
             return rows[0] === undefined
                 ? null
-                : parsed<Tenant>(rows[0]["data"]);
+                : Tenant.upgrade(parsed<Tenant>(rows[0]["data"]));
         };
         return {
             byId:       id => one("select data from tenants where id = $1", [id]),
@@ -275,7 +275,7 @@ export class PostgresStore implements Store {
                  where e.channel = $1 and e.address = $2`,
                 [channel, Address.key(address)],
             ),
-            all:        async () => (await db.query("select data from tenants order by slug")).map(r => parsed<Tenant>(r["data"])),
+            all:        async () => (await db.query("select data from tenants order by slug")).map(r => Tenant.upgrade(parsed<Tenant>(r["data"]))),
             save:       tenant => db.transaction(async tx => {
                 await tx.query(
                     `insert into tenants (id, slug, data, updated_at) values ($1, $2, $3::jsonb, now())

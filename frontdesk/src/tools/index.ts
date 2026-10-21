@@ -13,10 +13,11 @@ import { z } from "zod";
 import {
     Address,
     AppointmentId,
-    Language,
     LANGUAGE_NAMES,
     LocalTime,
     PhoneNumber,
+    Tenant,
+    type Language,
     WEEKDAY_NAMES,
     type Appointment,
     type ContactChanges,
@@ -26,8 +27,6 @@ import { FULL_CATALOG_LIMIT } from "../prompts/composer.ts";
 import { Hours } from "../prompts/hours.ts";
 import type { ToolDefinition } from "../providers/index.ts";
 import { Tool, ToolResult, type TurnContext } from "../turn/index.ts";
-
-const LANGUAGES = Object.values(Language) as [Language, ...Language[]];
 
 // --- Contact details ---------------------------------------------------------------
 
@@ -284,12 +283,15 @@ function searchCatalog(ctx: TurnContext): Tool {
 
 // --- Conversation control ----------------------------------------------------------
 
-function switchLanguage(): Tool {
+/**
+ * Only the tenant's offered languages can be chosen; a business that offers one language gets no tool.
+ */
+function switchLanguage(offered: readonly [Language, ...Language[]]): Tool {
     return Tool.define({
         name:        "switch_language",
-        description: "The customer wants to (or started to) talk in another language. Continue in it from this reply on.",
+        description: "The customer wants to (or started to) talk in another of our languages. Continue in it, completely, from this reply on.",
         followUp:    false,
-        parameters:  z.object({ language: z.enum(LANGUAGES).describe(Object.entries(LANGUAGE_NAMES).map(([k, v]) => `${k}=${v}`).join(", ")) }),
+        parameters:  z.object({ language: z.enum(offered).describe(offered.map(l => `${l}=${LANGUAGE_NAMES[l]}`).join(", ")) }),
         run: (args: { language: Language }) => ToolResult.output({ language: args.language }, { language: args.language }),
     });
 }
@@ -365,13 +367,14 @@ function endCall(): Tool {
 export function toolsFor(ctx: TurnContext): Tool[] {
     const voice = ctx.inbound.channel === "voice";
     const links = linkOptions(ctx);
+    const offered = ctx.tenant.settings.languages.filter(l => Tenant.offers(ctx.tenant, l));
     return [
         saveCustomerDetails(ctx),
         bookAppointment(ctx),
         ...(links.length > 0 ? [sendLink(ctx, links)] : []),
         ...(ctx.catalog.length > FULL_CATALOG_LIMIT ? [searchCatalog(ctx)] : []),
         requestCallback(),
-        switchLanguage(),
+        ...(offered.length > 1 ? [switchLanguage(offered as [Language, ...Language[]])] : []),
         flagConversation(),
         ...(voice ? [transferCall(ctx), endCall()] : []),
     ];

@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 
-import { DomainId, FieldType, Language, type LocalizedText } from "../core/index.ts";
+import { DomainId, FieldType, Language, Professionalism, type LocalizedText } from "../core/index.ts";
 import type { DomainPack } from "./pack.ts";
 import { FOLLOWUP_FIELDS, Template } from "./template.ts";
 
@@ -45,6 +45,9 @@ const DomainSection = z.strictObject({
     default_voice_agent_name: text,
     goal:                     text,
     upsell_topics:            text.default(""),
+    professionalism:          z.enum(Object.values(Professionalism) as [Professionalism, ...Professionalism[]]).default("polished"),
+    honest_about_ai:          flag,
+    sensitive:                flag,
 });
 
 const ProfileQuestion = z.strictObject({
@@ -299,6 +302,11 @@ export function toPack(file: PackFile): DomainPack {
         defaultVoiceAgentName: file.domain.default_voice_agent_name,
         goal:                  file.domain.goal,
         upsellTopics:          file.domain.upsell_topics,
+        defaults:              {
+            professionalism: file.domain.professionalism,
+            honestAboutAi:   file.domain.honest_about_ai,
+            sensitive:       file.domain.sensitive,
+        },
         profile:               file.profile,
         catalog: {
             itemNoun:       c.item_noun,

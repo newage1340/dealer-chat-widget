@@ -21,7 +21,8 @@ import type { Classification } from "./transcript.ts";
 export type HandoffReason =
     | "transfer"
     | "take_message"
-    | "missed_call";
+    | "missed_call"
+    | "crisis";
 
 /**
  * Why a session closed. Calls end for call reasons;

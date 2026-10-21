@@ -8,7 +8,7 @@
  * These are the parsed, validated forms; schema.ts reads the TOML into them.
  */
 
-import type { DomainId, FieldSpec, LocalizedText, ValueOf } from "../core/index.ts";
+import type { DomainId, FieldSpec, LocalizedText, Professionalism, ValueOf } from "../core/index.ts";
 
 /**
  * A question each tenant answers when onboarding (e.g. "Do you offer financing?").
@@ -171,6 +171,16 @@ export const FollowupKind = {
 } as const;
 export type FollowupKind = ValueOf<typeof FollowupKind>;
 
+/**
+ * Defaults a tenant can override in its settings.
+ * `sensitive` turns on the discretion rules for businesses that owe clients confidentiality (see PrivacySettings).
+ */
+export type PackDefaults = {
+    readonly professionalism: Professionalism;
+    readonly honestAboutAi:   boolean;
+    readonly sensitive:       boolean;
+};
+
 export type DomainPack = {
     readonly id:                    DomainId;
     readonly name:                  string;
@@ -183,6 +193,7 @@ export type DomainPack = {
     readonly defaultVoiceAgentName: string;
     readonly goal:                  string;
     readonly upsellTopics:          string;
+    readonly defaults:              PackDefaults;
     readonly profile:               readonly ProfileQuestion[];
     readonly catalog:               CatalogSpec;
     readonly booking:               BookingSpec;
