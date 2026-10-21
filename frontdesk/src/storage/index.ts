@@ -12,6 +12,8 @@ export {
     type NewMessage,
     type Outbox,
     type Participants,
+    type QualityLog,
+    type QualityQuery,
     type SessionDefaults,
     type SessionKey,
     type SpendLedger,

@@ -30,7 +30,7 @@ import { lintTenant } from "../../tenants/lint.ts";
 import { fromTenant, parseTenant, type TenantDraft } from "../../tenants/schema.ts";
 import { previewPrompt } from "../admin.ts";
 import type { ChannelDeps } from "../context.ts";
-import { indexPage, loginPage, promptPage, tenantPage, transcriptPage } from "./pages.ts";
+import { indexPage, loginPage, promptPage, qualityPage, tenantPage, transcriptPage } from "./pages.ts";
 
 const COOKIE = "frontdesk_settings";
 const STATIC = new URL("../../../public/settings/", import.meta.url);
@@ -164,6 +164,18 @@ export function settingsRoutes(deps: ChannelDeps): Hono {
     // --- businesses ----------------------------------------------------------------------
 
     app.get("/settings", auth, async c => c.html(indexPage(await store.tenants.all(), domains(), [])));
+
+    app.get("/settings/quality", auth, async c => {
+        const days = [1, 7, 30, 90].find(n => n === Number(c.req.query("days"))) ?? 7;
+        const since = new Date(services.clock().getTime() - days * 86_400_000);
+        return c.html(qualityPage({
+            days,
+            experiment: services.composer.experiment,
+            variants:   services.composer.variants,
+            rows:       await store.quality.report({ since, tenantId: null, domain: null }),
+            evals:      await store.quality.evals(since),
+        }));
+    });
 
     app.post("/settings/new", auth, async c => {
         const body = await c.req.parseBody();

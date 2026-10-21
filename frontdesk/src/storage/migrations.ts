@@ -197,6 +197,50 @@ create table catalog_syncs (
 );
 `,
     },
+    {
+        version: 3,
+        sql: `
+create table turn_metrics (
+    id             bigserial primary key,
+    tenant_id      text not null,
+    domain         text not null,
+    session_id     text not null,
+    channel        text not null,
+    variant        text not null,
+    model          text not null,
+    occurred_at    timestamptz not null,
+    latency_ms     integer not null,
+    first_text_ms  integer,
+    rounds         integer not null,
+    tools          jsonb not null,
+    tool_failures  integer not null,
+    corrected      boolean not null,
+    fallback       boolean not null,
+    input_tokens   integer not null,
+    cached_tokens  integer not null,
+    output_tokens  integer not null,
+    cost_usd       double precision not null,
+    reply_chars    integer not null,
+    language       text not null,
+    switched       boolean not null
+);
+create index turn_metrics_time on turn_metrics (occurred_at);
+create index turn_metrics_session on turn_metrics (session_id);
+
+create table eval_runs (
+    id          bigserial primary key,
+    run_id      text not null,
+    scenario    text not null,
+    variant     text not null,
+    model       text not null,
+    passed      boolean not null,
+    failures    jsonb not null,
+    cost_usd    double precision not null,
+    ran_at      timestamptz not null
+);
+create index eval_runs_scenario on eval_runs (scenario, ran_at);
+`,
+    },
 ];
 
 export async function migrate(db: Db): Promise<number> {

@@ -13,6 +13,7 @@ import {
     LanguageGuess,
     LocalTime,
     Pii,
+    PromptVariant,
     PhoneNumber,
     SessionMeter,
     Tenant,
@@ -85,8 +86,26 @@ export type EnginePart =
  * `vendor` names who placed a call (required for voice); `tenant` skips the lookup when the channel already has it.
  */
 export type RunOptions = {
-    readonly tenant?: Tenant;
-    readonly vendor?: CallVendor;
+    readonly tenant?:  Tenant;
+    readonly vendor?:  CallVendor;
+    readonly variant?: string;
+};
+
+/**
+ * What the model loop measured, for the quality log.
+ */
+type Measured = {
+    readonly started:      number;
+    readonly firstText:    number | null;
+    readonly rounds:       number;
+    readonly tools:        readonly string[];
+    readonly toolFailures: number;
+    readonly corrected:    boolean;
+    readonly fallback:     boolean;
+    readonly model:        string;
+    readonly inputTokens:  number;
+    readonly cachedTokens: number;
+    readonly outputTokens: number;
 };
 
 function sessionKey(inbound: Inbound, vendor: CallVendor | undefined): SessionKey {
@@ -239,14 +258,18 @@ export class TurnEngine {
             return;
         }
 
-        // The model.
+        // The model, with this conversation's prompt variant.
+        const { composer } = this.#s;
+        const variant = (options.variant !== undefined ? composer.variant(options.variant) : null)
+            ?? PromptVariant.assign(composer.variants, composer.experiment, conversation.id);
         let outcome: TurnOutcome;
         let costUsd = 0;
-        const generated = this.#generate(ctx, verdict);
+        let measured: Measured;
+        const generated = this.#generate(ctx, verdict, variant);
         for (;;) {
             const step = await generated.next();
             if (step.done) {
-                ({ outcome, costUsd } = step.value);
+                ({ outcome, costUsd, measured } = step.value);
                 break;
             }
             yield step.value;
@@ -289,18 +312,29 @@ export class TurnEngine {
         if (lastClosingTurn && inbound.channel !== "voice") {
             await closeSession(this.#s, session.id, "budget");
         }
+        await this.#measure(ctx, variant, measured, outcome, costUsd);
         yield { kind: "done", result: this.#result(ctx, committed, saved, {}, false) };
     }
 
     // --- the model loop -------------------------------------------------------------
 
-    async *#generate(ctx: TurnContext, verdict: BudgetVerdict): AsyncGenerator<EnginePart, { outcome: TurnOutcome; costUsd: number }> {
+    async *#generate(
+        ctx: TurnContext,
+        verdict: BudgetVerdict,
+        variant: PromptVariant
+    ): AsyncGenerator<EnginePart, { outcome: TurnOutcome; costUsd: number; measured: Measured }>
+    {
         const voice = ctx.inbound.channel === "voice";
         const tools = toolsFor(ctx);
         const defs = definitions(tools);
-        let messages: ChatMessage[] = this.#s.composer.turn(ctx, verdict);
+        let messages: ChatMessage[] = this.#s.composer.turn(ctx, verdict, variant);
         let text = "";
         let costUsd = 0;
+        const started = performance.now();
+        let firstText: number | null = null;
+        let rounds = 0;
+        let fallback = false;
+        const usage = { model: "", input: 0, cached: 0, output: 0 };
         const results: ToolResult[] = [];
         const called = new Set<string>();
         let correcting = false;
@@ -308,6 +342,7 @@ export class TurnEngine {
 
         try {
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+                rounds++;
                 // A corrective round only calls the tool; its text (if any) is not spoken twice.
                 const quiet = correcting;
                 correcting = false;
@@ -318,9 +353,9 @@ export class TurnEngine {
                     messages,
                     tools:       defs,
                     format:      { kind: "text" },
-                    tier:        voice ? "fast" : "capable",
+                    tier:        variant.tier ?? (voice ? "fast" : "capable"),
                     maxTokens:   voice ? 300 : 600,
-                    temperature: TURN_TEMPERATURE,
+                    temperature: variant.temperature ?? TURN_TEMPERATURE,
                     timeoutMs:   voice ? 15_000 : 40_000,
                     purpose:     "turn",
                     tenantId:    ctx.tenant.id,
@@ -335,6 +370,7 @@ export class TurnEngine {
                             ? part.delta.trimStart()
                             : part.delta;
                         if (delta) {
+                            firstText ??= performance.now() - started;
                             if (text !== "" && roundText === "") {
                                 roundText += " ";
                                 yield { kind: "text", delta: " " };
@@ -346,6 +382,10 @@ export class TurnEngine {
                         calls.push(part.call);
                     } else {
                         costUsd += part.usage.costUsd ?? 0;
+                        usage.model = part.usage.model || usage.model;
+                        usage.input += part.usage.units.input_tokens ?? 0;
+                        usage.cached += part.usage.units.cached_input_tokens ?? 0;
+                        usage.output += part.usage.units.output_tokens ?? 0;
                     }
                 }
                 text += roundText;
@@ -393,6 +433,7 @@ export class TurnEngine {
                 throw e;
             }
             console.error(`LLM turn failed for ${ctx.tenant.id}: ${e.message}`);
+            fallback = true;
         }
 
         let reply = Pii.redact(text, ctx.tenant.settings.privacy.redact).text
@@ -409,6 +450,7 @@ export class TurnEngine {
                 ? switched
                 : ctx.session.language;
         if (!reply) {
+            fallback = true;
             reply = say(voice ? STRINGS.fallbackVoice : STRINGS.fallbackText, language);
             yield { kind: "text", delta: reply };
         }
@@ -424,7 +466,53 @@ export class TurnEngine {
             sentUrls:       results.flatMap(r => r.sentUrls),
             directive:      results.reduce<CallDirective>((d, r) => r.directive ?? d, { kind: "continue" }),
         };
-        return { outcome, costUsd };
+        const measured: Measured = {
+            started,
+            firstText,
+            rounds,
+            tools:        [...called],
+            toolFailures: results.filter(r => r.failed).length,
+            corrected,
+            fallback,
+            model:        usage.model,
+            inputTokens:  usage.input,
+            cachedTokens: usage.cached,
+            outputTokens: usage.output,
+        };
+        return { outcome, costUsd, measured };
+    }
+
+    /**
+     * Record the turn in the quality log. Metering never fails a turn.
+     */
+    async #measure(ctx: TurnContext, variant: PromptVariant, m: Measured, outcome: TurnOutcome, costUsd: number): Promise<void> {
+        try {
+            await this.#s.store.quality.recordTurn({
+                tenantId:     ctx.tenant.id,
+                domain:       ctx.tenant.domain,
+                sessionId:    ctx.session.id,
+                channel:      ctx.inbound.channel,
+                variant:      variant.id,
+                model:        m.model || "none",
+                occurredAt:   ctx.now,
+                latencyMs:    performance.now() - m.started,
+                firstTextMs:  m.firstText,
+                rounds:       m.rounds,
+                tools:        m.tools,
+                toolFailures: m.toolFailures,
+                corrected:    m.corrected,
+                fallback:     m.fallback,
+                inputTokens:  m.inputTokens,
+                cachedTokens: m.cachedTokens,
+                outputTokens: m.outputTokens,
+                costUsd,
+                replyChars:   outcome.reply.length,
+                language:     outcome.language,
+                switched:     outcome.language !== ctx.session.language,
+            });
+        } catch (e) {
+            console.error("could not record turn metrics:", e);
+        }
     }
 
     async #runTool(tool: Tool | undefined, call: ToolCall, ctx: TurnContext): Promise<ToolResult> {

@@ -116,3 +116,12 @@ describe("settings pages", () => {
         expect((await app.store.tenants.bySlug("joes"))?.name).toBe("Joe's Pizza");
     });
 });
+
+describe("quality page", () => {
+    it("renders bare tables", async () => {
+        const html = await (await get("/settings/quality?days=30")).text();
+        expect(html).toContain("<h2>Eval pass rates</h2>");
+        expect(html).toContain("control");
+        expect(html).not.toMatch(/style=|class=|<script/);
+    });
+});

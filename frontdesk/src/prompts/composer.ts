@@ -8,7 +8,10 @@
 
 import { readFile } from "node:fs/promises";
 
+import { z } from "zod";
+
 import {
+    CONTROL_VARIANT,
     Crisis,
     LANGUAGE_NAMES,
     LocalizedText,
@@ -19,6 +22,7 @@ import {
     type Contact,
     type Language,
     type Message,
+    type PromptVariant,
     type Tenant,
 } from "../core/index.ts";
 import { Catalog, DomainPack, Template, type FollowupKind } from "../domains/index.ts";
@@ -29,6 +33,7 @@ import { Speech } from "./speech.ts";
 import { Style } from "./style.ts";
 
 const TEMPLATES_DIR = new URL("./templates/", import.meta.url);
+const VARIANTS_DIR = new URL("./variants/", import.meta.url);
 
 /**
  * Catalogs up to this size go into the prompt whole; larger ones are searched with `search_catalog`.
@@ -50,24 +55,66 @@ export function linkLabels(ctx: TurnContext): string[] {
     return [...ctx.pack.catalog.sendables.map(s => s.label), ...ctx.tenant.settings.links.map(l => l.label)];
 }
 
+const VariantFile = z.strictObject({
+    _comment:   z.string().optional(),
+    experiment: z.string().min(1),
+    variants:   z.array(z.strictObject({
+        id:          z.string().regex(/^[a-z0-9][a-z0-9_-]*$/),
+        weight:      z.number().min(0),
+        description: z.string().default(""),
+        templates:   z.partialRecord(z.enum(["base_chat.md", "base_voice.md"]), z.string()).default({}),
+        temperature: z.number().min(0).max(1).nullable().default(null),
+        tier:        z.enum(["fast", "capable"]).nullable().default(null),
+    })).min(1),
+});
+
+type Templates = { readonly baseChat: string; readonly baseVoice: string };
+
 export class PromptComposer {
     readonly #baseChat:  string;
     readonly #baseVoice: string;
     readonly #classify:  string;
+    readonly #overrides: ReadonlyMap<string, Templates>;
+    readonly experiment: string;
+    readonly variants:   readonly PromptVariant[];
 
-    constructor(templates: { readonly baseChat: string; readonly baseVoice: string; readonly classify: string }) {
-        this.#baseChat  = templates.baseChat;
-        this.#baseVoice = templates.baseVoice;
-        this.#classify  = templates.classify;
+    constructor(
+        templates: { readonly baseChat: string; readonly baseVoice: string; readonly classify: string },
+        experiment: { readonly name: string; readonly variants: readonly PromptVariant[]; readonly overrides: ReadonlyMap<string, Templates> }
+            = { name: "none", variants: [CONTROL_VARIANT], overrides: new Map() }
+    )
+    {
+        this.#baseChat   = templates.baseChat;
+        this.#baseVoice  = templates.baseVoice;
+        this.#classify   = templates.classify;
+        this.#overrides  = experiment.overrides;
+        this.experiment  = experiment.name;
+        this.variants    = experiment.variants;
     }
 
     static async load(): Promise<PromptComposer> {
         const read = (name: string) => readFile(new URL(name, TEMPLATES_DIR), "utf8");
-        return new PromptComposer({
+        const templates = {
             baseChat:  await read("base_chat.md"),
             baseVoice: await read("base_voice.md"),
             classify:  await read("classify.md"),
-        });
+        };
+        const file = VariantFile.parse(JSON.parse(await readFile(new URL("variants.json", VARIANTS_DIR), "utf8")));
+        const overrides = new Map<string, Templates>();
+        for (const v of file.variants) {
+            const own = (name: "base_chat.md" | "base_voice.md") => v.templates[name] === undefined
+                ? null
+                : readFile(new URL(v.templates[name]!, VARIANTS_DIR), "utf8");
+            overrides.set(v.id, {
+                baseChat:  await own("base_chat.md") ?? templates.baseChat,
+                baseVoice: await own("base_voice.md") ?? templates.baseVoice,
+            });
+        }
+        return new PromptComposer(templates, { name: file.experiment, variants: file.variants, overrides });
+    }
+
+    variant(id: string): PromptVariant | null {
+        return this.variants.find(v => v.id === id) ?? null;
     }
 
     // --- shared values --------------------------------------------------------------
@@ -166,7 +213,7 @@ export class PromptComposer {
      * The universal rules for this business type and channel. Nothing tenant-specific goes in here,
      * so every tenant of the same type shares this prefix (and the provider's prompt cache for it).
      */
-    #base(ctx: TurnContext): string {
+    #base(ctx: TurnContext, variant: PromptVariant): string {
         const { pack } = ctx;
         const channel = ctx.inbound.channel;
         const voice = channel === "voice";
@@ -184,7 +231,8 @@ export class PromptComposer {
                 ? ", or phone number"
                 : "",
         };
-        return Template.render(voice ? this.#baseVoice : this.#baseChat, values);
+        const templates = this.#overrides.get(variant.id) ?? { baseChat: this.#baseChat, baseVoice: this.#baseVoice };
+        return Template.render(voice ? templates.baseVoice : templates.baseChat, values);
     }
 
     /**
@@ -415,14 +463,14 @@ export class PromptComposer {
     /**
      * The messages for one conversation turn.
      */
-    turn(ctx: TurnContext, verdict: BudgetVerdict): ChatMessage[] {
+    turn(ctx: TurnContext, verdict: BudgetVerdict, variant: PromptVariant = CONTROL_VARIANT): ChatMessage[] {
         const { tenant, pack } = ctx;
         const voice = ctx.inbound.channel === "voice";
         const largeCatalog = ctx.catalog.length > FULL_CATALOG_LIMIT;
         const values = this.values(tenant, pack, ctx.inbound.channel);
         // Shared by every tenant of this type first, then this tenant's parts, so the cacheable prefix is as long as possible.
         const stable = [
-            this.#base(ctx),
+            this.#base(ctx, variant),
             this.#identity(ctx),
             this.domainSection(tenant, pack, values, voice),
             this.#businessInfo(tenant, pack),

@@ -66,7 +66,17 @@ export async function loadScenarios(path: string): Promise<Scenario[]> {
     return scenarios;
 }
 
-export async function runScenario(scenario: Scenario, source: Store, llm: LlmProvider, prices: PriceTable): Promise<EvalResult> {
+/**
+ * `variant` forces a prompt variant (from src/prompts/variants/variants.json) instead of the usual assignment.
+ */
+export async function runScenario(
+    scenario: Scenario,
+    source: Store,
+    llm: LlmProvider,
+    prices: PriceTable,
+    variant?: string
+): Promise<EvalResult>
+{
     const stored = await source.tenants.bySlug(scenario.tenant);
     const tenant: Tenant | null = stored === null
         ? null
@@ -122,7 +132,7 @@ export async function runScenario(scenario: Scenario, source: Store, llm: LlmPro
             language:          null,
             forwardedFrom:     null,
         };
-        const result = await collect(engine.run(inbound, { tenant, vendor: "twilio" }));
+        const result = await collect(engine.run(inbound, { tenant, vendor: "twilio", ...(variant !== undefined ? { variant } : {}) }));
         const reply = result.outcome.reply;
         const kinds = new Set<string>(result.outcome.events.map(e => e.kind));
         const at = `turn ${i + 1} ("${turn.say.slice(0, 40)}")`;

@@ -181,6 +181,21 @@ export function adminRoutes(deps: ChannelDeps): Hono {
         return c.text(await previewPrompt(deps, tenant, channel, c.req.query("message") ?? "Hi, what do you have?"));
     });
 
+    /**
+     * Turn quality per prompt variant, model and channel, plus eval pass rates: /admin/quality?days=7&tenant=&domain=
+     */
+    app.get("/admin/quality", admin, async c => {
+        const days = Number(c.req.query("days") ?? "7") || 7;
+        const since = new Date(services.clock().getTime() - days * 86_400_000);
+        return c.json({
+            since,
+            experiment: composer.experiment,
+            variants:   composer.variants,
+            turns:      await store.quality.report({ since, tenantId: c.req.query("tenant") ? TenantId(c.req.query("tenant")!) : null, domain: c.req.query("domain") ?? null }),
+            evals:      await store.quality.evals(since),
+        });
+    });
+
     // --- transcripts ------------------------------------------------------------------
 
     app.get("/admin/transcripts", admin, async c => {

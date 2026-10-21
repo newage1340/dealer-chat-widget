@@ -7,7 +7,8 @@
  *   node src/main.ts prompt <slug> [channel] [message] print the exact prompt a turn would get
  *   node src/main.ts author-prompt "<business type>"   print the pack-authoring prompt leader
  *   node src/main.ts author-domain "<business type>" [--context "..."] [--overwrite]
- *   node src/main.ts eval [file-or-dir]               run scripted conversations against the configured model
+ *   node src/main.ts eval [file-or-dir] [--repeat N] [--variant id] [--verbose]
+ *                                                      run scripted conversations against the configured model
  *   node src/main.ts seed-demo [dir]                   load the demo businesses (tenants/demo) and their catalogs
  */
 
@@ -140,7 +141,11 @@ async function authorDomain(
     console.info("Review it, then restart the server to load it.");
 }
 
-async function runEvals(path: string, verbose: boolean): Promise<void> {
+/**
+ * Run every scenario `repeat` times, print pass rates, and keep the results in the quality log
+ * (so pass rates can be compared per model and prompt variant over time, at /settings/quality).
+ */
+async function runEvals(path: string, verbose: boolean, repeat: number, variant: string | undefined): Promise<void> {
     const config = loadConfig();
     const app = await buildApp(config);
     const prices = await loadPrices(config.pricesFile);
@@ -150,26 +155,45 @@ async function runEvals(path: string, verbose: boolean): Promise<void> {
         console.error("Set OPENAI_API_KEY or LOCAL_LLM_BASE_URL to run evals.");
         process.exit(1);
     }
+    if (variant !== undefined && app.services.composer.variant(variant) === null) {
+        console.error(`no prompt variant '${variant}' in src/prompts/variants/variants.json`);
+        process.exit(1);
+    }
     const scenarios = await loadScenarios(path);
-    let passed = 0;
+    const runId = new Date().toISOString();
+    const model = config.llm.primary === "local" ? config.llm.localModels.capable : config.llm.openaiModels.capable;
+    let flawless = 0;
     let cost = 0;
     for (const scenario of scenarios) {
-        const before = spent;
-        const result = await runScenario(scenario, app.store, llm, prices);
-        const scenarioCost = spent - before + result.costUsd;
-        cost += scenarioCost;
-        passed += result.passed ? 1 : 0;
-        console.info(`${result.passed ? "PASS" : "FAIL"}  ${result.name}  ($${scenarioCost.toFixed(4)})`);
-        for (const failure of result.failures) {
-            console.info(`      - ${failure}`);
+        let passes = 0;
+        for (let i = 0; i < repeat; i++) {
+            const before = spent;
+            const result = await runScenario(scenario, app.store, llm, prices, variant);
+            const scenarioCost = spent - before + result.costUsd;
+            cost += scenarioCost;
+            passes += result.passed ? 1 : 0;
+            await app.store.quality.recordEval({
+                runId, scenario: scenario.name, variant: variant ?? "control", model,
+                passed: result.passed, failures: result.failures, costUsd: scenarioCost, ranAt: new Date(),
+            });
+            if (repeat === 1) {
+                console.info(`${result.passed ? "PASS" : "FAIL"}  ${result.name}  ($${scenarioCost.toFixed(4)})`);
+            }
+            for (const failure of result.failures) {
+                console.info(`      - ${failure}`);
+            }
+            if (!result.passed || verbose) {
+                console.info(result.log.map(l => `        ${l}`).join("\n"));
+            }
         }
-        if (!result.passed || verbose) {
-            console.info(result.log.map(l => `        ${l}`).join("\n"));
+        if (repeat > 1) {
+            console.info(`${passes === repeat ? "PASS" : "FLAKY"}  ${scenario.name}  ${passes}/${repeat}`);
         }
+        flawless += passes === repeat ? 1 : 0;
     }
-    console.info(`\n${passed}/${scenarios.length} passed, $${cost.toFixed(4)} total`);
+    console.info(`\n${flawless}/${scenarios.length} passed every run${repeat > 1 ? ` (${repeat} runs each)` : ""}, $${cost.toFixed(4)} total`);
     await app.store.close();
-    process.exit(passed === scenarios.length ? 0 : 1);
+    process.exit(flawless === scenarios.length ? 0 : 1);
 }
 
 function option(args: string[], name: string): string {
@@ -204,7 +228,12 @@ switch (command) {
         await authorDomain(args[0] ?? "", option(args, "--context"), args.includes("--overwrite"));
         break;
     case "eval":
-        await runEvals(args.find(a => !a.startsWith("--")) ?? join(ROOT, "evals"), args.includes("--verbose"));
+        await runEvals(
+            args.find((a, i) => !a.startsWith("--") && !["--repeat", "--variant"].includes(args[i - 1] ?? "")) ?? join(ROOT, "evals"),
+            args.includes("--verbose"),
+            Math.max(1, Number(option(args, "--repeat")) || 1),
+            option(args, "--variant") || undefined,
+        );
         break;
     default:
         console.error(`unknown command '${command}'`);

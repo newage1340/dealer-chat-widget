@@ -131,6 +131,14 @@ export {
     type Redacted,
 } from "./privacy.ts";
 export {
+    CONTROL_VARIANT,
+    PromptVariant,
+    type EvalRecord,
+    type EvalSummary,
+    type QualityRow,
+    type TurnMetric,
+} from "./quality.ts";
+export {
     Result,
 } from "./result.ts";
 export {

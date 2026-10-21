@@ -7,7 +7,8 @@ import type {
 	Address, Appointment, AppointmentId, AppointmentNotice, Block, CallHandling, CallVendor,
 	CatalogItem, CatalogSyncStatus, Channel, Classification, Contact, ContactChanges, ContactId, Conversation,
 	ConversationId, DomainEvent, Job, JobId, Language, Message, Session, SessionId,
-	SessionOutcome, Tenant, TenantId, Transcript, Voicemail } from "../core/index.ts";
+	SessionOutcome, Tenant, TenantId, Transcript, Voicemail,
+	EvalRecord, EvalSummary, QualityRow, TurnMetric } from "../core/index.ts";
 import type { UsageSink } from "../providers/index.ts";
 
 export interface TenantDirectory {
@@ -226,6 +227,25 @@ export interface BlockStore {
     blocked(tenantId: TenantId, now: Date): Promise<readonly Contact[]>;
 }
 
+/**
+ * Filters for the quality report.
+ */
+export type QualityQuery = {
+    readonly since:    Date;
+    readonly tenantId: TenantId | null;
+    readonly domain:   string | null;
+};
+
+/**
+ * Per-turn measurements and eval results, kept for comparing prompt variants and models.
+ */
+export interface QualityLog {
+    recordTurn(metric: TurnMetric): Promise<void>;
+    recordEval(record: EvalRecord): Promise<void>;
+    report(query: QualityQuery): Promise<readonly QualityRow[]>;
+    evals(since: Date): Promise<readonly EvalSummary[]>;
+}
+
 export interface Store {
     readonly tenants:       TenantDirectory;
     readonly conversations: ConversationStore;
@@ -238,5 +258,6 @@ export interface Store {
     readonly usage:         UsageSink;
     readonly spend:         SpendLedger;
     readonly blocks:        BlockStore;
+    readonly quality:       QualityLog;
     close(): Promise<void>;
 }
