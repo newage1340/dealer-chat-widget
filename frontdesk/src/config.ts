@@ -65,7 +65,21 @@ function flag(name: string, fallback: boolean): boolean {
     return ["1", "true", "yes", "on"].includes(value);
 }
 
+/**
+ * Read `.env` from the project root, if there is one. Variables already set in the environment win.
+ */
+function loadEnvFile(): void {
+    try {
+        process.loadEnvFile(`${ROOT}.env`);
+    } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw e;
+        }
+    }
+}
+
 export function loadConfig(): Config {
+    loadEnvFile();
     const localModel = env("LOCAL_LLM_MODEL");
     const twilioAuthToken = env("TWILIO_AUTH_TOKEN");
     const embedded = env("EMBEDDED_DB_DIR", `${ROOT}data/pglite`);
