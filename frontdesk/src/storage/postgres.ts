@@ -542,6 +542,23 @@ export class PostgresStore implements Store {
                 );
             },
 
+            resetLanguages: (tenantId, contactId, language) => db.transaction(async tx => {
+                const rows = await tx.query(
+                    `update contacts set preferred_language = null
+                     where tenant_id = $1 and ($2::text is null or id = $2) and preferred_language is not null
+                     returning id`,
+                    [tenantId, contactId],
+                );
+                await tx.query(
+                    `update sessions s set language = $3
+                     from conversations c
+                     where s.conversation_id = c.id and s.tenant_id = $1 and s.ended_at is null
+                       and ($2::text is null or c.contact_id = $2)`,
+                    [tenantId, contactId, language],
+                );
+                return rows.length;
+            }),
+
             deleteContact: async id => {
                 await db.query("delete from contacts where id = $1", [id]);
             },

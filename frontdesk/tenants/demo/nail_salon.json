@@ -1,0 +1,46 @@
+{
+  "id": "demo-nail-salon",
+  "slug": "demo-nail-salon",
+  "name": "Lotus Nails & Spa",
+  "domain": "nail_salon",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0152",
+  "address": "8650 E 96th St, Fishers, IN 46037",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Friday: 9:30am to 7:30pm, Saturday: 9am to 6pm, Sunday: 11am to 5pm",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "walk_ins": "Walk-ins are welcome every day. Waits are usually under 15 minutes on weekday mornings and early afternoons; Friday evenings and Saturdays can run 30-60 minutes, so booking is best then. Last walk-in for acrylic or dip is 1 hour before closing.",
+    "pricing": "Removal is $10 for gel and $15 for acrylic or dip, discounted when you get a new set. Long length or coffin/stiletto shapes add $5-$15. Gel color on acrylic adds $10. Nail art starts at $5 for two nails; full custom sets are priced by design after the tech sees your photo.",
+    "groups": "We have 10 manicure stations and 8 pedicure chairs, so we can do up to 8 people at the same time. Bridal party and birthday packages are on the menu. Groups of 6 or more need a $10 per person deposit. Kids parties (ages 6-12) are available on weekday afternoons and Sunday.",
+    "sanitation": "Metal tools are cleaned and sterilized in a hospital-grade autoclave after every client. Files, buffers and pedicure tub liners are single-use and thrown away. Tubs are disinfected between every client.",
+    "booking_policy": "Please call or text if you'll be more than 10 minutes late - we may need to move you to the next open tech. Give us at least 4 hours notice to cancel. Free fixes for chips or lifting within 7 days of your service.",
+    "policies": "We accept cash, all major cards and Apple Pay. Tips can be added on card. Gift cards are available at the front desk. Free parking in the shopping center lot. We don't do eyelash extensions or body waxing below the arms."
+  },
+  "options": {
+    "walk_ins_welcome": true,
+    "group_deposit": true,
+    "group_deposit_min": 6,
+    "group_deposit_amount": "$10"
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en",
+      "vi",
+      "es"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "nail_salon.json"
+      }
+    }
+  }
+}

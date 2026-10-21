@@ -22,7 +22,10 @@ function problemsOf(data: unknown): string[] {
 describe("bundled packs", () => {
     it("load into the registry, skipping templates", async () => {
         const registry = await DomainRegistry.fromDirectory();
-        expect(registry.ids().sort()).toEqual(["automotive", "plumbing"]);
+        expect(registry.ids().sort()).toEqual([
+            "auto_repair", "automotive", "boxing_gym", "chinese_restaurant", "computer_repair", "esl_tutor",
+            "hair_salon", "nail_salon", "plumbing", "real_estate", "talent_agency", "therapy_practice",
+        ]);
     });
 
     it("include the template, which must also validate", async () => {

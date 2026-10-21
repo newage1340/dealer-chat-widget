@@ -11,6 +11,7 @@ import type { Config, LlmConfig } from "./config.ts";
 import { DomainRegistry } from "./domains/index.ts";
 import { adminRoutes } from "./http/admin.ts";
 import type { ChannelDeps } from "./http/context.ts";
+import { settingsRoutes } from "./http/settings/routes.ts";
 import { smsRoutes } from "./http/sms.ts";
 import { vapiRoutes } from "./http/vapi.ts";
 import { voiceRoutes } from "./http/voice.ts";
@@ -134,6 +135,7 @@ export async function buildApp(config: Config, overrides: Overrides = {}): Promi
         return c.json({ error: "internal error" }, 500);
     });
     http.route("/", adminRoutes(deps));
+    http.route("/", settingsRoutes(deps));
     http.route("/", smsRoutes(deps));
     http.route("/", voiceRoutes(deps));
     http.route("/", vapiRoutes(deps));

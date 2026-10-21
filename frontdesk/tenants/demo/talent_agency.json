@@ -1,0 +1,49 @@
+{
+  "id": "demo-talent-agency",
+  "slug": "demo-talent-agency",
+  "name": "Marquee Talent Collective",
+  "domain": "talent_agency",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0160",
+  "address": "1043 Virginia Ave, Suite 4, Indianapolis, IN 46203",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Friday: 10am to 6pm, Saturday: 10am to 2pm, Sunday: closed",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "representation": "We represent actors and models of all ages, union and non-union, for film/TV, commercial, industrial, print and regional theater work. We book mainly in Indianapolis, Chicago, Cincinnati and Louisville, plus self-tape auditions for projects anywhere.",
+    "commission": "10% on union (SAG-AFTRA) work, 20% on non-union and print work. Commission is only taken from what talent earns on jobs we book - never charged up front.",
+    "submissions": "Submit through the official submission form on our website, or email submissions@example.com with a recent snapshot, a resume if you have one, and any reel or self-tape links. Parents submit for anyone under 18. We review every submission within about 2 weeks and reply either way.",
+    "fees": "There is never a fee to be represented, to submit, to meet with us, or to attend an open call. Classes, workshops, headshots and reels are optional and open to anyone, represented or not. Paid programs are due at registration; full refund up to 7 days before the start date, credit toward another program after that.",
+    "minors": "A parent or legal guardian must attend every meeting, class check-in, open call and shoot with anyone under 18. Minors working in Indiana need a work permit, and we help families with the paperwork. Earnings for minors are paid to the parent or guardian, and we strongly recommend a Coogan/blocked trust account.",
+    "credentials": "Registered Indiana business, founded in 2014. Our agents have more than 30 combined years in casting and representation in the Midwest.",
+    "policies": "Meetings are at our Fountain Square studio or by video. Free street parking on Virginia Ave and a lot behind the building. We don't handle extras/background-only casting or social media influencer management."
+  },
+  "options": {
+    "represents_minors": true
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en"
+    ],
+    "links": [
+      {
+        "label": "submission form",
+        "url": "https://example.com/submit",
+        "trigger": "\\b(submit|submission|apply|application|sign up for representation)\\b"
+      }
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "talent_agency.json"
+      }
+    }
+  }
+}

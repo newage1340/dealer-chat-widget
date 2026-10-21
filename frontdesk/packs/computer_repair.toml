@@ -1,0 +1,289 @@
+# Computer & phone repair domain pack.
+# The catalog mixes a repair service menu with a few refurbished devices for sale.
+# Prices depend on diagnosis, data privacy is a hard rule, and on-site visits are the exception.
+
+[domain]
+id                       = "computer_repair"
+name                     = "Computer & Phone Repair"
+description              = "Neighborhood computer and phone repair shops: screens, batteries, malware, data recovery, upgrades, custom builds and refurbished devices."
+business_noun            = "shop"
+staff_noun               = "repair techs"
+agent_role               = "service coordinator"
+voice_agent_role         = "service desk"
+default_agent_name       = "Jordan"
+default_voice_agent_name = "Casey"
+goal                     = "Understand what device the customer has and what's wrong with it, give honest typical pricing and turnaround from the service list, and book a drop-off (or an on-site visit when the shop offers them). Help shoppers find a refurbished device that fits their needs."
+upsell_topics            = "an SSD or RAM upgrade while the device is open, a data backup, a battery replacement on an older device, a screen protector or case, or a refurbished replacement when a repair isn't worth it"
+professionalism          = "friendly"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "diagnostics"
+label    = "Diagnostic / bench fee"
+question = "Do you charge a diagnostic or bench fee? How much, and is it waived if the customer goes ahead with the repair?"
+required = true
+
+[[profile]]
+key      = "warranty"
+label    = "Repair warranty"
+question = "What warranty do you give on repairs, parts and refurbished devices?"
+required = true
+
+[[profile]]
+key      = "brands"
+label    = "Brands & devices"
+question = "Which brands and devices do you work on, and which don't you touch? Are you authorized by any manufacturer?"
+
+[[profile]]
+key      = "onsite"
+label    = "On-site visits"
+question = "Do you do home or office visits? Where, and how is it priced?"
+
+[[profile]]
+key      = "data_policy"
+label    = "Data & privacy"
+question = "How do you handle customer data (backups, passcodes, how long you keep data, wiping old drives)?"
+
+[[profile]]
+key      = "pickup"
+label    = "Pickup & abandoned devices"
+question = "How do customers know their device is ready, and how long do you hold unclaimed devices?"
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the AI should know? (payment methods, walk-ins vs appointments, jobs you don't take)"
+
+[catalog]
+item_noun        = "service"
+item_noun_plural = "services and devices"
+spoken_noun      = "service"
+heading          = "SERVICES & REFURBISHED DEVICES"
+intro            = "These are the shop's repair services and the refurbished devices it has for sale. Repair prices are typical ranges and depend on the exact model and the diagnosis; refurbished device prices are as listed."
+empty_text       = "(No service list provided - answer from Business Info and offer a drop-off appointment.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{category}", "{price}", "{turnaround}", "{condition}"]
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Service"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "category"
+label      = "Category"
+searchable = true
+required   = true
+
+[[catalog.fields]]
+name       = "price"
+label      = "Typical price"
+empty_text = "Quoted after diagnosis"
+
+[[catalog.fields]]
+name  = "turnaround"
+label = "Turnaround"
+
+[[catalog.fields]]
+name       = "device_types"
+label      = "Devices"
+searchable = true
+
+[[catalog.fields]]
+name  = "warranty"
+label = "Warranty"
+
+[[catalog.fields]]
+name  = "condition"
+label = "Condition"
+
+[[catalog.fields]]
+name       = "description"
+label      = "What's included"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[booking]
+visit_noun       = "drop-off appointment"
+subject_label    = "Repair"
+subject_hint     = "the device and the problem (e.g. \"MacBook Air cracked screen\"), or the refurbished device they want to see"
+general_subject  = "diagnostic check"
+location         = "business"
+skip_intake_when = "they're only coming in to look at or buy a refurbished device"
+
+[[booking.intake]]
+key      = "device"
+label    = "Device"
+ask      = "Get the device type and model (e.g. \"Dell XPS 13\", \"iPhone 14\"). If they don't know the model, the brand and roughly how old it is is enough."
+required = true
+
+[[booking.intake]]
+key      = "problem"
+label    = "Problem"
+ask      = "Get a one-line description of what's wrong and since when (cracked screen, won't turn on, slow, pop-ups, got wet). Don't re-ask if they already explained."
+required = true
+
+[[booking.intake]]
+key   = "data"
+label = "Data to keep"
+ask   = "Ask whether there's data on the device they need to keep (photos, documents) and whether it's backed up. Never ask for passwords or passcodes."
+
+[[booking.intake]]
+key   = "service_type"
+label = "Drop-off / on-site"
+ask   = "If on-site visits are offered, ask whether they'll drop the device off or want a tech to come to them; for on-site, get the address. Skip if they already said, or if the shop doesn't do on-site visits."
+
+[widget]
+header_title      = "Repair Desk"
+tagline           = "Repair quotes, turnaround times, and drop-offs - 24/7."
+input_placeholder = "Tell us your device and what's wrong..."
+icon              = "💻"
+capabilities      = "repair questions, typical pricing and turnaround, refurbished devices, and booking a drop-off"
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "📱 Cracked Screen"
+message        = "My screen is cracked"
+requires_field = "category"
+requires_any   = ["screen"]
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "🔋 Battery"
+message        = "My battery doesn't hold a charge"
+requires_field = "category"
+requires_any   = ["battery"]
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "🐢 Slow / Virus"
+message        = "My computer is slow and might have a virus"
+requires_field = "category"
+requires_any   = ["software", "malware"]
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "💧 Water Damage"
+message        = "My device got wet"
+requires_field = "keywords"
+requires_any   = ["water", "liquid"]
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "💾 Data Recovery"
+message        = "I need to recover files from a dead drive"
+requires_field = "category"
+requires_any   = ["data"]
+
+[[widget.topics]]
+section        = "Shop"
+label          = "🖥️ Refurbished Laptops"
+message        = "What refurbished laptops do you have?"
+requires_field = "category"
+requires_any   = ["refurbished"]
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Book a Drop-off"
+message = "I'd like to drop off a device for repair"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📍 Hours & Location"
+message = "Where are you and what are your hours?"
+
+[voice]
+speak_years  = false
+speech_hints = "laptop,desktop,MacBook,MacBook Air,MacBook Pro,iMac,iPhone,iPad,Samsung,Galaxy,Pixel,Chromebook,Dell,HP,Lenovo,ThinkPad,Asus,Acer,Surface,Windows,Windows 11,macOS,screen,cracked screen,battery,charging port,keyboard,trackpad,hinge,SSD,hard drive,RAM,memory,upgrade,virus,malware,pop-ups,data recovery,backup,OS reinstall,blue screen,won't turn on,water damage,liquid,motherboard,custom PC,gaming PC,graphics card,GPU,refurbished,diagnostic,bench fee,on-site,drop-off,warranty"
+
+[[topics]]
+id          = "screen"
+label       = "Screen repair"
+description = "Cracked or broken laptop, tablet or phone screens."
+
+[[topics]]
+id          = "battery_power"
+label       = "Battery & power"
+description = "Battery replacement, won't charge, won't turn on, charging port problems."
+
+[[topics]]
+id          = "software"
+label       = "Software & malware"
+description = "Slow computer, viruses or pop-ups, OS reinstall, setup or software problems."
+
+[[topics]]
+id          = "data_recovery"
+label       = "Data recovery"
+description = "Recovering files from a dead or damaged drive or device, or backups."
+
+[[topics]]
+id          = "water_damage"
+label       = "Water damage"
+description = "A device that got wet or had liquid spilled on it."
+
+[[topics]]
+id          = "upgrade_build"
+label       = "Upgrades & custom builds"
+description = "SSD or RAM upgrades, custom PC builds, gaming rigs."
+
+[[topics]]
+id          = "refurbished"
+label       = "Refurbished sales"
+description = "Shopping for a refurbished laptop or other device the shop sells."
+
+[[topics]]
+id          = "scheduling"
+label       = "Scheduling & status"
+description = "Booking a drop-off or on-site visit, rescheduling, or asking whether a repair is done."
+
+[followups]
+cold     = "Hi {first_name}, it's {agent_name} with {business_name}. Still having trouble with that device? I can get you a drop-off time so a tech can take a look."
+reminder = "Reminder from {business_name}: your {visit_noun} is {visit_time} ({subject}). Bring the device and its charger, and back up anything you can beforehand. Reply here if anything changes."
+confirm  = "You're booked with {business_name} for {visit_time} - {subject}. Bring the charger too. Reply here if anything changes."
+
+[prompts]
+summary_focus = "The device and model, the problem, whether data must be preserved and whether it's backed up, and drop-off vs on-site - the tech triages around those."
+
+chat = '''
+REPAIR SHOP RULES
+- NEVER give a firm quote or a certain diagnosis. Prices in SERVICES & REFURBISHED DEVICES are typical ranges; the exact price comes after a tech diagnoses the device. When Business Info lists a diagnostic or bench fee, mention it with any price and say whether it's waived if they go ahead with the repair.
+- Parts availability varies by model. Turnaround times are typical, not guaranteed, and some parts have to be ordered.
+- NEVER ask for passwords, passcodes, PINs or account logins in this conversation, and tell the customer not to send them here. If the tech needs a passcode to test the device, they'll ask for it in person at drop-off.
+- Data privacy: techs don't browse personal files; they only access what the repair needs. Follow Data & privacy in Business Info for the details.
+- Recommend backing up anything important before a repair if the device still works. If it doesn't, point them to data recovery or ask that they mention it at drop-off.
+- Never claim to be manufacturer-authorized (Apple, Samsung, Dell, etc.) or say a repair keeps the manufacturer warranty unless Business Info says so.
+- Safe first steps are fine (restart, try another charger, unplug and dry a wet device and DON'T turn it on). Never suggest opening a device, swelling batteries, or anything risky. A swollen or hot battery: stop using and charging it and bring it in.
+- Refurbished devices: describe only the specs, condition and warranty listed. If a repair would cost more than the device is worth, it's fine to mention a refurbished option.
+
+BOOKING
+- The subject is the device and the problem (e.g. "HP Pavilion won't boot"), or the refurbished device they want to see; never just "repair".
+'''
+
+voice = '''
+SERVICE DESK TALK
+- Friendly and patient - plenty of callers aren't tech people. Skip jargon unless they use it: "the storage drive," not "the NVMe."
+- Get the device first, then what's wrong, then whether there's stuff on it they need to keep.
+- Give a price as a range and say the tech confirms it after a look: "usually somewhere between one fifty and two fifty for that, depending on the model."
+- If they start to read out a password or passcode, stop them kindly: "Oh, hang onto that - the tech will ask in person if they need it."
+'''
+
+[[prompts.toggles]]
+setting   = "onsite_visits"
+chat      = "ON-SITE VISITS: Techs can come to a home or office (see On-site visits in Business Info for area and pricing). Offer it for setups, networks, printers, or when the customer can't bring the device in; book it as usual with the address noted."
+voice     = "We do on-site visits for homes and offices - offer one when they can't bring the device in, and get the address."
+else_chat = "ON-SITE VISITS: This shop doesn't do on-site visits; all repairs are drop-off at the shop."

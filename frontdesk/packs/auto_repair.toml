@@ -1,0 +1,298 @@
+# Independent auto repair shop domain pack (not a dealership - see automotive.toml for those).
+# The catalog is a bilingual service menu with starting price ranges; the customer brings the car in.
+# Many customers speak Spanish, so service names carry a searchable Spanish field.
+
+[domain]
+id                       = "auto_repair"
+name                     = "Auto Repair Shop"
+description              = "Independent auto repair shops: maintenance, brakes, diagnostics, AC, suspension, tires and alignment."
+business_noun            = "shop"
+staff_noun               = "service team"
+agent_role               = "service writer"
+voice_agent_role         = "service writer"
+default_agent_name       = "Daniel"
+default_voice_agent_name = "Rosa"
+goal                     = "Understand what's going on with the customer's vehicle, explain honestly what the shop can do and what it typically costs, and book a drop-off or wait appointment. Unsafe-to-drive cars get safety advice first and a towing referral."
+upsell_topics            = "an oil change or tire rotation when they're already coming in, a brake inspection, an alignment with new tires, AC check before summer, or a pre-trip inspection"
+professionalism          = "friendly"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "pricing"
+label    = "Pricing & diagnostic fee"
+question = "How do you price work? Diagnostic fee, is it waived with the repair, labor rate, and do you call before doing extra work?"
+required = true
+
+[[profile]]
+key      = "warranty"
+label    = "Warranty"
+question = "What warranty do you give on parts and labor?"
+
+[[profile]]
+key      = "vehicles"
+label    = "Vehicles we work on"
+question = "What makes and types of vehicles do you work on, and what jobs do you send elsewhere? (diesel, European, hybrids, transmission rebuilds, body work)"
+required = true
+
+[[profile]]
+key      = "towing"
+label    = "Towing"
+question = "If a car can't be driven in, who should customers call for a tow? Any partner company or discount?"
+
+[[profile]]
+key      = "waiting"
+label    = "Waiting & drop-off"
+question = "Which jobs can customers wait for? Is there a waiting area, after-hours key drop, rides or shuttle?"
+
+[[profile]]
+key      = "credentials"
+label    = "Certifications"
+question = "Certifications, years in business, or anything customers can be told about the techs?"
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the assistant should know? (payment methods, financing, customer-supplied parts, languages spoken at the counter)"
+
+[catalog]
+item_noun        = "service"
+item_noun_plural = "services"
+spoken_noun      = "service"
+heading          = "SERVICES WE OFFER"
+intro            = "This is the shop's service menu. Prices are typical starting ranges for most cars and light trucks - the exact price depends on the vehicle and what the technician finds. Use the Spanish name when talking with a customer in Spanish."
+empty_text       = "(No service menu provided - answer from Business Info and offer a diagnostic appointment.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{category}", "{price_range}", "{duration}"]
+price_field      = "price_range"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Service"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "name_es"
+label      = "Nombre en español"
+searchable = true
+
+[[catalog.fields]]
+name       = "category"
+label      = "Category"
+searchable = true
+
+[[catalog.fields]]
+name       = "price_range"
+label      = "Typical price"
+empty_text = "Quoted after inspection"
+
+[[catalog.fields]]
+name  = "duration"
+label = "Typical time"
+
+[[catalog.fields]]
+name       = "description"
+label      = "What's included"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[booking]
+visit_noun       = "appointment"
+subject_label    = "Service"
+subject_hint     = "the service, or a short description of the problem (e.g. \"front brakes grinding\", \"check engine light\")"
+general_subject  = "diagnostic check"
+location         = "business"
+skip_intake_when = ""
+
+[[booking.intake]]
+key      = "vehicle"
+label    = "Vehicle"
+ask      = "Get the year, make and model (e.g. \"2014 Honda Civic\"). Don't re-ask if they already said it."
+required = true
+
+[[booking.intake]]
+key   = "symptoms"
+label = "Symptoms"
+ask   = "For anything beyond routine maintenance, get what they notice in their own words: noises, warning lights, smells, leaks, and when it happens. Skip for oil changes, rotations and tire installs."
+
+[[booking.intake]]
+key   = "drivable"
+label = "Drivable"
+ask   = "Ask whether the car is safe to drive in. If it isn't (won't start, overheating, grinding brakes, leaking fluid badly), follow the SAFETY rules and give the towing info instead of asking them to drive it."
+
+[[booking.intake]]
+key   = "drop_off"
+label = "Drop-off or wait"
+ask   = "Ask whether they'll drop the car off or wait for it. Only offer waiting for quick jobs listed in Waiting & drop-off; for diagnostics and bigger repairs suggest dropping it off."
+
+[widget]
+header_title      = "Service Desk"
+tagline           = "Book service or get a price - English o español."
+input_placeholder = "What's going on with your car? / ¿Qué le pasa a su carro?"
+icon              = "🔧"
+capabilities      = "car repair questions, typical prices, and booking a service appointment"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Book Service"
+message = "I'd like to schedule a service appointment"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "🇲🇽 Español"
+message = "¿Hablan español? Quiero hacer una cita."
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "🛢️ Oil Change"
+message        = "How much is an oil change?"
+requires_field = "category"
+requires_any   = ["oil"]
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "🛑 Brakes"
+message        = "My brakes are making noise"
+requires_field = "category"
+requires_any   = ["brake"]
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "⚠️ Check Engine Light"
+message        = "My check engine light is on"
+requires_field = "category"
+requires_any   = ["diagnostic"]
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "❄️ AC Not Cold"
+message        = "My AC isn't blowing cold"
+requires_field = "category"
+requires_any   = ["air conditioning"]
+
+[[widget.topics]]
+section        = "Common Repairs"
+label          = "🛞 Tires"
+message        = "I need tires - do you have used tires?"
+requires_field = "category"
+requires_any   = ["tire"]
+
+[[widget.topics]]
+section = "Info"
+label   = "🕒 Hours & Location"
+message = "What are your hours and where are you?"
+
+[voice]
+speak_years  = false
+speech_hints = "oil change,synthetic,check engine light,diagnostic,brakes,brake pads,rotors,grinding,squealing,alignment,tires,used tires,flat tire,rotation,balance,struts,shocks,ball joint,tie rod,control arm,AC,air conditioning,freon,recharge,compressor,overheating,radiator,coolant,thermostat,water pump,transmission,slipping,serpentine belt,spark plugs,tune-up,battery,alternator,starter,muffler,exhaust,emissions,inspection,tow,towing,drop off,frenos,balatas,discos,aceite,cambio de aceite,llantas,llantas usadas,ponchadura,alineación,balanceo,amortiguadores,rótula,suspensión,transmisión,aire acondicionado,clima,se calienta,radiador,anticongelante,batería,afinación,bujías,mofle,luz de check engine,motor,grúa,carro,troca,camioneta,cita,diagnóstico,revisión,Chevy,Silverado,Tahoe,F-150,Ram,Tacoma,Camry,Corolla,Civic,Accord,Altima,Sentra,Tundra,Explorer,Equinox"
+
+[[topics]]
+id          = "safety"
+label       = "Unsafe to drive"
+description = "Grinding brakes, overheating, won't start, smoke, major leaks, or anything needing a tow or immediate attention."
+
+[[topics]]
+id          = "maintenance"
+label       = "Maintenance"
+description = "Oil changes, fluids, battery, tune-ups, and scheduled maintenance."
+
+[[topics]]
+id          = "diagnostic"
+label       = "Diagnostics"
+description = "Check engine light, strange noises, vibrations, electrical problems or other unknown issues."
+
+[[topics]]
+id          = "brakes_suspension"
+label       = "Brakes & suspension"
+description = "Brake noise or wear, shocks, struts, steering and alignment."
+
+[[topics]]
+id          = "tires"
+label       = "Tires"
+description = "New or used tires, flats, rotation, balancing."
+
+[[topics]]
+id          = "ac_engine"
+label       = "AC, engine & transmission"
+description = "AC not cold, cooling system, engine running problems, transmission service or slipping."
+
+[[topics]]
+id          = "pricing"
+label       = "Pricing question"
+description = "Mainly asking what something costs, without booking."
+
+[[topics]]
+id          = "scheduling"
+label       = "Scheduling / status"
+description = "Booking, rescheduling, or asking whether their car is ready."
+
+[followups.cold]
+en = "Hi {first_name}, it's {agent_name} with {business_name}. Just checking in about your car - want me to get you on the schedule?"
+es = "Hola {first_name}, le saluda {agent_name} de {business_name}. Solo queríamos saber cómo sigue su carro - ¿le aparto una cita?"
+
+[followups.reminder]
+en = "Reminder from {business_name}: your appointment is {visit_time} ({subject}). Reply here if anything changes."
+es = "Recordatorio de {business_name}: su cita es {visit_time} ({subject}). Responda aquí si necesita cambiarla."
+
+[followups.confirm]
+en = "You're booked with {business_name} for {visit_time} - {subject}. Reply here if anything changes."
+es = "Su cita con {business_name} quedó para {visit_time} - {subject}. Responda aquí si necesita cambiar algo."
+
+[prompts]
+summary_focus = "Year/make/model, the symptoms in plain words, whether the car is drivable, and drop-off or wait - the techs plan the bays around those."
+
+chat = '''
+AUTO REPAIR RULES
+- NEVER diagnose with certainty. You can say what a symptom is often caused by ("grinding usually means the pads are worn down"), but the technician has to inspect it.
+- NEVER quote a firm price for a repair. Prices in SERVICES WE OFFER are typical ranges; the exact price depends on the vehicle and what the tech finds. Say so whenever you mention a price.
+- For anything that needs diagnosing, mention the diagnostic fee and whether it's waived with the repair, from Pricing & diagnostic fee.
+- Routine services with a clear price (oil change, rotation, flat repair) can be quoted from the menu as listed.
+- Check Vehicles we work on before booking. If it's a job the shop sends elsewhere, say so kindly and don't book it.
+- Used tires: stock changes daily. Never promise a size is in stock - offer to have the team check, or book a time to come look.
+- Never claim a certification, warranty or brand specialty that isn't in Business Info.
+
+SAFETY
+- Don't-drive signs: brakes grinding or the pedal going to the floor, temperature gauge in the red or steam from the hood, flashing check engine light, smoke, a strong fuel smell, or a wheel that wobbles.
+- For those, tell them not to drive it (or to pull over safely and turn the engine off), then give the Towing info and offer to book a time to receive it.
+- Never tell someone it's fine to keep driving on a problem you can't see.
+
+LANGUAGE & WARMTH
+- Many customers prefer Spanish. In Spanish, use "usted" by default; switch to "tú" only if the customer clearly uses it with you first.
+- Be warm and respectful, like a family shop that knows its customers. Use their name once you know it.
+- Use everyday words in both languages: "carro", "troca", "balatas", "llantas" are fine when the customer uses them.
+
+BOOKING
+- The subject is the service or a short problem description ("front brakes grinding", "oil change and rotation"), never just "repair".
+'''
+
+voice = '''
+SERVICE COUNTER TALK
+- Friendly and down to earth, like the person at the counter who's been there for years. "Okay, let's get it in and take a look."
+- Get the vehicle first (year, make, model), then what it's doing, then whether it's drivable, then the day.
+- Say prices as ranges: "usually between one-fifty and two-thirty per axle, but the tech will confirm."
+- If the caller describes a don't-drive problem, tell them not to drive it in your first reply and give the towing info right away.
+- Spanish callers: "usted" unless they use "tú" with you first.
+'''
+
+[[prompts.toggles]]
+setting = "shuttle_service"
+chat    = "RIDES: The shop offers a free ride home or to work within {setting_shuttle_radius} when someone drops off a car for the day. Mention it when they ask about drop-off."
+voice   = "RIDES: We can give a free ride within {setting_shuttle_radius} when they drop the car off for the day."
+
+[[prompts.toggles]]
+setting   = "customer_parts"
+chat      = "CUSTOMER PARTS: The shop installs parts customers bring in, labor only, with no warranty on the part itself."
+else_chat = "CUSTOMER PARTS: The shop doesn't install parts that customers buy themselves - we supply parts so we can warranty the job. Say this kindly if asked."

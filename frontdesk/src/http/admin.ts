@@ -6,6 +6,9 @@
  * Catalog upload accepts the upload token too (for the scraper job).
  */
 
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { Hono, type Context } from "hono";
 
 import {
@@ -21,7 +24,7 @@ import {
     type SessionOutcome,
     type Tenant,
 } from "../core/index.ts";
-import { importRows, syncCatalog } from "../catalogs/index.ts";
+import { DATASETS_DIR, importRows, syncCatalog } from "../catalogs/index.ts";
 import { parseTenant } from "../tenants/schema.ts";
 import type { TurnContext } from "../turn/index.ts";
 import { adminOnly, type ChannelDeps } from "./context.ts";
@@ -114,6 +117,40 @@ export function adminRoutes(deps: ChannelDeps): Hono {
         return result.ok
             ? c.json({ ok: true, items: result.value })
             : c.json({ error: result.error }, 502);
+    });
+
+    /**
+     * The bundled sample datasets, public so a demo tenant can point a CSV or JSON link source at them.
+     */
+    app.get("/datasets/:name", async c => {
+        const name = c.req.param("name");
+        if (!/^[a-z0-9][a-z0-9_.-]*\.(json|csv)$/.test(name)) {
+            return c.notFound();
+        }
+        const body = await readFile(join(DATASETS_DIR, name), "utf8").catch(() => null);
+        return body === null
+            ? c.notFound()
+            : c.body(body, 200, { "Content-Type": name.endsWith(".csv") ? "text/csv; charset=utf-8" : "application/json" });
+    });
+
+    /**
+     * Forget customers' preferred languages: { phone } for one customer, nothing for all of them.
+     */
+    app.post("/admin/tenants/:slug/languages/reset", admin, async c => {
+        const tenant = await store.tenants.bySlug(c.req.param("slug"));
+        if (tenant === null) {
+            return c.notFound();
+        }
+        const body = await c.req.json<{ phone?: string }>().catch(() => ({} as { phone?: string }));
+        if (!body.phone) {
+            return c.json({ ok: true, reset: await store.conversations.resetLanguages(tenant.id, null, tenant.defaultLanguage) });
+        }
+        const address = Address.phone(body.phone);
+        const contact = address === null ? null : await store.conversations.contactByAddress(tenant.id, address);
+        if (contact === null) {
+            return c.json({ error: "unknown contact" }, 404);
+        }
+        return c.json({ ok: true, reset: await store.conversations.resetLanguages(tenant.id, contact.id, tenant.defaultLanguage) });
     });
 
     // --- usage and prompts ------------------------------------------------------------

@@ -1,0 +1,452 @@
+/**
+ * The settings pages, rendered from plain data. Each section is its own form posting to
+ * /settings/<slug>/<section>, so saving one never touches another.
+ */
+
+import {
+    Budget,
+    LANGUAGE_NAMES,
+    LocalTime,
+    PhoneNumber,
+    PiiKind,
+    Plan,
+    Professionalism,
+    Tenant,
+    WEEKDAY_NAMES,
+    type CatalogItem,
+    type CatalogSyncStatus,
+    type Contact,
+    type Language,
+    type Transcript,
+} from "../../core/index.ts";
+import { Catalog, DomainPack } from "../../domains/index.ts";
+import { Style } from "../../prompts/style.ts";
+import { check, field, form, html, input, page, raw, select, textarea, type Html } from "./html.ts";
+
+const LANGUAGE_OPTIONS = Object.entries(LANGUAGE_NAMES) as [Language, string][];
+
+const PII_LABELS: Readonly<Record<PiiKind, string>> = {
+    card:         "Payment card numbers",
+    ssn:          "Social security numbers",
+    bank_account: "Bank account and routing numbers",
+    birth_date:   "Dates of birth",
+};
+
+const NOTICE_LABELS = {
+    transcript:   "Conversation transcripts",
+    booking:      "New bookings",
+    handoff:      "Callback requests and transfers",
+    budget_alert: "Monthly allowance alerts",
+} as const;
+
+const FALLBACKS: readonly (readonly [string, string])[] = [
+    ["voicemail", "Our voicemail (records and emails you the message)"],
+    ["forward", "Forward to the transfer number"],
+    ["reject", "Don't answer"],
+];
+
+export type TenantPageData = {
+    readonly tenant:      Tenant;
+    readonly pack:        DomainPack;
+    readonly domains:     readonly (readonly [string, string])[];
+    readonly items:       readonly CatalogItem[];
+    readonly sync:        CatalogSyncStatus | null;
+    readonly datasets:    readonly string[];
+    readonly blocked:     readonly Contact[];
+    readonly transcripts: readonly Transcript[];
+    readonly monthToDate: number;
+    readonly notice:      string;
+    readonly problems:    readonly string[];
+};
+
+function clock(minute: number): string {
+    const h = Math.floor(minute / 60) % 24;
+    const m = minute % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function phones(values: readonly string[]): string {
+    return values.map(v => PhoneNumber.parse(v) !== null ? PhoneNumber.display(PhoneNumber.parse(v)!) : v).join("\n");
+}
+
+function when(date: Date | null, tenant: Tenant): string {
+    return date === null
+        ? ""
+        : LocalTime.long(LocalTime.of(new Date(date), tenant.timezone));
+}
+
+// --- pages -------------------------------------------------------------------------------
+
+export function loginPage(error: string): string {
+    return page("Sign in", html`
+<header><h1>Front desk settings</h1></header>
+<main>
+${error ? html`<p><strong>${error}</strong></p>` : ""}
+${form("/settings/login", field("Admin token", input("token", "", "password", "autocomplete=\"current-password\"")), "Sign in")}
+</main>`);
+}
+
+export function indexPage(tenants: readonly Tenant[], domains: readonly (readonly [string, string])[], problems: readonly string[]): string {
+    const names = Object.fromEntries(domains);
+    return page("Businesses", html`
+<header>
+<h1>Businesses</h1>
+${form("/settings/logout", raw(""), "Sign out")}
+</header>
+<main>
+<section id="businesses">
+<h2>All businesses</h2>
+<table>
+<thead><tr><th>Name</th><th>Type</th><th>Phone numbers</th></tr></thead>
+<tbody>
+${tenants.map(t => html`<tr><td><a href="/settings/${t.slug}">${t.name}</a></td><td>${names[t.domain] ?? t.domain}</td><td>${[...(t.endpoints.voice ?? [])].map(a => a.value).join(", ")}</td></tr>\n`)}
+</tbody>
+</table>
+</section>
+<section id="new">
+<h2>Add a business</h2>
+${problems.length > 0 ? html`<ul>${problems.map(p => html`<li>${p}</li>`)}</ul>` : ""}
+${form("/settings/new", html`
+${field("Name", input("name", ""))}
+${field("Web address name", input("slug", ""), "lowercase letters, digits and dashes, e.g. joes-pizza")}
+${field("Business type", select("domain", domains, domains[0]?.[0] ?? ""))}
+`, "Create")}
+</section>
+</main>`);
+}
+
+export function tenantPage(d: TenantPageData): string {
+    const { tenant, pack } = d;
+    const sections: [string, string][] = [
+        ["business", "Business"],
+        ["numbers", "Phone numbers"],
+        ["assistant", "Assistant"],
+        ["privacy", "Privacy"],
+        ["languages", "Languages"],
+        ["schedule", "Schedule"],
+        ["catalog", pack.catalog.itemNounPlural.charAt(0).toUpperCase() + pack.catalog.itemNounPlural.slice(1)],
+        ["details", "Business details"],
+        ["notifications", "Notifications"],
+        ["blocks", "Blocked callers"],
+        ["usage", "Usage"],
+        ["conversations", "Conversations"],
+    ];
+    return page(`${tenant.name} settings`, html`
+<header>
+<p><a href="/settings">All businesses</a></p>
+<h1>${tenant.name}</h1>
+<p>${pack.name} &middot; <a href="/?slug=${tenant.slug}">Open web chat</a> &middot; <a href="/settings/${tenant.slug}/prompt">See the assistant's instructions</a></p>
+<nav><ul>${sections.map(([id, label]) => html`<li><a href="#${id}">${label}</a></li>`)}</ul></nav>
+</header>
+<main>
+${d.notice ? html`<p role="status"><strong>${d.notice}</strong></p>` : ""}
+${d.problems.length > 0 ? html`<div role="alert"><p><strong>Not saved:</strong></p><ul>${d.problems.map(p => html`<li>${p}</li>`)}</ul></div>` : ""}
+${business(d)}
+${numbers(d)}
+${assistant(d)}
+${privacy(d)}
+${languages(d)}
+${schedule(d)}
+${catalog(d)}
+${details(d)}
+${notifications(d)}
+${blocks(d)}
+${usage(d)}
+${conversations(d)}
+</main>`);
+}
+
+export function transcriptPage(tenant: Tenant, pack: DomainPack, transcript: Transcript): string {
+    const c = transcript.classification;
+    const topic = c === null ? "" : DomainPack.topics(pack).find(t => t.id === c.topic)?.label ?? c.topic;
+    return page(`Conversation - ${tenant.name}`, html`
+<header>
+<p><a href="/settings/${tenant.slug}#conversations">Back to ${tenant.name}</a></p>
+<h1>Conversation</h1>
+<p>${transcript.session.channel} &middot; ${when(transcript.session.startedAt, tenant)}</p>
+</header>
+<main>
+${c !== null ? html`<dl>
+<dt>Summary</dt><dd>${c.gist}</dd>
+<dt>Topic</dt><dd>${topic}</dd>
+<dt>Outcome</dt><dd>${c.outcome}${c.followupNeeded ? " (needs follow-up)" : ""}</dd>
+<dt>Urgency</dt><dd>${c.urgency}</dd>
+<dt>Language</dt><dd>${LANGUAGE_NAMES[c.language]}</dd>
+</dl>` : html`<p>Not summarized yet.</p>`}
+<ol>
+${transcript.messages.map(m => html`<li><strong>${m.role === "user" ? "Customer" : "Assistant"}:</strong> ${m.text}</li>\n`)}
+</ol>
+</main>`);
+}
+
+export function promptPage(tenant: Tenant, channel: string, text: string): string {
+    return page(`Instructions - ${tenant.name}`, html`
+<header>
+<p><a href="/settings/${tenant.slug}">Back to ${tenant.name}</a></p>
+<h1>What the assistant is told</h1>
+<p>${(["sms", "web", "voice"] as const).map(ch => ch === channel
+        ? html`<strong>${ch}</strong> `
+        : html`<a href="/settings/${tenant.slug}/prompt?channel=${ch}">${ch}</a> `)}</p>
+</header>
+<main><pre>${text}</pre></main>`);
+}
+
+// --- sections ----------------------------------------------------------------------------
+
+function section(id: string, title: string, body: Html): Html {
+    return html`<section id="${id}">\n<h2>${title}</h2>\n${body}</section>\n`;
+}
+
+function action(d: TenantPageData, name: string): string {
+    return `/settings/${d.tenant.slug}/${name}`;
+}
+
+function business(d: TenantPageData): Html {
+    const t = d.tenant;
+    return section("business", "Business", form(action(d, "business"), html`
+${field("Name", input("name", t.name))}
+${field("Business type", select("domain", d.domains, t.domain))}
+${field("Main phone", input("phone", t.phone === null ? "" : PhoneNumber.display(t.phone), "tel"))}
+${field("Address", input("address", t.address))}
+${field("Website", input("website", t.website, "url"))}
+${field("Time zone", input("timezone", t.timezone))}
+${field("Hours", input("hoursText", t.hoursText), "e.g. Monday-Friday: 9am to 6pm, Saturday: 10am to 2pm, Sunday: closed")}
+${field("Assistant's name in chat", input("agentName", t.agentName), `blank: ${d.pack.defaultAgentName}`)}
+${field("Assistant's name on calls", input("voiceAgentName", t.voiceAgentName), `blank: ${d.pack.defaultVoiceAgentName}`)}
+`));
+}
+
+function numbers(d: TenantPageData): Html {
+    const t = d.tenant;
+    return section("numbers", "Phone numbers", form(action(d, "numbers"), html`
+<p>Numbers the assistant answers. A number can belong to one business at a time; adding it here takes it from any other business.</p>
+${field("Calls to", textarea("voice", phones((t.endpoints.voice ?? []).map(a => a.value)), 2), "one per line")}
+${field("Texts to", textarea("sms", phones((t.endpoints.sms ?? []).map(a => a.value)), 2), "one per line")}
+${field("Transfer calls to", input("transferTo", t.settings.transferTo === null ? "" : PhoneNumber.display(t.settings.transferTo), "tel"), "where callers go when they need a person")}
+`));
+}
+
+function assistant(d: TenantPageData): Html {
+    const s = d.tenant.settings;
+    const defaults = d.pack.defaults;
+    const levels: [string, string][] = [
+        ["", `Business type default (${defaults.professionalism})`],
+        ...Object.values(Professionalism).map((l): [string, string] => [l, l]),
+    ];
+    const honesty: [string, string][] = [
+        ["", `Business type default (${defaults.honestAboutAi ? "says so" : "stays in character"})`],
+        ["yes", "Says it is a virtual assistant when asked"],
+        ["no", "Stays in character as a team member"],
+    ];
+    return section("assistant", "Assistant", form(action(d, "assistant"), html`
+${field("How formal", select("professionalism", levels, s.style.professionalism ?? ""))}
+${field("If asked whether it's an AI", select("honestAboutAi", honesty, s.style.honestAboutAi === null ? "" : s.style.honestAboutAi ? "yes" : "no"))}
+${field("Longest conversation (minutes)", input("maxSessionMinutes", Math.round(s.limits.maxSessionSeconds / 60), "number", "min=\"5\" max=\"120\""), "the assistant starts wrapping up politely three replies before this")}
+${field("Follow-up text after a quiet chat (minutes)", input("coldFollowupMinutes", s.coldFollowupMinutes, "number", "min=\"1\""), "blank: no follow-up texts")}
+<p>${check("Announce that calls are recorded", "recordingDisclosure", s.recordingDisclosure.enabled)}</p>
+<p>${check("Let web chat visitors skip the name and phone form", "skipProfileGate", s.skipProfileGate)}</p>
+`));
+}
+
+function privacy(d: TenantPageData): Html {
+    const s = d.tenant.settings.privacy;
+    const packSensitive = d.pack.defaults.sensitive;
+    return section("privacy", "Privacy", form(action(d, "privacy"), html`
+<fieldset>
+<legend>Remove from what customers write (before the assistant sees it or anything is saved)</legend>
+${Object.values(PiiKind).map(k => html`<p>${check(PII_LABELS[k], "redact", s.redact.includes(k), k)}</p>`)}
+</fieldset>
+<p>${check("Confidential business (therapy, medical, legal)", "sensitive", s.sensitive || packSensitive)}${packSensitive ? html` <small>always on for ${d.pack.name}</small>` : ""}</p>
+<p><small>Confidential: the assistant never confirms who is a client, asks only what scheduling needs, gives crisis resources,
+and staff texts and emails leave out what was said.</small></p>
+`));
+}
+
+function languages(d: TenantPageData): Html {
+    const t = d.tenant;
+    return section("languages", "Languages", html`
+${form(action(d, "languages"), html`
+${field("Main language", select("defaultLanguage", LANGUAGE_OPTIONS, t.defaultLanguage), "used with new customers")}
+${field("Language for your summaries and alerts", select("staffLanguage", LANGUAGE_OPTIONS, t.staffLanguage))}
+<fieldset>
+<legend>Languages the assistant offers</legend>
+${LANGUAGE_OPTIONS.map(([code, name]) => html`<p>${check(name, "languages", t.settings.languages.includes(code) || code === t.defaultLanguage, code)}</p>`)}
+</fieldset>
+`)}
+<h3>Reset languages</h3>
+<p>Customers keep the language they last used. If one got stuck in the wrong language, reset it here; their next conversation starts in the main language.</p>
+${form(action(d, "languages/reset"), field("Customer's phone number", input("phone", "", "tel")), "Reset this customer")}
+${form(action(d, "languages/reset"), raw(""), "Reset every customer")}
+`);
+}
+
+function schedule(d: TenantPageData): Html {
+    const s = d.tenant.settings;
+    const sched = d.tenant.schedule;
+    const windowFor = (day: number) => sched.kind === "windows"
+        ? sched.windows.find(w => w.day === day) ?? null
+        : null;
+    return section("schedule", "Schedule", form(action(d, "schedule"), html`
+<p>When the assistant answers calls. Outside these times calls get the choice below.</p>
+<p><label><input type="radio" name="mode" value="always"${raw(sched.kind === "always" ? " checked" : "")}> Always</label>
+<label><input type="radio" name="mode" value="windows"${raw(sched.kind === "windows" ? " checked" : "")}> Only these hours</label></p>
+<table>
+<thead><tr><th>Day</th><th>Answer</th><th>From</th><th>To</th></tr></thead>
+<tbody>
+${WEEKDAY_NAMES.map((name, day) => {
+        const w = windowFor(day);
+        return html`<tr><td>${name}</td><td>${check("", `day${day}`, w !== null)}</td><td>${input(`start${day}`, clock(w?.startMinute ?? 9 * 60), "time")}</td><td>${input(`end${day}`, clock(w?.endMinute ?? 17 * 60), "time")}</td></tr>\n`;
+    })}
+</tbody>
+</table>
+<p>${check("Keep answering texts and web chat all the time", "textAlwaysOn", s.textAlwaysOn)}</p>
+${field("Calls outside these hours", select("offSchedule", FALLBACKS, s.callFallbacks.offSchedule))}
+${field("Calls when every line is busy", select("lineBusy", FALLBACKS, s.callFallbacks.lineBusy))}
+`));
+}
+
+function catalog(d: TenantPageData): Html {
+    const { tenant, pack } = d;
+    const spec = pack.catalog;
+    const source = tenant.settings.catalog.source;
+    const kinds: [string, string][] = [
+        ["manual", "Entered here (paste below)"],
+        ["dataset", "Sample data file"],
+        ["csv_url", "CSV link (e.g. a Google Sheet published as CSV)"],
+        ["json_url", "JSON link"],
+    ];
+    const fieldMap = Object.entries(tenant.settings.catalog.fieldMap).map(([from, to]) => `${from} = ${to}`).join("\n");
+    const status = d.sync === null
+        ? "Never synced."
+        : d.sync.error !== null
+            ? `Last sync ${when(d.sync.syncedAt, tenant)} failed: ${d.sync.error}. Still using the previous ${d.sync.items} ${spec.itemNounPlural}.`
+            : `Last synced ${when(d.sync.syncedAt, tenant)}: ${d.sync.items} ${spec.itemNounPlural}.`;
+    const title = spec.itemNounPlural.charAt(0).toUpperCase() + spec.itemNounPlural.slice(1);
+    const shown = spec.fields.filter(f => f.name !== spec.idField);
+    return section("catalog", title, html`
+<p>Everything the assistant knows about your ${spec.itemNounPlural}. However they come in, the assistant reads them the same way.</p>
+<h3>Where they come from</h3>
+${form(action(d, "catalog"), html`
+${field("Source", select("kind", kinds, source.kind))}
+${field("Sample data file", select("dataset", d.datasets.map(n => [n, n] as const), source.kind === "dataset" ? source.name : ""))}
+${field("Link", input("url", source.kind === "csv_url" || source.kind === "json_url" ? source.url : "", "url"))}
+${field("Where the list is in the JSON", input("itemsPath", source.kind === "json_url" ? source.itemsPath : ""), "dotted path like data.items; blank if the response is the list")}
+${field("Check the link every (minutes)", input("refreshMinutes", source.kind === "csv_url" || source.kind === "json_url" ? source.refreshMinutes : 60, "number", "min=\"5\""))}
+${field("Column names", textarea("fieldMap", fieldMap, 4), "one per line: Your Column = our field")}
+<p><small>Our fields: ${spec.fields.map(f => `${f.name} (${f.label || f.name})`).join(", ")}</small></p>
+`)}
+<p>${status}</p>
+${source.kind !== "manual" ? form(action(d, "catalog/sync"), raw(""), "Sync now") : ""}
+<h3>Paste a list</h3>
+${form(action(d, "catalog/upload"), html`
+${field("CSV with a header row, or a JSON list", textarea("rows", "", 8))}
+<p><small>Replaces the current list. If the source above is a link, the next sync replaces it again.</small></p>
+`, "Replace list")}
+<h3>Current list (${d.items.length})</h3>
+<table>
+<thead><tr>${shown.map(f => html`<th>${f.label || f.name}</th>`)}</tr></thead>
+<tbody>
+${d.items.slice(0, 200).map(item => html`<tr>${shown.map(f => html`<td>${Catalog.formatValue(f, item.fields[f.name])}</td>`)}</tr>\n`)}
+</tbody>
+</table>
+${d.items.length > 200 ? html`<p>Showing the first 200.</p>` : ""}
+`);
+}
+
+function details(d: TenantPageData): Html {
+    const { tenant, pack } = d;
+    const options = Object.entries(tenant.options).map(([k, v]) => `${k} = ${v}`).join("\n");
+    const toggles = pack.prompts.toggles.map(t => t.setting);
+    return section("details", "Business details", form(action(d, "details"), html`
+<p>What the assistant tells customers about the business.</p>
+${pack.profile.map(q => field(q.label, textarea(`profile.${q.key}`, tenant.profile[q.key] ?? "", 3), q.question))}
+${field("Options", textarea("options", options, 3), toggles.length > 0 ? `one per line: name = value. This business type understands: ${toggles.join(", ")}` : "one per line: name = value")}
+`));
+}
+
+function notifications(d: TenantPageData): Html {
+    const t = d.tenant;
+    const s = t.settings;
+    const emails = t.staffContacts.flatMap(a => a.kind === "email" ? [a.value] : []);
+    return section("notifications", "Notifications", form(action(d, "notifications"), html`
+${field("Staff emails", textarea("emails", emails.join("\n"), 2), "one per line")}
+${field("Staff phones", textarea("phones", Tenant.staffPhones(t).map(PhoneNumber.display).join("\n"), 2), "one per line")}
+<table>
+<thead><tr><th>Tell staff about</th><th>Email</th><th>Text</th></tr></thead>
+<tbody>
+${(Object.keys(NOTICE_LABELS) as (keyof typeof NOTICE_LABELS)[]).map(n => html`<tr><td>${NOTICE_LABELS[n]}</td><td>${check("", `${n}`, s.notifications[n].includes("email"), "email")}</td><td>${check("", `${n}`, s.notifications[n].includes("sms"), "sms")}</td></tr>\n`)}
+</tbody>
+</table>
+<p>${check("Staff text alerts add-on", "smsNotifications", t.plan.subscription.smsNotifications)} <small>without it, text alerts go by email</small></p>
+${field("Extra phone lines", input("extraLines", t.plan.subscription.extraLines, "number", "min=\"0\""))}
+`));
+}
+
+function blocks(d: TenantPageData): Html {
+    const t = d.tenant;
+    return section("blocks", "Blocked callers", html`
+<p>Callers are blocked for 24 hours automatically after two abusive conversations in 30 days. You can block, extend or unblock here.</p>
+<table>
+<thead><tr><th>Caller</th><th>Until</th><th>Why</th><th>By</th><th></th></tr></thead>
+<tbody>
+${d.blocked.map(c => html`<tr>
+<td>${[c.firstName, c.phone === null ? "" : PhoneNumber.display(c.phone)].filter(Boolean).join(" - ") || c.id}</td>
+<td>${c.block?.until ? when(c.block.until, t) : "indefinitely"}</td>
+<td>${c.block?.reason ?? ""}</td>
+<td>${c.block?.source === "staff" ? "staff" : "automatic"}</td>
+<td>${form(action(d, `blocks/${c.id}/remove`), raw(""), "Unblock")}</td>
+</tr>\n`)}
+</tbody>
+</table>
+${d.blocked.length === 0 ? html`<p>Nobody is blocked.</p>` : ""}
+<h3>Block a caller</h3>
+${form(action(d, "blocks"), html`
+${field("Phone number", input("phone", "", "tel"))}
+${field("For how many hours", input("hours", "24", "number", "min=\"1\""), "blank: until you unblock them")}
+${field("Reason", input("reason", ""))}
+`, "Block")}
+`);
+}
+
+function usage(d: TenantPageData): Html {
+    const plan = d.tenant.plan;
+    const cap = Plan.assistantCapUsd(plan);
+    const status = Budget.capStatus(d.monthToDate, plan);
+    const label = {
+        ok:             "Within the monthly allowance.",
+        warning:        "Most of this month's allowance is used.",
+        assistant_used: "This month's allowance is used; calls go to voicemail until it resets.",
+        exceeded:       "Over the monthly limit; the assistant is paused until next month.",
+    }[status];
+    return section("usage", "Usage", html`
+<dl>
+<dt>Plan</dt><dd>$${Plan.monthlyRevenueUsd(plan).toFixed(2)} a month</dd>
+<dt>Service cost so far this month</dt><dd>$${d.monthToDate.toFixed(2)} of $${cap.toFixed(2)}</dd>
+<dt>Status</dt><dd>${label}</dd>
+</dl>
+`);
+}
+
+function conversations(d: TenantPageData): Html {
+    const { tenant, pack } = d;
+    const sensitive = Style.resolve(tenant, pack).sensitive;
+    return section("conversations", "Conversations", html`
+<table>
+<thead><tr><th>When</th><th>Channel</th><th>Topic</th><th>Outcome</th><th>Summary</th></tr></thead>
+<tbody>
+${d.transcripts.map(tr => {
+        const c = tr.classification;
+        const topic = c === null ? "" : DomainPack.topics(pack).find(x => x.id === c.topic)?.label ?? c.topic;
+        return html`<tr>
+<td><a href="/settings/${tenant.slug}/conversations/${tr.session.id}">${when(tr.session.startedAt, tenant)}</a></td>
+<td>${tr.session.channel}</td>
+<td>${topic}</td>
+<td>${c?.outcome ?? "open"}</td>
+<td>${sensitive ? "" : c?.gist ?? ""}</td>
+</tr>\n`;
+    })}
+</tbody>
+</table>
+${d.transcripts.length === 0 ? html`<p>No conversations yet.</p>` : ""}
+`);
+}

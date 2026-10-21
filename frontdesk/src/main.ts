@@ -8,6 +8,7 @@
  *   node src/main.ts author-prompt "<business type>"   print the pack-authoring prompt leader
  *   node src/main.ts author-domain "<business type>" [--context "..."] [--overwrite]
  *   node src/main.ts eval [file-or-dir]               run scripted conversations against the configured model
+ *   node src/main.ts seed-demo [dir]                   load the demo businesses (tenants/demo) and their catalogs
  */
 
 import { readdir, readFile } from "node:fs/promises";
@@ -16,6 +17,7 @@ import { join } from "node:path";
 import { serve } from "@hono/node-server";
 
 import { loadConfig, ROOT } from "./config.ts";
+import { syncCatalog } from "./catalogs/index.ts";
 import { Catalog } from "./domains/index.ts";
 import { authoringPrompt, generatePack, savePack } from "./domains/authoring.ts";
 import { loadScenarios, runScenario } from "./evals/run.ts";
@@ -67,6 +69,30 @@ async function importTenants(dir: string): Promise<void> {
 			catalog.map((row, i) => Catalog.normalize(row, spec, tenant.id, i, now))
 		);
         console.info(`imported ${tenant.slug} (${tenant.domain}, ${catalog.length} catalog items)`);
+    }
+    await app.store.close();
+}
+
+/**
+ * Load the demo tenants and sync their catalogs. Phone numbers and staff settings already in the
+ * database are kept, so re-seeding never undoes what was set on the settings page.
+ */
+async function seedDemo(dir: string): Promise<void> {
+    const app = await buildApp(loadConfig());
+    const files = (await readdir(dir)).filter(f => f.endsWith(".json")).sort();
+    for (const file of files) {
+        const result = parseTenant(JSON.parse(await readFile(join(dir, file), "utf8")));
+        if (!result.ok) {
+            console.error(`skip ${file}:\n${result.problems.map(p => `  - ${p.path}: ${p.message}`).join("\n")}`);
+            continue;
+        }
+        const existing = await app.store.tenants.byId(result.tenant.id);
+        const tenant = existing === null
+            ? result.tenant
+            : { ...result.tenant, endpoints: existing.endpoints, staffContacts: existing.staffContacts };
+        await app.store.tenants.save(tenant);
+        const synced = await syncCatalog(app.services, tenant);
+        console.info(`seeded ${tenant.slug} (${tenant.domain}): ${synced === null ? "manual catalog" : synced.ok ? `${synced.value} items` : `catalog failed: ${synced.error}`}`);
     }
     await app.store.close();
 }
@@ -164,6 +190,9 @@ switch (command) {
     }
     case "import-tenants":
         await importTenants(args[0] ?? join(ROOT, "..", "data", "tenants"));
+        break;
+    case "seed-demo":
+        await seedDemo(args[0] ?? join(ROOT, "tenants", "demo"));
         break;
     case "prompt":
         await printPrompt(args[0] ?? "", args[1] ?? "sms", args.slice(2).join(" ") || "Hi, what do you have?");

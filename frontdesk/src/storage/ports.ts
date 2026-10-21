@@ -95,6 +95,12 @@ export interface ConversationStore {
      */
     addAddress(contactId: ContactId, address: Address): Promise<void>;
     /**
+     * Forget every contact's preferred language (or one contact's), and put their open conversations
+     * back in `language`. For a business owner fixing a language that stuck, or after changing the offered languages.
+     * Returns how many contacts changed.
+     */
+    resetLanguages(tenantId: TenantId, contactId: ContactId | null, language: Language): Promise<number>;
+    /**
      * Remove a contact and everything about them (web widget "clear session", privacy requests).
      */
     deleteContact(id: ContactId): Promise<void>;

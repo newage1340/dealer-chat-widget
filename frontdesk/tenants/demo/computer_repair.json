@@ -1,0 +1,42 @@
+{
+  "id": "demo-computer-repair",
+  "slug": "demo-computer-repair",
+  "name": "Byte Fix Computer & Phone Repair",
+  "domain": "computer_repair",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0157",
+  "address": "5420 N College Ave, Indianapolis, IN 46220",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Friday: 10am to 7pm, Saturday: 10am to 5pm, Sunday: closed",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "diagnostics": "$49 bench fee for diagnosis, waived if you go ahead with the repair. Most diagnoses are done within 1-2 business days and we call with a quote before doing any work. Phone screen and battery repairs don't need a diagnosis.",
+    "warranty": "90 days parts and labor on most repairs, 1 year on batteries and on upgrade labor. Refurbished laptops and phones carry a 90-day warranty (60 days on Chromebooks). Liquid-damaged devices are not covered by warranty.",
+    "brands": "We work on Windows laptops and desktops (Dell, HP, Lenovo, Asus, Acer, Microsoft Surface), Macs, iPhones, iPads, Samsung Galaxy and Google Pixel phones, and Chromebooks. We don't repair game consoles, TVs, or printers in the shop. We are an independent repair shop - not an Apple or Samsung authorized service provider.",
+    "onsite": "Home and office visits within about 15 miles of the shop: Broad Ripple, Meridian-Kessler, Carmel, Fishers, Lawrence and downtown Indianapolis. $99 for the first hour and $85 for each additional hour, scheduled Monday-Friday.",
+    "data_policy": "Techs only access what the repair needs and never browse personal files. If we need your passcode to test a device, we ask for it in person at drop-off and delete it from the ticket when the repair is done. Back up first if you can; we can do it for you. Drives we replace are returned to you or securely wiped on request. Recovered data is deleted from our systems 14 days after pickup.",
+    "pickup": "We text you when the device is ready. Devices are held for 60 days after we let you know; after that we send a final notice before recycling.",
+    "policies": "Walk-ins welcome for phone screens and batteries; laptops and desktops go faster with a drop-off appointment. We take cash, all major cards, Apple Pay and Google Pay; payment is due at pickup. Parts that have to be ordered may need a 50% deposit. Bring your charger with any laptop."
+  },
+  "options": {
+    "onsite_visits": true
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "computer_repair.json"
+      }
+    }
+  }
+}

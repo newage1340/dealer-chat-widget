@@ -1,0 +1,300 @@
+# ESL (English as a second language) teacher / small language school domain pack.
+# Students are mostly Spanish speakers, so tenants usually set defaultLanguage "es";
+# prompts are written in English and the base prompt translates naturally.
+# The catalog is a class and lesson list with schedules, levels and prices.
+
+[domain]
+id                       = "esl_tutor"
+name                     = "ESL Teacher"
+description              = "English teachers and small language schools: conversation classes, private lessons, citizenship and job-interview prep, kids homework help."
+business_noun            = "school"
+staff_noun               = "teacher"
+agent_role               = "student coordinator"
+voice_agent_role         = "receptionist"
+default_agent_name       = "Lucia"
+default_voice_agent_name = "Lucia"
+goal                     = "Help students find the right English class or lesson for their level, goal and schedule, explain prices and formats clearly, and book a free level assessment (or a lesson, if they already know their level)."
+upsell_topics            = "monthly packages or lesson bundles that save money, adding a private lesson to a group class, online classes when the schedule is tight, and classes for other family members"
+professionalism          = "friendly"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "teacher"
+label    = "About the teacher"
+question = "Who teaches the classes? (name, experience, certifications like TESOL/TEFL, languages spoken)"
+required = true
+
+[[profile]]
+key      = "location"
+label    = "Where classes happen"
+question = "Where are in-person classes held, and which video platform do you use for online classes? Parking or bus info?"
+required = true
+
+[[profile]]
+key      = "assessment"
+label    = "Level assessment"
+question = "How does the level assessment work? (free or paid, how long, online or in person)"
+
+[[profile]]
+key      = "pricing"
+label    = "Pricing & packages"
+question = "How do you charge? (per class, monthly, packages, family discounts) What payment methods do you take?"
+
+[[profile]]
+key      = "materials"
+label    = "Books & materials"
+question = "Are books or materials included, or do students buy them?"
+
+[[profile]]
+key      = "cancellation"
+label    = "Missed classes & cancellations"
+question = "What happens if a student misses a class or cancels a private lesson? Can classes be made up?"
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the assistant should know? (minimum ages, what you don't teach, childcare, holidays)"
+
+[catalog]
+item_noun        = "class"
+item_noun_plural = "classes"
+spoken_noun      = "class"
+heading          = "CLASSES & LESSONS"
+intro            = "These are the classes and lessons offered, with level, format, schedule and price. Group classes meet at the listed times; private lessons are scheduled with the teacher. Use the Spanish name when speaking Spanish."
+empty_text       = "(No class list provided - answer from Business Info and offer a free level assessment.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{level}", "{format}", "{schedule}", "{price}"]
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Class"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "name_es"
+label      = "Nombre en español"
+searchable = true
+
+[[catalog.fields]]
+name       = "level"
+label      = "Level"
+searchable = true
+
+[[catalog.fields]]
+name       = "format"
+label      = "Format"
+searchable = true
+
+[[catalog.fields]]
+name       = "schedule"
+label      = "Schedule"
+empty_text = "Scheduled with the teacher"
+
+[[catalog.fields]]
+name       = "price"
+label      = "Price"
+empty_text = "Ask the teacher"
+
+[[catalog.fields]]
+name  = "class_size"
+label = "Class size"
+
+[[catalog.fields]]
+name       = "description"
+label      = "What you'll practice"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[booking]
+visit_noun       = "free level assessment"
+subject_label    = "Class / lesson"
+subject_hint     = "the class or lesson they want, or \"level assessment\""
+general_subject  = "level assessment"
+location         = "business"
+skip_intake_when = "the student is already enrolled and only wants to reschedule a lesson"
+
+[[booking.intake]]
+key      = "level"
+label    = "English level (self-described)"
+ask      = "Ask how they'd describe their English right now in simple words (just starting, understand some but hard to speak, can talk but want to improve). Their own words are fine - the assessment sets the real level."
+required = true
+
+[[booking.intake]]
+key      = "goal"
+label    = "Goal"
+ask      = "Ask what they mainly want English for: work, the citizenship test, everyday conversation, school, or helping their kids. Skip it if they already said."
+required = true
+
+[[booking.intake]]
+key   = "format"
+label = "Preferred format"
+ask   = "Ask whether they prefer a group class or private lessons, and online (Zoom) or in person. One short question; skip what they already told you."
+
+[widget]
+header_title      = "Clases de Inglés"
+tagline           = "Aprenda inglés a su ritmo. Learn English at your pace."
+input_placeholder = "Pregunte por clases, precios u horarios... / Ask about classes..."
+icon              = "📚"
+capabilities      = "class schedules, prices, and booking a free level assessment or a lesson"
+
+[[widget.topics]]
+section = "Empezar"
+label   = "📝 Examen de nivel gratis"
+message = "Quiero hacer el examen de nivel gratis"
+
+[[widget.topics]]
+section = "Empezar"
+label   = "💲 Precios"
+message = "¿Cuánto cuestan las clases?"
+
+[[widget.topics]]
+section        = "Clases"
+label          = "🗣️ Conversación"
+message        = "Me interesan las clases de conversación"
+requires_field = "keywords"
+requires_any   = ["conversation", "conversación"]
+
+[[widget.topics]]
+section        = "Clases"
+label          = "🇺🇸 Ciudadanía"
+message        = "Quiero prepararme para el examen de ciudadanía"
+requires_field = "keywords"
+requires_any   = ["citizenship", "ciudadanía"]
+
+[[widget.topics]]
+section        = "Clases"
+label          = "💼 Inglés para el trabajo"
+message        = "Necesito inglés para el trabajo o una entrevista"
+requires_field = "keywords"
+requires_any   = ["work", "interview", "trabajo"]
+
+[[widget.topics]]
+section        = "Clases"
+label          = "👧 Ayuda con tareas (niños)"
+message        = "Busco ayuda con la tarea de inglés para mi hijo"
+requires_field = "keywords"
+requires_any   = ["kids", "homework", "niños"]
+
+[[widget.topics]]
+section        = "Clases"
+label          = "💻 Clases en línea"
+message        = "¿Tienen clases en línea por Zoom?"
+requires_field = "format"
+requires_any   = ["online"]
+
+[[widget.topics]]
+section = "Info"
+label   = "📍 Horario y ubicación"
+message = "¿Cuál es el horario y dónde son las clases?"
+
+[voice]
+speak_years  = false
+speech_hints = "inglés,English,ESL,clase,clases,class,lessons,clase privada,private lesson,clase de grupo,group class,conversación,conversation,ciudadanía,citizenship,examen de ciudadanía,civics,USCIS,entrevista,interview,trabajo,workplace,tarea,homework,niños,kids,principiante,beginner,intermedio,intermediate,avanzado,advanced,examen de nivel,level assessment,placement,Zoom,en línea,online,presencial,in person,paquete,package,mensual,monthly,TESOL,TEFL"
+
+[[voice.pronunciations]]
+pattern = '\bESL\b'
+say     = "E S L"
+
+[[voice.pronunciations]]
+pattern = '\bUSCIS\b'
+say     = "U S C I S"
+
+[[topics]]
+id          = "assessment"
+label       = "Level assessment"
+description = "Booking or asking about the free level assessment / placement test."
+
+[[topics]]
+id          = "group_class"
+label       = "Group classes"
+description = "Asking about or joining a group class (conversation, beginner, intermediate, workplace)."
+
+[[topics]]
+id          = "private_lessons"
+label       = "Private lessons"
+description = "Asking about or booking one-on-one lessons or lesson packages."
+
+[[topics]]
+id          = "citizenship"
+label       = "Citizenship prep"
+description = "Interest in English and civics practice for the citizenship interview and test."
+
+[[topics]]
+id          = "kids"
+label       = "Kids & teens"
+description = "Homework help or classes for children or teenagers."
+
+[[topics]]
+id          = "pricing"
+label       = "Pricing question"
+description = "Mainly asking what classes, packages or lessons cost."
+
+[[topics]]
+id          = "scheduling"
+label       = "Scheduling"
+description = "Class times, booking, rescheduling or cancelling a lesson, or missed classes."
+
+[followups.confirm]
+en = "You're booked with {business_name} for {visit_time} - {subject}. Reply here if anything changes."
+es = "¡Listo! Su cita con {business_name} es {visit_time} - {subject}. Responda aquí si necesita cambiarla."
+
+[followups.reminder]
+en = "Reminder from {business_name}: your {subject} is {visit_time}. Reply here if you need to change it."
+es = "Recordatorio de {business_name}: su {subject} es {visit_time}. Responda aquí si necesita cambiarla."
+
+[followups.cold]
+en = "Hi {first_name}, it's {agent_name} from {business_name}. Would you like to book your free level assessment? It only takes a few minutes."
+es = "Hola {first_name}, soy {agent_name} de {business_name}. ¿Le gustaría reservar su examen de nivel gratis? Solo toma unos minutos."
+
+[prompts]
+summary_focus = "The student's English level in their own words, their goal (work, citizenship, conversation, school, kids), group or private, online or in person, and which times work - the teacher places them from that."
+
+chat = '''
+ESL SCHOOL RULES
+- Many students are beginners and some read slowly. In Spanish, use simple, clear, everyday Spanish and short sentences; use "usted" unless the student uses "tú" first. Be patient and encouraging - never make anyone feel bad about their English.
+- If a student writes in English, reply in simple English; never correct their English unless they ask you to.
+- When someone isn't sure which class fits, offer the free level assessment first. Don't guess their level yourself.
+- Explain group vs private clearly: group classes meet at fixed times listed in CLASSES & LESSONS and cost less; private lessons are scheduled with the teacher and cost more per hour. Mention packages or monthly prices when they save money.
+- Online classes are on Zoom; in-person classes are at the location in Business Info. Say which format each class is.
+- NEVER promise results: no guarantees that someone will pass the citizenship test, an interview, a school exam, or reach a level by a date.
+- Citizenship prep is English and civics practice ONLY. Never give legal or immigration advice (eligibility, forms, fees, timelines, cases). If asked, say kindly that the teacher can't advise on that and suggest a licensed immigration attorney or an accredited legal service.
+- Never ask about immigration status, documents, or Social Security numbers. They are not needed for classes.
+- Kids homework help: a parent or guardian books for anyone under 18. Only quote ages listed in Business Info.
+- Group classes have limited seats; you can't promise a seat is open - the teacher confirms after booking.
+
+BOOKING
+- New students: book the free level assessment (subject "level assessment"). Students who already know their class or are enrolled can book a private lesson directly (subject = the lesson name).
+- For group classes, tell them the class meets at its listed schedule; the booking is for the assessment or first class, not a custom time.
+'''
+
+voice = '''
+PHONE TALK
+- Speak slowly and clearly, with short sentences. Pause between ideas. Repeat days, times and prices once if the caller seems unsure.
+- Say prices simply: "cuarenta dólares por mes", "twenty-five dollars a class".
+- Say class times the way people talk: "martes y jueves, de siete a ocho y media de la noche."
+- If the caller is struggling, offer to text the details so they can read them later.
+'''
+
+[[prompts.toggles]]
+setting   = "free_assessment"
+chat      = "ASSESSMENT: The level assessment is free and takes about 20 minutes, online or in person. Offer it to every new student."
+else_chat = "ASSESSMENT: Quote the level assessment price from Business Info when you offer it."
+
+[[prompts.toggles]]
+setting = "trial_class"
+chat    = "TRIAL CLASS: New students may try one group class free before paying for the month. Mention it when someone is undecided about a group class."

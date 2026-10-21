@@ -1,0 +1,281 @@
+# Hair salon domain pack.
+# Independent stylists and small salons: cuts, color, blowouts, extensions and treatments.
+# The catalog is a service menu with "starting at" prices; length, thickness and history
+# change the price and the time, so intake captures them before booking.
+
+[domain]
+id                       = "hair_salon"
+name                     = "Hair Salon"
+description              = "Independent hairstylists and small salons: cuts, color, balayage, blowouts, extensions and treatments."
+business_noun            = "salon"
+staff_noun               = "stylists"
+agent_role               = "salon coordinator"
+voice_agent_role         = "front desk receptionist"
+default_agent_name       = "Jess"
+default_voice_agent_name = "Maya"
+goal                     = "Find the right service for what the client wants, be honest that price and time depend on their hair, and book an appointment at the salon with enough detail (service, length and condition, first visit or not, stylist preference) that the stylist can block the right amount of time."
+upsell_topics            = "a gloss or toner with color, a deep conditioning or bond-building treatment, a trim with color, a blowout or style finish, or retail products to keep color fresh"
+professionalism          = "friendly"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "stylists"
+label    = "Stylists"
+question = "Who are your stylists, and what does each one specialize in? (first names are fine)"
+
+[[profile]]
+key      = "pricing"
+label    = "Pricing policy"
+question = "How do you price? (starting-at prices, length/thickness surcharges, stylist levels, consultation fees)"
+
+[[profile]]
+key      = "color_policy"
+label    = "Color & patch-test policy"
+question = "What's your policy for new color clients? (patch test, consultation, color corrections)"
+required = true
+
+[[profile]]
+key      = "booking_policy"
+label    = "Deposits, cancellations & late arrivals"
+question = "Do you take deposits? What's your cancellation, no-show and late-arrival policy?"
+required = true
+
+[[profile]]
+key      = "products"
+label    = "Product lines"
+question = "Which color and retail product lines do you use and sell?"
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the assistant should know? (payment methods, parking, kids, walk-ins, services you don't offer)"
+
+[catalog]
+item_noun        = "service"
+item_noun_plural = "services"
+spoken_noun      = "service"
+heading          = "SALON SERVICE MENU"
+intro            = "These are the services this salon offers. Prices are starting points for short or average hair; long, thick or previously colored hair usually costs more and takes longer, and the stylist confirms the final price at the appointment."
+empty_text       = "(No service menu provided - answer from Business Info and offer a consultation.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{category}", "{price}", "{duration}"]
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Service"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "category"
+label      = "Category"
+searchable = true
+
+[[catalog.fields]]
+name       = "price"
+label      = "Starting price"
+empty_text = "Priced at consultation"
+
+[[catalog.fields]]
+name  = "duration"
+label = "Typical time in the chair"
+
+[[catalog.fields]]
+name       = "description"
+label      = "What's included"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[catalog.aliases]
+"service"        = "name"
+"starting_price" = "price"
+
+[booking]
+visit_noun       = "appointment"
+subject_label    = "Service"
+subject_hint     = "the service(s) being booked, e.g. \"partial balayage + trim\""
+general_subject  = "consultation"
+location         = "business"
+skip_intake_when = "the appointment is only a consultation"
+
+[[booking.intake]]
+key      = "service"
+label    = "Service"
+ask      = "Confirm exactly which service(s) they want, using names from the SALON SERVICE MENU (e.g. cut only, or color plus a cut). Don't re-ask if it's already clear."
+required = true
+
+[[booking.intake]]
+key   = "hair"
+label = "Hair length & condition"
+ask   = "For color, balayage, highlights, extensions, keratin and long-hair cuts or blowouts, ask about their hair length (above the shoulders, shoulder length, past the shoulders, very long) and whether it's thick or currently colored or lightened. Skip it for men's cuts, kids cuts and quick add-ons."
+
+[[booking.intake]]
+key   = "first_visit"
+label = "First visit?"
+ask   = "Ask whether this is their first visit to {business_name}. If it is and they're booking any color service, follow the PATCH TEST rules."
+
+[[booking.intake]]
+key   = "stylist"
+label = "Stylist preference"
+ask   = "Ask if they have a stylist they'd like to see, or whether the first one available is fine. Only use stylist names that appear in Business Info."
+
+[[booking.intake]]
+key      = "inspiration"
+label    = "Inspiration photos"
+ask      = "For color or a big change, mention they're welcome to bring or text inspiration photos; just note whether they plan to. Keep it to one quick line."
+channels = ["chat"]
+
+[widget]
+header_title      = "Salon Front Desk"
+tagline           = "Book your next appointment or get answers, 24/7."
+input_placeholder = "Ask about a cut, color, or booking..."
+icon              = "✂️"
+capabilities      = "service questions, pricing, and booking an appointment"
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "✂️ Haircut"
+message        = "I'd like to book a haircut"
+requires_field = "category"
+requires_any   = ["cut"]
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "🎨 Color / Balayage"
+message        = "I'm interested in color or balayage"
+requires_field = "category"
+requires_any   = ["color"]
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "💨 Blowout"
+message        = "I'd like to book a blowout"
+requires_field = "category"
+requires_any   = ["styling", "blowout"]
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "✨ Extensions"
+message        = "I'm interested in hair extensions"
+requires_field = "category"
+requires_any   = ["extensions"]
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "🌿 Treatments"
+message        = "What hair treatments do you offer?"
+requires_field = "category"
+requires_any   = ["treatment"]
+
+[[widget.topics]]
+section = "Get Started"
+label   = "💲 Pricing"
+message = "How much do your services cost?"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Book an Appointment"
+message = "I'd like to book an appointment"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📍 Hours & Location"
+message = "What are your hours and where are you located?"
+
+[voice]
+speak_years  = false
+speech_hints = "haircut,trim,bangs,fringe,layers,bob,pixie,fade,taper,buzz cut,beard trim,kids cut,blowout,silk press,updo,balayage,highlights,babylights,foils,partial highlights,full highlights,root touch-up,all-over color,single process,gloss,toner,glaze,lowlights,color correction,bleach,lightener,keratin,Brazilian blowout,Olaplex,K18,bond builder,deep conditioning,scalp treatment,extensions,tape-in,tape-ins,hand-tied,wefts,patch test,consultation,stylist"
+
+[[topics]]
+id          = "haircut"
+label       = "Haircut"
+description = "Women's, men's or kids cuts, trims, bangs, fades and beard trims."
+
+[[topics]]
+id          = "color"
+label       = "Color & lightening"
+description = "Balayage, highlights, root touch-ups, all-over color, gloss, color correction, or patch tests."
+
+[[topics]]
+id          = "styling"
+label       = "Styling & blowouts"
+description = "Blowouts, silk presses, updos, and event or wedding styling."
+
+[[topics]]
+id          = "extensions_treatments"
+label       = "Extensions & treatments"
+description = "Hair extensions, keratin or smoothing treatments, bond-building, deep conditioning, scalp care."
+
+[[topics]]
+id          = "pricing"
+label       = "Pricing question"
+description = "Mainly asking what a service costs, without booking."
+
+[[topics]]
+id          = "scheduling"
+label       = "Scheduling"
+description = "Booking, rescheduling, cancelling, running late, or asking about availability with a stylist."
+
+[[topics]]
+id          = "complaint"
+label       = "Concern about a service"
+description = "Unhappy with a recent cut or color, asking about a fix or redo, or a reaction after a service."
+
+[followups]
+cold     = "Hi {first_name}, it's {agent_name} with {business_name}. Still thinking about that appointment? I'm happy to find a time that works for you."
+reminder = "Reminder from {business_name}: your appointment is {visit_time} ({subject}). Please come with dry, product-free hair for color services. Reply here if anything changes."
+confirm  = "You're booked with {business_name} for {visit_time} - {subject}. Reply here if you need to reschedule."
+
+[prompts]
+summary_focus = "The service wanted, hair length and condition, whether they're a new client (and need a patch test), and any stylist preference - the stylist blocks time around those."
+
+chat = '''
+SALON RULES
+- Prices in the SALON SERVICE MENU are STARTING prices. Whenever you mention one, say the final price depends on hair length, thickness and history, and the stylist confirms it at the appointment. Never quote a firm total for color, balayage, extensions or color corrections.
+- If Business Info lists length or thickness surcharges, stylist levels, or a consultation fee, mention them when you talk about price.
+- Never promise a specific result ("you'll be platinum in one visit", "this will cover all your gray", "no damage"). Big changes, going lighter on dark or box-dyed hair, and color corrections often take more than one session - say so honestly and suggest a consultation.
+- Color corrections and extensions: book a consultation first unless Business Info says otherwise.
+- Only name stylists that appear in Business Info, and never promise a particular stylist is free - the booking tool decides.
+- Don't give medical advice about scalp conditions, hair loss or allergic reactions. If someone describes a reaction (burning, swelling, rash) after a service, tell them to rinse with cool water and see a doctor if it's severe, then use `request_callback` so the salon can follow up.
+- Pairings worth suggesting once, naturally: a gloss or toner with highlights, a bond-building treatment with lightening, a trim with color, a blowout finish before an event.
+
+PATCH TEST
+- First-time color clients (any service that uses color, lightener or a keratin/smoothing product) may need a patch test before their appointment; follow the Color & patch-test policy in Business Info.
+- If the policy requires one, tell them before booking, and offer to book the quick patch test (or note it in the booking) at least 48 hours before the color appointment.
+
+BOOKING
+- The subject is the specific service(s) (e.g. "women's cut + full highlights", "kids cut"), never just "hair".
+- Book groups (bridal parties, a parent and kids) as one appointment and put everyone's services in the subject.
+'''
+
+voice = '''
+FRONT DESK TALK
+- Warm and upbeat, like the person at the front desk who knows everyone. "Oh fun, we'd love to get you in."
+- Ask what they're looking to have done first, then hair length if it matters, then timing. One question per turn.
+- Say prices as "starting around eighty-five" and add that it depends on their hair - never read a list of prices.
+- Keep stylist talk simple: "Do you have someone you usually see, or is whoever's free okay?"
+'''
+
+[[prompts.toggles]]
+setting   = "patch_test_required"
+chat      = "PATCH TEST REQUIRED: This salon requires a patch test at least 48 hours before the first color or lightening service for every new color client - no exceptions. It's free and takes about 15 minutes."
+else_chat = "PATCH TEST: This salon doesn't require patch tests by default, but offer one to any first-time color client who mentions allergies or sensitive skin."
+
+[[prompts.toggles]]
+setting = "deposit_required"
+chat    = "DEPOSITS: Color, balayage, extensions and services over two hours need a {setting_deposit_amount} deposit to hold the appointment; it goes toward the service. The salon texts a secure link to pay it - never take card details in chat."
+voice   = "DEPOSITS: Color, balayage, extensions and services over two hours need a {setting_deposit_amount} deposit to hold the appointment; it goes toward the service. Tell them the salon will text a secure link to pay it - never take card numbers on the phone."

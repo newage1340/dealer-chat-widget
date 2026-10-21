@@ -20,6 +20,7 @@ import {
     Professionalism,
     ServiceSchedule,
     TenantId,
+    type CatalogSource,
     type LocalizedText,
 } from "../core/index.ts";
 
@@ -204,7 +205,7 @@ export function toTenant(file: z.output<typeof TenantFile>): Tenant {
  * The file form of a stored tenant: what the settings page edits and sends back through `parseTenant`.
  * Settings without a file form (abuse policy, pricing, disclosure wording) keep their defaults.
  */
-export function fromTenant(tenant: Tenant): z.input<typeof TenantFile> {
+export function fromTenant(tenant: Tenant) {
     const s = tenant.settings;
     const phones = (channel: "sms" | "voice") => (tenant.endpoints[channel] ?? []).map(a => a.value);
     return {
@@ -251,10 +252,15 @@ export function fromTenant(tenant: Tenant): z.input<typeof TenantFile> {
             languages:           [...s.languages],
             privacy:             { redact: [...s.privacy.redact], sensitive: s.privacy.sensitive },
             style:               { ...s.style },
-            catalog:             { source: { ...s.catalog.source }, fieldMap: { ...s.catalog.fieldMap } },
+            catalog:             { source: { ...s.catalog.source } as CatalogSource, fieldMap: { ...s.catalog.fieldMap } },
         },
-    };
+    } satisfies z.input<typeof TenantFile>;
 }
+
+/**
+ * A tenant in its editable file form.
+ */
+export type TenantDraft = ReturnType<typeof fromTenant>;
 
 export type TenantProblem = {
     readonly path:    string;

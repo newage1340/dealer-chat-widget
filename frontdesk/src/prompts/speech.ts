@@ -50,7 +50,8 @@ export const Speech = {
     applyDomain(text: string, pack: DomainPack): string {
         let out = text;
         for (const p of pack.voice.pronunciations) {
-            out = out.replace(new RegExp(p.pattern, "gi"), p.say);
+            // Packs ported from Python write back-references as \1; JavaScript wants $1.
+            out = out.replace(new RegExp(p.pattern, "gi"), p.say.replace(/\\(\d)/g, "$$$1"));
         }
         if (pack.voice.speakYears) {
             out = out.replace(YEAR_RE, (_, y: string) => Speech.spellYear(Number(y)));
