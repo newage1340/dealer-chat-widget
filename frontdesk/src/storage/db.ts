@@ -10,7 +10,7 @@ import postgres from "postgres";
 export type Row = Record<string, unknown>;
 
 export interface Db {
-    query<T extends Row = Row>(text: string, params?: readonly unknown[]): Promise<T[]>;
+    query(text: string, params?: readonly unknown[]): Promise<Row[]>;
     transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
     /**
      * Run a script of several statements without parameters (migrations).
@@ -23,8 +23,8 @@ type PgSql = postgres.Sql | postgres.TransactionSql;
 
 function serverDb(sql: PgSql, root: postgres.Sql): Db {
     return {
-        async query<T extends Row>(text: string, params: readonly unknown[] = []) {
-            return await sql.unsafe(text, params as postgres.ParameterOrJSON<never>[]) as unknown as T[];
+        async query(text: string, params: readonly unknown[] = []) {
+            return await sql.unsafe(text, params as postgres.ParameterOrJSON<never>[]);
         },
         async transaction<T>(fn: (tx: Db) => Promise<T>) {
             if ("savepoint" in sql) {
@@ -54,8 +54,8 @@ type PgliteLike = Pick<PGlite, "query" | "exec">;
 
 function pgliteDb(db: PgliteLike, root: PGlite): Db {
     return {
-        async query<T extends Row>(text: string, params: readonly unknown[] = []) {
-            return (await db.query<T>(text, [...params])).rows;
+        async query(text: string, params: readonly unknown[] = []) {
+            return (await db.query<Row>(text, [...params])).rows;
         },
         async transaction<T>(fn: (tx: Db) => Promise<T>) {
             if (db !== root) {

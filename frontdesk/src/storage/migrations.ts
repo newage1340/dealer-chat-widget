@@ -280,8 +280,8 @@ export async function migrate(db: Db): Promise<number> {
         version     integer primary key,
         applied_at  timestamptz not null default now()
     )`);
-    const rows = await db.query<{ version: number }>("select version from schema_migrations");
-    const applied = new Set(rows.map(r => Number(r.version)));
+    const rows = await db.query("select version from schema_migrations");
+    const applied = new Set(rows.map(r => Number(r["version"])));
     let count = 0;
     for (const m of MIGRATIONS) {
         if (applied.has(m.version)) {
