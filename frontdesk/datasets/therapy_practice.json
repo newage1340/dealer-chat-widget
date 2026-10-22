@@ -1,0 +1,152 @@
+[
+  {
+    "code": "CONSULT",
+    "name": "Free consultation call",
+    "category": "Consultation",
+    "session_length": "15 minutes",
+    "fee": "Free",
+    "format": "Phone or video",
+    "description": "A short call with a clinician to talk about what you're looking for and whether the practice is a good fit. Not a therapy session.",
+    "keywords": "free consult phone call fit first step getting started new client"
+  },
+  {
+    "code": "IND-INTAKE",
+    "name": "Individual therapy - first session (intake)",
+    "category": "Individual",
+    "session_length": "60 minutes",
+    "fee": "$175",
+    "format": "In-person or telehealth",
+    "description": "The first full session with your clinician: getting to know each other, paperwork review, and setting goals together.",
+    "keywords": "intake assessment first appointment initial session adult"
+  },
+  {
+    "code": "IND-50",
+    "name": "Individual therapy",
+    "category": "Individual",
+    "session_length": "50 minutes",
+    "fee": "$140",
+    "format": "In-person or telehealth",
+    "description": "Ongoing one-on-one sessions for adults, usually weekly or every other week.",
+    "keywords": "counseling talk therapy one on one adult weekly"
+  },
+  {
+    "code": "IND-80",
+    "name": "Extended individual session",
+    "category": "Individual",
+    "session_length": "80 minutes",
+    "fee": "$210",
+    "format": "In-person or telehealth",
+    "description": "A longer one-on-one session, scheduled when you and your clinician agree it's useful.",
+    "keywords": "long session extended double"
+  },
+  {
+    "code": "CPL-INTAKE",
+    "name": "Couples counseling - first session",
+    "category": "Couples",
+    "session_length": "80 minutes",
+    "fee": "$210",
+    "format": "In-person or telehealth",
+    "description": "A first session with both partners to understand goals and how you'd like to work together.",
+    "keywords": "couples marriage relationship partners premarital intake"
+  },
+  {
+    "code": "CPL-50",
+    "name": "Couples counseling",
+    "category": "Couples",
+    "session_length": "50 minutes",
+    "fee": "$160",
+    "format": "In-person or telehealth",
+    "description": "Ongoing sessions for couples, married or not, at any stage of a relationship.",
+    "keywords": "couples marriage counseling relationship partners premarital"
+  },
+  {
+    "code": "FAM-50",
+    "name": "Family therapy",
+    "category": "Family",
+    "session_length": "50 minutes",
+    "fee": "$160",
+    "format": "In-person or telehealth",
+    "description": "Sessions with two or more family members, including parents and children or adult family members.",
+    "keywords": "family parents siblings household blended family"
+  },
+  {
+    "code": "TEEN-50",
+    "name": "Teen therapy (ages 13-17)",
+    "category": "Teen",
+    "session_length": "50 minutes",
+    "fee": "$140",
+    "format": "In-person or telehealth",
+    "description": "One-on-one sessions for teenagers, with periodic check-ins with a parent or guardian. A parent or guardian books and completes consent.",
+    "keywords": "teen teenager adolescent high school middle school youth"
+  },
+  {
+    "code": "PARENT-50",
+    "name": "Parent consultation session",
+    "category": "Family",
+    "session_length": "50 minutes",
+    "fee": "$140",
+    "format": "In-person or telehealth",
+    "description": "A session for parents or guardians on their own, to talk through parenting questions or a child's care plan.",
+    "keywords": "parent guardian parenting support"
+  },
+  {
+    "code": "EMDR-60",
+    "name": "EMDR therapy session",
+    "category": "Individual",
+    "session_length": "60 minutes",
+    "fee": "$165",
+    "format": "In-person preferred; telehealth for some clients",
+    "description": "Sessions with an EMDR-trained clinician. Whether EMDR is a fit is discussed with the clinician first.",
+    "keywords": "emdr eye movement trauma specialized"
+  },
+  {
+    "code": "EMDR-90",
+    "name": "Extended EMDR session",
+    "category": "Individual",
+    "session_length": "90 minutes",
+    "fee": "$240",
+    "format": "In-person",
+    "description": "A longer EMDR session, scheduled by the clinician when appropriate.",
+    "keywords": "emdr extended long intensive"
+  },
+  {
+    "code": "GRP-WOMEN",
+    "name": "Women's support group",
+    "category": "Group",
+    "session_length": "90 minutes, weekly",
+    "fee": "$50 per session",
+    "format": "In-person",
+    "description": "A small, clinician-led group that meets weekly. A short screening call with the group leader comes first.",
+    "keywords": "group women support circle"
+  },
+  {
+    "code": "TELE-50",
+    "name": "Telehealth individual session",
+    "category": "Individual",
+    "session_length": "50 minutes",
+    "fee": "$140",
+    "format": "Telehealth (secure video)",
+    "description": "Individual therapy by secure video for clients located in Indiana at the time of the session.",
+    "keywords": "telehealth online video virtual remote zoom"
+  },
+  {
+    "code": "SLIDING",
+    "name": "Reduced-fee session (sliding scale)",
+    "category": "Individual",
+    "session_length": "50 minutes",
+    "fee": "$70-$120, limited spots",
+    "format": "In-person or telehealth",
+    "description": "A limited number of reduced-fee spots for individual therapy. Discussed privately with the clinician during the free consultation.",
+    "keywords": "sliding scale reduced fee low cost affordable discount"
+  },
+  {
+    "code": "LETTER",
+    "name": "Letters and documentation",
+    "category": "Administrative",
+    "session_length": "",
+    "fee": "",
+    "format": "",
+    "description": "Letters or forms for current clients, prepared by the clinician when appropriate. Requests go through the office.",
+    "keywords": "letter form documentation paperwork records request"
+  }
+]

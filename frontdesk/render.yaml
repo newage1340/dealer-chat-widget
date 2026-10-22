@@ -1,0 +1,72 @@
+# Render blueprint for the TypeScript front desk. Not active until you create the blueprint in Render.
+# Pick the web service plan you already pay for; the database's smallest plan costs a few dollars a month.
+services:
+  - type: web
+    name: frontdesk
+    runtime: node
+    rootDir: frontdesk
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false
+    startCommand: node src/main.ts
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "26"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: frontdesk-db
+          property: connectionString
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: UPLOAD_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+      - key: TWILIO_DEFAULT_FROM
+        sync: false
+      - key: TWILIO_VALIDATE_SIGNATURES
+        value: "true"
+      - key: SESSION_SECRET
+        generateValue: true
+      # Email: Gmail (the Python app's variables) or Resend; set one.
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: NOTIFY_FROM_EMAIL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: ONBOARDING_CODE
+        sync: false
+      - key: ONBOARDING_NOTIFY_EMAIL
+        sync: false
+      # Voice stays on Twilio <Gather> until Deepgram (or the local GPU machine) is approved.
+      - key: VOICE_PIPELINE
+        value: twilio_gather
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      # Billing: off until STRIPE_SECRET_KEY is set.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_BASE
+        sync: false
+      - key: STRIPE_PRICE_EXTRA_LINE
+        sync: false
+      - key: STRIPE_PRICE_SMS_ALERTS
+        sync: false
+
+databases:
+  - name: frontdesk-db
+    plan: basic-256mb

@@ -1,0 +1,50 @@
+Item #,Dish,Chinese Name,Section,Price,Spicy,Dietary,Notes,Tags
+A1,Egg Rolls (2),春卷,Appetizers,4.25,,,"Crispy rolls with cabbage, carrot and pork.",egg roll pork appetizer
+A2,Vegetable Spring Rolls (4),素春卷,Appetizers,5.50,,Vegetarian,"Thin, crispy rolls filled with cabbage, carrot and glass noodles.",spring roll veggie vegetable
+A3,Crab Rangoon (8),蟹角,Appetizers,7.95,,,Fried wontons filled with cream cheese and imitation crab; sweet and sour sauce on the side.,rangoon crab cheese wonton cream cheese puffs
+A4,Pork Potstickers (6),锅贴,Appetizers,8.50,,,"Pan-fried pork and cabbage dumplings, house-made, with ginger soy dipping sauce.",potstickers dumplings gyoza pan fried
+A5,Steamed Vegetable Dumplings (6),蒸素饺,Appetizers,8.25,,Vegetarian,"Bok choy, mushroom and tofu dumplings, steamed.",dumplings veggie steamed
+A6,Scallion Pancake,葱油饼,Appetizers,6.50,,Vegetarian,Flaky pan-fried flatbread with green onion.,scallion green onion pancake bread
+A7,Pu Pu Platter (for 2),宝宝盘,Appetizers,16.95,,,"Egg rolls, crab rangoon, chicken wings, beef teriyaki skewers and fried shrimp.",pupu sampler combo platter
+S1,Wonton Soup,云吞汤,Soups,4.95,,,Pork wontons in clear chicken broth with bok choy. Quart size 9.50.,wonton soup
+S2,Hot and Sour Soup,酸辣汤,Soups,4.95,Medium,,"Tofu, bamboo shoots, mushroom and egg in a peppery, tangy broth. Quart size 9.50.",hot sour soup
+S3,Egg Drop Soup,蛋花汤,Soups,4.50,,Vegetarian,Silky egg ribbons in vegetable broth. Quart size 8.50.,egg flower soup
+S4,House Special Soup (serves 2-3),全家福汤,Soups,13.95,,,"Shrimp, chicken, pork, and vegetables in a rich broth.",house special seafood soup
+C1,General Tso's Chicken,左宗鸡,Chicken,15.95,Medium,,"Crispy chicken tossed in a sweet, tangy, lightly spicy sauce with broccoli. Served with white rice.",general tso general tsao generals chicken
+C2,Kung Pao Chicken,宫保鸡丁,Chicken,15.50,Hot,Contains peanuts,"Diced chicken with peanuts, dried chilies, celery and bell peppers in a Sichuan-style sauce.",kung pao gong bao peanut chicken
+C3,Sesame Chicken,芝麻鸡,Chicken,15.95,,,Crispy chicken glazed in a honey-sesame sauce.,sesame chicken sweet
+C4,Orange Chicken,陈皮鸡,Chicken,15.95,Mild,,Crispy chicken in a citrus-orange glaze with a hint of chili.,orange chicken
+C5,Chicken with Broccoli,芥兰鸡,Chicken,14.50,,Gluten-free option,Sliced white-meat chicken and broccoli in a light brown sauce. Gluten-free sauce on request.,chicken broccoli healthy
+C6,Moo Goo Gai Pan,蘑菇鸡片,Chicken,14.50,,Gluten-free option,"Sliced chicken with mushrooms, snow peas and water chestnuts in a white sauce.",moo goo gai pan mushroom chicken white sauce
+B1,Beef with Broccoli,芥兰牛,Beef,16.95,,Gluten-free option,Tender flank steak and broccoli in oyster sauce. Gluten-free sauce on request.,beef broccoli
+B2,Mongolian Beef,蒙古牛,Beef,17.50,Mild,,"Flank steak seared with scallions and onions in a sweet soy glaze.",mongolian beef scallion
+B3,Pepper Steak with Onion,青椒牛,Beef,16.50,,,"Sliced beef with green peppers and onions in black bean sauce.",pepper steak black bean
+B4,Szechuan Beef,四川牛,Beef,17.50,Hot,,"Shredded beef with carrots, celery and chili in a hot garlic sauce.",szechuan sichuan spicy beef
+F1,Honey Walnut Shrimp,核桃虾,Seafood,19.95,,,Crispy shrimp in a light honey-mayo sauce with candied walnuts. Contains tree nuts.,walnut shrimp honey
+F2,Shrimp with Lobster Sauce,虾龙糊,Seafood,18.50,,,Shrimp in a savory white garlic-egg sauce with peas and carrots. No lobster in the dish.,lobster sauce shrimp
+F3,Salt and Pepper Shrimp,椒盐虾,Seafood,19.50,Mild,,"Lightly fried shrimp tossed with garlic, jalapeño and scallion.",salt pepper shrimp
+F4,Kung Pao Shrimp,宫保虾,Seafood,18.95,Hot,Contains peanuts,"Shrimp with peanuts, dried chilies and vegetables in Sichuan sauce.",kung pao gong bao peanut shrimp
+F5,Steamed Whole Fish with Ginger and Scallion,清蒸鱼,Seafood,32.00,,Gluten-free option,"Whole tilapia steamed with ginger, scallion and light soy. Takes about 25 minutes; call ahead.",whole fish steamed tilapia
+V1,Ma Po Tofu,麻婆豆腐,Vegetable,13.95,Hot,Vegetarian,"Soft tofu in a numbing, spicy chili bean sauce. Normally made with ground pork; vegetarian on request.",mapo tofu spicy tofu
+V2,Buddha's Delight,罗汉斋,Vegetable,13.50,,Vegetarian; Gluten-free option,"Mixed vegetables and fried tofu in a light white sauce.",buddhas delight mixed vegetables vegan
+V3,Dry-Fried Green Beans,干煸四季豆,Vegetable,13.50,Medium,Vegetarian,"Wok-blistered green beans with garlic and preserved vegetable.",green beans string beans
+V4,Eggplant in Garlic Sauce,鱼香茄子,Vegetable,13.95,Medium,Vegetarian,Chinese eggplant in a sweet and spicy garlic sauce.,eggplant garlic sauce
+N1,House Fried Rice,本楼炒饭,Noodles & Rice,14.50,,,"Fried rice with chicken, pork, shrimp, egg, peas and scallion. Single-protein fried rice 12.95.",fried rice combination
+N2,Vegetable Fried Rice,素炒饭,Noodles & Rice,11.95,,Vegetarian,"Egg, peas, carrot, bean sprouts and scallion.",veggie fried rice
+N3,Chicken Lo Mein,鸡捞面,Noodles & Rice,13.50,,,Soft egg noodles stir-fried with chicken and vegetables.,lo mein noodles
+N4,Beef Chow Fun,干炒牛河,Noodles & Rice,15.95,,,"Wide rice noodles wok-tossed with beef, bean sprouts and scallion.",chow fun ho fun rice noodles
+N5,Singapore Rice Noodles,星洲米粉,Noodles & Rice,15.50,Medium,,"Thin rice noodles with shrimp, pork, egg and curry powder.",singapore mei fun curry noodles
+N6,Dan Dan Noodles,担担面,Noodles & Rice,13.95,Hot,Contains peanuts,"Wheat noodles with ground pork, chili oil and crushed peanuts.",dan dan noodles spicy
+N7,Steamed White Rice (pint),白饭,Noodles & Rice,2.50,,Vegetarian; Gluten-free,Extra rice. Brown rice 3.25.,rice white rice brown rice
+X1,Peking Duck (half),北京烤鸭,Chef Specials,34.00,,,"Roast duck carved with pancakes, scallion and hoisin. Whole duck 62.00 with 24 hours notice.",peking duck roast duck
+X2,Three Cup Chicken,三杯鸡,Chef Specials,18.95,Mild,,"Bone-in chicken braised with sesame oil, rice wine, soy and basil in a clay pot.",three cup chicken basil
+X3,Cumin Lamb,孜然羊肉,Chef Specials,21.50,Hot,,"Sliced lamb stir-fried with cumin, chili and onion.",cumin lamb spicy
+X4,Grandma's Braised Pork Belly,红烧肉,Chef Specials,19.95,,,Pork belly slow-braised in soy and rock sugar. Family recipe; limited each day.,braised pork belly red cooked pork
+L1,Lunch: General Tso's Chicken,午餐左宗鸡,Lunch Specials,10.95,Medium,,Lunch portion with fried rice and an egg roll or soup. Weekdays 11am to 3pm.,lunch special general tso
+L2,Lunch: Beef with Broccoli,午餐芥兰牛,Lunch Specials,11.50,,,Lunch portion with fried rice and an egg roll or soup. Weekdays 11am to 3pm.,lunch special beef broccoli
+L3,Lunch: Sweet and Sour Chicken,午餐甜酸鸡,Lunch Specials,10.50,,,Lunch portion with fried rice and an egg roll or soup. Weekdays 11am to 3pm.,lunch special sweet sour
+L4,Lunch: Ma Po Tofu,午餐麻婆豆腐,Lunch Specials,10.50,Hot,Vegetarian,Lunch portion with steamed rice and soup. Weekdays 11am to 3pm.,lunch special tofu vegetarian
+T1,Catering Tray: Lo Mein (half tray),捞面大盘,Catering Trays,45.00,,,"Feeds 8-10. Chicken, beef, or vegetable. 24 hours notice.",catering tray party lo mein
+T2,Catering Tray: General Tso's Chicken (half tray),左宗鸡大盘,Catering Trays,65.00,Medium,,Feeds 8-10. 24 hours notice.,catering tray party general tso
+T3,Catering Tray: Fried Rice (half tray),炒饭大盘,Catering Trays,40.00,,,"Feeds 10-12. Vegetable, chicken, or house. 24 hours notice.",catering tray party fried rice
+T4,Catering Tray: Egg Rolls (25),春卷大盘,Catering Trays,42.00,,,25 egg rolls with sweet and sour sauce. 24 hours notice.,catering tray party egg rolls

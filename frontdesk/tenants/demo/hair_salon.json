@@ -1,0 +1,44 @@
+{
+  "id": "demo-hair-salon",
+  "slug": "demo-hair-salon",
+  "name": "Mass Ave Hair Studio",
+  "domain": "hair_salon",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0151",
+  "address": "742 Massachusetts Ave, Indianapolis, IN 46204",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday: closed, Tuesday-Friday: 9am to 7pm, Saturday: 8am to 4pm, Sunday: closed",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "stylists": "Rachel (owner, master stylist: balayage, blonding and color corrections), Marisol (senior stylist: curly cuts, silk presses, bilingual English/Spanish), Devon (stylist: men's cuts, fades and kids cuts), Kayla (stylist: extensions, blowouts and bridal styling).",
+    "pricing": "Prices are starting-at for short to shoulder-length hair. Hair past the shoulders or very thick hair adds $15-$40 on cuts and color, plus $10 per extra bowl of color. Rachel's services are about 20% higher than the menu. Consultations are free.",
+    "color_policy": "Every new color client needs a free 15-minute patch test at least 48 hours before their first color, lightening or keratin appointment. Color corrections and going more than 3 shades lighter require a free consultation first and may take more than one session.",
+    "booking_policy": "A $50 deposit holds color, balayage, extensions and any appointment over 2 hours; it goes toward the service. Please give 24 hours notice to cancel or reschedule - late cancellations and no-shows forfeit the deposit. Arriving more than 15 minutes late may mean shortening the service or rescheduling.",
+    "products": "Color: Redken Shades EQ and Wella. Bond builders: Olaplex and K18. Retail: Redken, Olaplex, Briogeo and Moroccanoil.",
+    "policies": "We accept cash, all major cards, Apple Pay and Venmo. Free street parking on the side streets and a paid lot behind the building. Walk-ins welcome for men's and kids cuts when a chair is open. Kids under 12 should come with an adult. We don't do perms or chemical relaxers. For color, please arrive with dry hair and no heavy product."
+  },
+  "options": {
+    "patch_test_required": true,
+    "deposit_required": true,
+    "deposit_amount": "$50"
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en",
+      "es"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "hair_salon.json"
+      }
+    }
+  }
+}

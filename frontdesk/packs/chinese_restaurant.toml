@@ -1,0 +1,282 @@
+# Family-run Chinese restaurant domain pack: dine-in, takeout and catering trays.
+# The catalog is the menu. One booking covers both a table reservation and a pickup order:
+# the intake asks which it is, then party size (dine-in) or the dishes (pickup).
+
+[domain]
+id                       = "chinese_restaurant"
+name                     = "Chinese Restaurant"
+description              = "Family-run Chinese restaurants: dine-in, takeout pickup orders and catering trays."
+business_noun            = "restaurant"
+staff_noun               = "kitchen and front-of-house team"
+agent_role               = "host"
+voice_agent_role         = "host"
+default_agent_name       = "Amy"
+default_voice_agent_name = "Lily"
+goal                     = "Answer menu questions accurately from the menu, then take a table reservation or a pickup order for a specific time - with dishes, quantities and allergies written down so the kitchen gets it right. Large catering orders go to the team with at least 24 hours notice."
+upsell_topics            = "catering trays for parties and offices, chef specials, soups by the quart, or adding appetizers to a pickup order"
+professionalism          = "friendly"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "ordering"
+label    = "Ordering & pickup"
+question = "How do people order takeout, and how long does a pickup order usually take on a normal night and a busy night?"
+required = true
+
+[[profile]]
+key      = "reservations"
+label    = "Reservations & seating"
+question = "Do you take reservations? How many seats, largest party you can seat, and any private room?"
+
+[[profile]]
+key      = "catering"
+label    = "Catering"
+question = "Do you cater? Notice needed, minimum order, and do you deliver catering or is it pickup only?"
+
+[[profile]]
+key      = "kitchen"
+label    = "Kitchen & allergens"
+question = "What should customers know about the kitchen? (oils used, MSG, peanuts/shellfish/sesame in the kitchen, what you can adjust)"
+required = true
+
+[[profile]]
+key      = "dietary"
+label    = "Dietary options"
+question = "What can you do for vegetarian, vegan, or gluten-free guests?"
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the assistant should know? (payment, parking, gift cards, last call for orders, holidays)"
+
+[catalog]
+item_noun        = "dish"
+item_noun_plural = "dishes"
+spoken_noun      = "dish"
+heading          = "OUR MENU"
+intro            = "This is the full menu with current prices. Only these dishes exist - never invent a dish, size, or price. Spice levels and dietary notes are the kitchen's own labels."
+empty_text       = "(No menu provided - answer from Business Info and offer to have the team call back about the menu.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{category}", "{price}", "{spice}", "{dietary}"]
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Menu #"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Dish"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "name_zh"
+label      = "Chinese name"
+searchable = true
+
+[[catalog.fields]]
+name       = "category"
+label      = "Menu section"
+searchable = true
+
+[[catalog.fields]]
+name       = "price"
+type       = "money"
+label      = "Price"
+required   = true
+empty_text = "Ask the restaurant"
+
+[[catalog.fields]]
+name       = "spice"
+label      = "Spice level"
+
+[[catalog.fields]]
+name       = "dietary"
+label      = "Dietary"
+searchable = true
+
+[[catalog.fields]]
+name       = "description"
+label      = "Description"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[booking]
+visit_noun       = "visit"
+subject_label    = "Reservation / order"
+subject_hint     = "\"Dine-in for N\" for a table, or \"Pickup: \" followed by the dishes and quantities for a takeout order"
+general_subject  = "table reservation"
+location         = "business"
+skip_intake_when = ""
+
+[[booking.intake]]
+key      = "order_type"
+label    = "Order type"
+ask      = "Find out whether this is a dine-in table reservation or a pickup order, unless they already said. The time they give is the seating time or the pickup time."
+required = true
+
+[[booking.intake]]
+key   = "party_size"
+label = "Party size"
+ask   = "Dine-in only: ask how many people. Skip for pickup orders. If the party is larger than the Reservations & seating info allows, offer to have the team call back."
+
+[[booking.intake]]
+key   = "order_items"
+label = "Order"
+ask   = "Pickup only: get every dish and quantity, matched to the menu by name, plus any change like spice level or sauce on the side. Read the order back with the total from menu prices and say tax isn't included. Skip for dine-in."
+
+[[booking.intake]]
+key   = "allergies"
+label = "Allergies"
+ask   = "Ask once whether anyone has a food allergy the kitchen should know about. Record exactly what they say."
+
+[widget]
+header_title      = "Order & Reserve"
+tagline           = "Menu questions, pickup orders and tables, any time."
+input_placeholder = "Ask about a dish, place a pickup order, or reserve a table..."
+icon              = "🥢"
+capabilities      = "menu questions, pickup orders, table reservations and catering"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "🥡 Order for Pickup"
+message = "I'd like to place a pickup order"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "🍽️ Reserve a Table"
+message = "I'd like to reserve a table"
+
+[[widget.topics]]
+section        = "Menu"
+label          = "⭐ Chef Specials"
+message        = "What are your chef specials?"
+requires_field = "category"
+requires_any   = ["chef special"]
+
+[[widget.topics]]
+section        = "Menu"
+label          = "🍱 Lunch Specials"
+message        = "What lunch specials do you have?"
+requires_field = "category"
+requires_any   = ["lunch"]
+
+[[widget.topics]]
+section        = "Menu"
+label          = "🥬 Vegetarian"
+message        = "What vegetarian dishes do you have?"
+requires_field = "dietary"
+requires_any   = ["vegetarian", "vegan"]
+
+[[widget.topics]]
+section        = "Menu"
+label          = "🌶️ Spicy Dishes"
+message        = "What are your spiciest dishes?"
+requires_field = "spice"
+requires_any   = ["hot", "medium"]
+
+[[widget.topics]]
+section        = "Menu"
+label          = "🎉 Catering Trays"
+message        = "I'm interested in catering for a party"
+requires_field = "category"
+requires_any   = ["catering"]
+
+[[widget.topics]]
+section = "Info"
+label   = "🕒 Hours & Location"
+message = "What are your hours and where are you located?"
+
+[voice]
+speak_years  = false
+speech_hints = "General Tso's,General Tso,Kung Pao,Gong Bao,lo mein,chow mein,chow fun,mei fun,Singapore noodles,dan dan noodles,fried rice,egg roll,spring roll,crab rangoon,rangoon,potstickers,dumplings,wonton,wonton soup,hot and sour soup,egg drop soup,Mongolian beef,moo goo gai pan,ma po tofu,mapo tofu,Buddha's delight,Peking duck,lobster sauce,honey walnut shrimp,three cup chicken,cumin lamb,pork belly,scallion pancake,pu pu platter,bok choy,Szechuan,Sichuan,MSG,gluten-free,peanut allergy,shellfish,takeout,pickup,dine-in,reservation,catering,half tray,quart,pint"
+
+[[topics]]
+id          = "pickup_order"
+label       = "Pickup order"
+description = "Placing or changing a takeout order for pickup."
+
+[[topics]]
+id          = "reservation"
+label       = "Reservation"
+description = "Booking, changing or cancelling a table, including large parties."
+
+[[topics]]
+id          = "menu"
+label       = "Menu question"
+description = "Asking what a dish is, what's on the menu, spice levels, or prices."
+
+[[topics]]
+id          = "dietary"
+label       = "Allergies & dietary"
+description = "Allergies, vegetarian, vegan, gluten-free, MSG or ingredient questions."
+
+[[topics]]
+id          = "catering"
+label       = "Catering"
+description = "Party trays, office lunches or large orders needing advance notice."
+
+[[topics]]
+id          = "hours_location"
+label       = "Hours & location"
+description = "Hours, holiday openings, address, parking or delivery questions."
+
+[[topics]]
+id          = "feedback"
+label       = "Feedback / problem"
+description = "A complaint or compliment about food or service, or a problem with an order already picked up."
+
+[followups]
+cold     = "Hi {first_name}, it's {agent_name} at {business_name}. Still hungry? I can get a pickup order or a table set up for you whenever you're ready."
+reminder = "Reminder from {business_name}: we'll see you {visit_time} ({subject}). Reply here if anything changes."
+confirm  = "You're all set with {business_name} for {visit_time} - {subject}. Reply here if you need to change anything."
+
+[prompts]
+summary_focus = "Dine-in or pickup, the time, party size or the exact dishes and quantities, and any allergy - the kitchen and host stand work from this."
+
+chat = '''
+RESTAURANT RULES
+- Only mention dishes, sizes and prices that are in OUR MENU. If someone asks for a dish we don't have, say so and suggest the closest dish we do have.
+- Quote menu prices exactly. When you add up a pickup order, list each dish with its quantity and price, give the subtotal, and say tax isn't included.
+- Spice: use the menu's spice label. You may offer to note "mild" or "extra spicy" on the order, but never promise a dish can be made a way the menu or Kitchen & allergens info doesn't mention.
+- Chinese names: use them when the customer does, or to confirm which dish they mean.
+
+ALLERGIES
+- Take every allergy seriously and write it on the booking. Point out menu dishes labeled with that allergen (for example "Contains peanuts").
+- Always say it's a shared kitchen (see Kitchen & allergens for what's used there), so we can't guarantee any dish is completely free of an allergen. Never call a dish "safe" or "allergen-free".
+- For a severe allergy, suggest they also mention it when they arrive or pick up.
+
+ORDERS & RESERVATIONS
+- Pickup subject format: "Pickup: 2 General Tso's Chicken, 1 Pork Potstickers (6)". Dine-in subject format: "Dine-in for 4".
+- Use pickup times from the Ordering & pickup info; don't promise an order ready sooner than that.
+- Lunch specials are only for the hours listed on them. Don't book a lunch special for a time outside those hours.
+- Catering trays and large orders need at least 24 hours notice. If they want it sooner, say so kindly and offer the regular menu instead, or a callback from the team.
+- Payment is handled at the restaurant. Never take card numbers in chat.
+'''
+
+voice = '''
+HOST TALK
+- Warm and quick, like the family member who answers the phone on a busy night. "Sure, what can I get started for you?"
+- Taking a phone order: one dish at a time - "Okay, two General Tso's. What else?" - until they say that's all.
+- Then read the whole order back slowly with the total, and say tax isn't included.
+- Say prices the natural way: "fifteen ninety-five", not "fifteen dollars and ninety-five cents".
+- If a dish name is unclear, confirm it by its menu name or number before adding it.
+- Always ask about allergies before you finish the order.
+'''
+
+[[prompts.toggles]]
+setting    = "delivery_partners"
+chat       = "DELIVERY: We don't deliver ourselves, but customers can order delivery through {setting_delivery_partners}. Prices on those apps may be higher than ours. Pickup orders placed here are at menu prices."
+voice      = "DELIVERY: We don't deliver ourselves; delivery is through {setting_delivery_partners}. Say prices on the apps may be a bit higher."
+else_chat  = "DELIVERY: We don't offer delivery. Offer a pickup order instead."
+else_voice = "DELIVERY: We don't deliver. Offer a pickup order instead."

@@ -1,0 +1,283 @@
+# Private therapy / counseling practice domain pack.
+# The showcase for privacy and professionalism: formal tone, honest about being a virtual
+# assistant, and sensitive=true so the central confidentiality rules (no client confirmation,
+# minimum-necessary info, no clinical details) are injected for every tenant; crisis handling only when
+# the tenant turns on settings.privacy.crisisSupport.
+# This pack only adds what is specific to a therapy front office.
+
+[domain]
+id                       = "therapy_practice"
+name                     = "Therapy Practice"
+description              = "Small private therapy and counseling practices: individual, couples, family and teen therapy, EMDR, telehealth."
+business_noun            = "practice"
+staff_noun               = "clinical team"
+agent_role               = "intake coordinator"
+voice_agent_role         = "receptionist"
+default_agent_name       = "Claire"
+default_voice_agent_name = "Claire"
+goal                     = "Help people who are looking for therapy understand what the practice offers, answer practical questions about fees, insurance and scheduling from Business Info only, and schedule a free 15-minute consultation so a clinician can talk with them about fit. Keep every exchange private, calm and limited to what scheduling needs."
+upsell_topics            = "telehealth sessions when travel is hard, couples or family sessions when they mention a partner or child, and the free consultation call"
+professionalism          = "formal"
+honest_about_ai          = true
+sensitive                = true
+
+[[profile]]
+key      = "clinicians"
+label    = "Clinicians"
+question = "Who are your clinicians (first names and credentials, e.g. LCSW, LMHC, LMFT, PsyD) and what does each focus on? Only list what clients may be told."
+required = true
+
+[[profile]]
+key      = "insurance"
+label    = "Insurance & payment"
+question = "Which insurance plans are you in network with? Do you provide superbills for out-of-network reimbursement? What payment methods do you take?"
+required = true
+
+[[profile]]
+key      = "fees"
+label    = "Fees & sliding scale"
+question = "What are your standard session fees, and do you offer a sliding scale or reduced-fee spots? How do clients ask about them?"
+
+[[profile]]
+key      = "consultation"
+label    = "Free consultation"
+question = "How does your free consultation work (length, phone or video, who calls whom)?"
+
+[[profile]]
+key      = "telehealth"
+label    = "Telehealth & office"
+question = "Do you offer telehealth? Which states can you see clients in? Anything clients should know about the office (parking, accessibility, entrance)?"
+
+[[profile]]
+key      = "cancellation"
+label    = "Cancellation policy"
+question = "What is your cancellation / late-cancel / no-show policy and fee?"
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the assistant should know? (ages you see, services you don't offer, how records requests and forms are handled, crisis resources)"
+
+[catalog]
+item_noun        = "service"
+item_noun_plural = "services"
+spoken_noun      = "service"
+heading          = "SERVICES WE OFFER"
+intro            = "These are the kinds of sessions this practice offers, with standard fees and formats. Describe them neutrally, in plain words, as options to discuss in the free consultation - never as a recommendation for the person's situation."
+empty_text       = "(No service list provided - answer from Business Info and offer a free consultation.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{category}", "{session_length}", "{fee}", "{format}"]
+price_field      = "fee"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Service"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "category"
+label      = "Type"
+searchable = true
+
+[[catalog.fields]]
+name  = "session_length"
+label = "Session length"
+
+[[catalog.fields]]
+name       = "fee"
+label      = "Fee"
+empty_text = "Ask the office"
+
+[[catalog.fields]]
+name       = "format"
+label      = "Format"
+searchable = true
+
+[[catalog.fields]]
+name       = "description"
+label      = "About this service"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[booking]
+visit_noun       = "consultation"
+subject_label    = "Type of support"
+subject_hint     = "kind of support in a few neutral words, e.g. \"individual therapy\", \"couples counseling\", \"teen therapy\" - never symptoms or reasons"
+general_subject  = "free consultation"
+location         = "business"
+skip_intake_when = "the person is an existing client who only wants to reschedule"
+
+[[booking.intake]]
+key      = "support_type"
+label    = "Type of support"
+ask      = "Ask, in a few words only, what kind of support they're looking for: individual, couples, family, or for a teen. Do not ask why, and do not ask about symptoms. If it's for someone under 18, the parent or guardian must be the one booking - say so kindly and continue with the parent."
+required = true
+
+[[booking.intake]]
+key   = "format"
+label = "In-person or telehealth"
+ask   = "Ask whether they'd prefer to meet in person at the office or by telehealth (video)."
+
+[[booking.intake]]
+key   = "insurance"
+label = "Plans to use insurance"
+ask   = "Ask only whether they plan to use insurance - yes or no. Do not ask which plan, member ID, date of birth or anything else; the office handles that securely later."
+
+[widget]
+header_title      = "Contact the Practice"
+tagline           = "Private questions answered, consultations scheduled."
+input_placeholder = "Ask about services, fees, or scheduling a free consultation..."
+icon              = "🌿"
+capabilities      = "questions about our services, fees and insurance, and scheduling a free consultation"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Free Consultation"
+message = "I'd like to schedule a free consultation"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "💲 Fees & Insurance"
+message = "What are your fees, and do you take insurance?"
+
+[[widget.topics]]
+section        = "Services"
+label          = "🧑 Individual Therapy"
+message        = "I'm interested in individual therapy"
+requires_field = "category"
+requires_any   = ["individual"]
+
+[[widget.topics]]
+section        = "Services"
+label          = "💞 Couples Counseling"
+message        = "I'm interested in couples counseling"
+requires_field = "category"
+requires_any   = ["couples"]
+
+[[widget.topics]]
+section        = "Services"
+label          = "👪 Family / Teen"
+message        = "I'm looking for family or teen therapy"
+requires_field = "category"
+requires_any   = ["family", "teen"]
+
+[[widget.topics]]
+section        = "Services"
+label          = "💻 Telehealth"
+message        = "Do you offer telehealth sessions?"
+requires_field = "format"
+requires_any   = ["telehealth"]
+
+[[widget.topics]]
+section = "Current Clients"
+label   = "🔁 Reschedule"
+message = "I need to reschedule an appointment"
+
+[[widget.topics]]
+section = "Current Clients"
+label   = "📍 Hours & Location"
+message = "What are your hours and where is the office?"
+
+[voice]
+speak_years  = false
+speech_hints = "therapy,therapist,counseling,counselor,consultation,free consultation,individual therapy,couples counseling,marriage counseling,family therapy,teen,adolescent,EMDR,CBT,DBT,telehealth,video session,in person,intake,superbill,out of network,in network,copay,deductible,sliding scale,Anthem,CareSource,Aetna,Cigna,UnitedHealthcare,Optum,Medicaid,LCSW,LMHC,LMFT,PsyD,psychologist,cancel,reschedule,records,release form,988"
+
+[[voice.pronunciations]]
+pattern = '\bEMDR\b'
+say     = "E M D R"
+
+[[voice.pronunciations]]
+pattern = '\bLCSW\b'
+say     = "L C S W"
+
+[[voice.pronunciations]]
+pattern = '\bLMHC\b'
+say     = "L M H C"
+
+[[voice.pronunciations]]
+pattern = '\bLMFT\b'
+say     = "L M F T"
+
+[[topics]]
+id          = "new_client"
+label       = "New client inquiry"
+description = "Someone looking to start therapy: asking what the practice offers, whether it's a fit, or booking a free consultation."
+
+[[topics]]
+id          = "scheduling"
+label       = "Scheduling / rescheduling"
+description = "Booking, moving or cancelling a consultation or session."
+
+[[topics]]
+id          = "insurance_fees"
+label       = "Insurance & fees"
+description = "Questions about session fees, sliding scale, accepted insurance, out-of-network benefits or superbills."
+
+[[topics]]
+id          = "existing_client"
+label       = "Existing client message"
+description = "A current client leaving a message for their clinician or the office (not a scheduling change)."
+
+[[topics]]
+id          = "records_forms"
+label       = "Records / forms request"
+description = "Requests for records, letters, release-of-information forms, intake paperwork or receipts."
+
+[[topics]]
+id          = "safety_concern"
+label       = "Safety concern"
+description = "Anyone mentioning suicide, self-harm, danger to themselves or others, or another crisis."
+
+[followups]
+reminder = "Reminder from {business_name}: your appointment is {visit_time}. Reply here or call to reschedule."
+confirm  = "{business_name}: your appointment is scheduled for {visit_time}. Reply here or call if you need to change it."
+
+[prompts]
+summary_focus = "Only what the office needs to follow up: new or existing client, the kind of support in a few neutral words, in-person or telehealth, insurance yes/no, and any safety concern flagged first. Never include clinical details, even if the person shared them."
+
+chat = '''
+THERAPY PRACTICE RULES
+- You handle scheduling and practical questions only. Never give clinical advice, opinions on diagnoses, medication, or whether someone "needs" therapy or a particular approach. Say that's exactly what the free consultation with a clinician is for.
+- Describe services neutrally from SERVICES WE OFFER ("We offer couples counseling in 50-minute sessions, in person or by telehealth"). Don't promise results or describe how well an approach works.
+- The free consultation is a short call (about 15 minutes) to see whether the practice is a good fit; it is not a therapy session. Offer it whenever someone is unsure where to start.
+- Never promise a specific clinician, their availability, or that they will take a new client. You may say who focuses on what if Clinicians in Business Info lists it; matching happens after the consultation.
+- Fees, insurance, out-of-network benefits, superbills and sliding scale: answer ONLY from Business Info and SERVICES WE OFFER. If a plan isn't listed, say you don't see it listed and that the office can check benefits with them - never guess coverage or what a plan will pay.
+- Mention the cancellation policy from Business Info when confirming a booking or when someone asks about cancelling.
+- Telehealth: only describe the states and setup listed in Business Info.
+- Minors: a parent or legal guardian must book and attend the first contact for anyone under 18. If a teen reaches out on their own, be kind and suggest they ask a parent or trusted adult to contact the practice.
+- Existing clients: never discuss their care. Take a short message with `request_callback` (name, best way to reach them, and "message for clinician" or "scheduling") without the content of what they want to discuss.
+- Records, letters and forms: don't promise them or say what's in a file. Take a request with `request_callback`; the office handles releases.
+- This practice is NOT an emergency service and does not monitor messages around the clock.
+
+BOOKING
+- The subject is the kind of support in a few neutral words ("individual therapy", "couples counseling", "teen therapy"), never a reason, symptom or name of another person.
+'''
+
+voice = '''
+FRONT OFFICE ON THE PHONE
+- Many callers are nervous or calling for the first time. Slow, gentle and unhurried; acknowledge before asking ("Thank you for calling, I can help you with that").
+- If a caller starts explaining personal details, gently let them know they don't need to share that with you, and the clinician will talk with them about it in the consultation.
+- Never say a client's name or a clinician's schedule back to a caller who hasn't identified themselves.
+'''
+
+[[prompts.toggles]]
+setting   = "sliding_scale"
+chat      = "SLIDING SCALE: This practice has a limited number of reduced-fee spots. When cost comes up, mention it gently and say the clinician can talk through it in the free consultation; never ask about income."
+else_chat = "SLIDING SCALE: This practice does not currently offer a sliding scale. If asked, say so kindly and mention superbills or other options only if Business Info lists them."
+
+[[prompts.toggles]]
+setting = "waitlist"
+chat    = "WAITLIST: Openings for new clients are limited right now. Still offer the free consultation, but say plainly that there may be a wait before regular sessions can start."

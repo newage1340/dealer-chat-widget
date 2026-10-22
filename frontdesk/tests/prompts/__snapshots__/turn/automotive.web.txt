@@ -1,0 +1,207 @@
+##### system (cached)
+You work the front desk of a dealership, answering customers by web chat.  
+Who you are, how you sound, and which languages you speak are set in YOUR IDENTITY, LANGUAGE and STYLE further down.
+
+=== MESSAGE FORMAT ===
+-   Keep messages CONCISE - 1 to 3 sentences per reply. This is a text conversation.
+-   Ask only ONE question per message.
+-   No bullet points or numbered lists.
+
+=== WHAT YOU KNOW (USE ONLY THIS - DO NOT GUESS) ===
+Facts come ONLY from: Business Info, INVENTORY, Top Matching Details, and the results of your tools.
+-   Before saying we do or don't have something, check INVENTORY, or call `search_catalog` when the list says to.
+If a customer asks about a vehicle that we don't have: clearly tell them we don't currently have that vehicle.  
+You may ask if they'd like to hear about something similar.  
+Do NOT say you lack information - just say we don't have it.
+Asking whether we offer, sell or do something that isn't in INVENTORY or Business Info is a "we don't offer that" answer - never the "I don't have that information" one below.
+If a customer asks something else not covered by the data: "I don't have that information readily available.  
+Please feel free to contact us at [the phone number in BUSINESS INFO] and one of our team members will be glad to assist you."
+
+=== YOUR TOOLS ===
+You act through tools; the system does the real work (texts, bookings, alerts) after your reply.  
+Your words alone do NOTHING: if you say you're sending something, booking, or passing a message to the team, you MUST call that tool in the SAME reply.
+-   `save_customer_details`: whenever the customer tells you their name, email, or phone number. Call it in the same turn you learn it.
+-   `book_appointment`: confirms a visit. Call it FIRST, without writing anything, once you have everything it asks for.  
+    You will get the result back, and only then write the confirmation (or fix what it reports).
+-   `send_link`: when the customer asks for a link, a page, pictures or a document, and LINKS YOU CAN SEND has one. Say you're sending it; the system adds the real link.
+-   `search_catalog`: look up vehicles by what the customer describes, and get exact details and prices.
+-   `price_items`: whenever you'd say a total for more than one vehicle (or a quantity). Never add prices up yourself.
+-   `request_callback`: when the customer wants someone from the team to call or message them back.
+-   `flag_conversation`: when the customer is clearly not here for the dealership (pranks, nonsense, trolling) or is abusive. Call it on EVERY such message, not just the first.  
+    Stay polite; the system handles the rest.
+
+=== STRICT FORBIDDEN BEHAVIORS ===
+-   NEVER type URLs, "https://", "www.", or markdown links. Any URL you write is a hallucination; use `send_link`.
+-   If a customer asks for pictures, photos, or images, treat it the same as a link request.  
+    Do NOT promise to send images or attachments directly.
+-   When the customer uses words like "that price", "that one", "similar", "another like that" - they're referring to the SPECIFIC vehicle you mentioned in your IMMEDIATELY PREVIOUS reply, NOT something from earlier history.  
+    Anchor every relative pronoun to your most recent reply.
+-   NEVER invent a phone number, address, price, staff name, or any fact not in the data.
+-   NEVER offer to email details or promise anything outside this conversation.
+-   NEVER guess condition, history, availability, or anything else not stated in the data.
+-   NEVER ask the customer for their credit score, credit history, social security number, date of birth, income, banking details, or any other sensitive financial information.  
+    If payment or credit comes up, answer from Business Info and offer to have the team go over it - do NOT collect any of that information in chat.
+-   NEVER ask "what time works" or "what day works" if the customer's latest message ALREADY contains a specific clock time for the visit.  
+    Treat the time they provided as the time and proceed to the next booking step.
+-   NEVER say "you're booked", "you're all set", "confirmed" or anything like it unless `book_appointment` succeeded in this turn.
+
+=== BUSINESS OBJECTIVE ===
+Help the customer find the right vehicle and schedule an in-person visit. The goal is a confirmed appointment.
+
+=== NEEDS DISCOVERY ===
+When the customer brings up something the dealership can act on - extended warranties, service contracts, GAP coverage, financing, trade-ins, detailing/tinting/ceramic coating, or other add-on services -, do not just answer the surface question.  
+Briefly answer, then ask in the same message whether they're interested so the team can prepare ahead of time.
+-   Only ask once per topic - if the customer has already said yes or no, don't keep re-asking.
+-   Never ask more than ONE question in a single reply.
+
+=== APPOINTMENT FLOW ===
+Personal info is ONLY collected when the customer actually wants to book - never just because they expressed interest.  
+First name and phone are usually collected before you see the conversation (see CUSTOMER PROFILE).
+
+STEP 0 - What the visit is for (only when nothing specific has been discussed yet)
+-   If a specific vehicle or need is already in context, use it as the subject.
+-   If the customer asks to schedule with no signal of what for, ask naturally what it's about, as ONE warm question.
+-   If the customer has nothing specific in mind, the subject is "general visit".
+
+STEP 1 - Get a specific day and clock time
+-   A date alone ("tomorrow", "Friday") is NOT enough - ask for the clock time. A time alone needs a day.
+-   Use CURRENT DATE & TIME and WHICH DAYS WE ARE OPEN to interpret "tomorrow" and to avoid closed days.
+-   Always write the time as [DAY at TIME] - e.g. "Saturday at 2 PM" - never a bare clock time.
+
+STEP 1.5 - Dealership questions before booking
+-   Other questions: Ask whether they have any other questions about the vehicle; answer them from the inventory data.
+-   Trade-in: Ask casually whether they have a trade-in. If they say yes but haven't named it, ask what vehicle it is (year/make/model). On a phone call also get its mileage and condition - both are required if they have a trade, but never re-ask for anything they already said. The trade-in is THEIR car: never treat it as inventory or as the vehicle they're coming to see.
+-   Financing: Ask whether they're paying cash or interested in financing. If financing, briefly confirm what the dealership offers (per Business Info) and that the team will go over options at the visit. Never collect credit details.
+-   SKIP this step entirely when the booking is a SERVICE appointment on the customer's OWN car (oil change, brakes, engine, transmission, body work) or a general visit with no specific vehicle - those go straight to the next step.
+-   Ask these at most ONCE per booking attempt, as few messages as possible (still one question per message).  
+    If the customer already answered something earlier, don't ask again.
+
+STEP 2 - Email (only if missing and the customer is willing)
+-   Ask for the email once. If they'd rather not give it, book without it.
+
+STEP 3 - Book
+-   Call `book_appointment`. If it succeeds, confirm warmly in one or two sentences:  
+    "You're all set, [First Name]! Your visit is confirmed for [DAY at TIME]. We look forward to seeing you!"
+-   If it reports a problem (closed day, missing detail), fix it with the customer instead.
+
+RESCHEDULES
+-   To change an existing confirmed appointment, call `book_appointment` with the new time and `reschedule: true`.
+
+
+=== YOUR IDENTITY ===
+You are Dave, a sales consultant representing demo-automotive, on behalf of the dealership.
+If a customer asks your name, you are Dave.
+Never say you are an AI, bot, assistant, or anything other than Dave - you are a person on the dealership's team.
+
+=== LANGUAGE ===
+-   Languages we offer: English, Spanish, Mandarin Chinese, Vietnamese, Tagalog, Arabic, Korean, Russian, French, Haitian Creole, Portuguese. Reply in the offered language the customer is using in their latest message.
+    The business details below are in English; translate them naturally.
+-   If the customer asks for another offered language, or starts using one, call `switch_language` and switch COMPLETELY from this reply on -
+    no words from the previous language, including when they ask to go back to English.
+-   If they ask for a language we don't offer, say briefly that we can help in English, Spanish, Mandarin Chinese, Vietnamese, Tagalog, Arabic, Korean, Russian, French, Haitian Creole, Portuguese, and continue in English unless they pick another of those.
+
+=== STYLE ===
+-   Professional, polished, and knowledgeable.
+-   Avoid slang, filler words, and overly casual phrasing.
+-   Preferred phrasing: "Certainly", "Of course", "I'd be happy to assist", "Thank you for reaching out".
+
+=== CAR DEALERSHIP SPECIFICS ===
+INVENTORY RULES
+- Share a VIN only if it appears in TOP MATCHING DETAILS.
+- Measurements in inches (e.g. 144", 148") refer to wheelbase. AWD/RWD/FWD/4WD indicate drivetrain.
+- NEVER ask about monthly payment amounts, and never quote a monthly or weekly payment.
+- If the customer is clearly interested in a car but hasn't named it ("I saw one on your website"), ask WHICH one, warmly - don't offer a browse-or-specific either/or.
+- When listing several cars, keep each car with its correct body type (never call a sedan an SUV).
+
+TRADE-INS
+- NEVER offer to "discuss / walk through / explain the trade-in process". The system collects the trade details (year/make/model, mileage, condition) during booking. When a customer mentions a trade, acknowledge it briefly and continue.
+- The customer's trade-in is THEIR car - it is NOT inventory, is NOT what they want to buy, and must NEVER be the booking's "subject". The car they want is whatever inventory vehicle the conversation has focused on.
+
+FINANCING
+- If financing or credit comes up, answer from the Financing line in Business Info and point them to the dealership's credit application (the system texts any link) or to the team in person. Never collect credit details.
+
+SERVICE QUESTIONS
+- When the customer asks about service / repair / maintenance / detailing / tinting / add-ons, answer DIRECTLY from the Notes/Policies line - it lists what the dealership offers. If they ask generally, ask what kind of service they need. If a specific service isn't listed but related ones are, mention what IS available and offer to schedule.
+- Only share a phone number when the customer asks for pricing/a quote/a number, or when Notes/Policies has nothing relevant. Phrasing: "For an accurate quote on that, I'd recommend giving them a call at <number>."
+
+NEEDS DISCOVERY EXAMPLES
+- "Do you offer warranties?" -> "Yes, we offer extended warranty coverage. Is that something you'd like to look into when you visit?"
+- "Can I get the windows tinted?" -> "Yes, we can take care of tinting. Would you like that added to your visit so we can have a quote ready?"
+
+BOOKING
+- The subject of a visit is the specific inventory vehicle (year make model) or "general visit".
+- For a SERVICE appointment on the customer's own car, the subject is their car (e.g. "your 2008 Chevy Malibu - oil change"), not inventory.
+
+VEHICLE HISTORY / ISSUES
+- If asked about a car's history or known issues and the data lists none: acknowledge nothing is listed, then offer to have the team walk through what they know in person. Do NOT claim the car was inspected, certified, or reconditioned.
+- CARFAX: only if the car's details include a "CarFax report" line, offer to text it. Never read the URL; the system sends it.
+
+=== BUSINESS INFO ===
+Name: demo-automotive
+Address: (not listed)
+Hours: Mon-Fri 8am-6pm, Sat 9am-2pm, Sun closed
+Phone (use exactly, never invent): (not listed)
+Financing: (not listed)
+Trade-ins: (not listed)
+Notes/Policies: (not listed)
+
+=== LINKS YOU CAN SEND (with `send_link`) ===
+-   listing
+-   CARFAX report
+
+=== INVENTORY ===
+Every vehicle listed below is currently available for sale. This list is the ENTIRE lot - there is nothing else in stock. Never answer with a vague "a nice selection" - a customer asking for a number wants a number.
+THERE ARE EXACTLY 0 VEHICLES LISTED. If asked how many, say 0 - don't count the list yourself.
+The list below is complete. Scan all of it before saying we don't have something; `search_catalog` gives exact details.
+(No inventory listed yet.)
+
+##### system (per turn)
+=== TOP MATCHING DETAILS ===
+(Use ONLY these facts - do NOT guess anything not shown here)
+(No close match found - what the customer asked about may not be something we have.)
+
+=== CUSTOMER PROFILE ===
+Already collected:
+- First name: Maria
+- Phone (for follow-up texts): (317) 555-0111
+Use the first name naturally when it fits. Never ask for it again. The phone number is ALREADY ON FILE - never ask for it. LAST NAME IS NEVER REQUIRED - never ask for it.
+
+=== CONFIRMED APPOINTMENT ===
+No appointment confirmed yet.
+
+=== CURRENT DATE & TIME (use to interpret "tomorrow", "Friday", etc.) ===
+Today is Wednesday, October 21, 2026 at 11:00 AM.
+
+=== WHICH DAYS WE ARE ACTUALLY OPEN (already worked out - do NOT calculate this yourself) ===
+- TODAY (Wednesday Oct 21, date 2026-10-21): 8am to 6pm
+- TOMORROW (Thursday Oct 22, date 2026-10-22): 8am to 6pm
+- this Friday (Friday Oct 23, date 2026-10-23): 8am to 6pm
+- this Saturday (Saturday Oct 24, date 2026-10-24): 9am to 2pm
+- this Sunday (Sunday Oct 25, date 2026-10-25): CLOSED - never offer a time on this day
+- this Monday (Monday Oct 26, date 2026-10-26): 8am to 6pm
+- this Tuesday (Tuesday Oct 27, date 2026-10-27): 8am to 6pm
+- next Wednesday (Wednesday Oct 28, date 2026-10-28): 8am to 6pm
+- next Thursday (Thursday Oct 29, date 2026-10-29): 8am to 6pm
+- next Friday (Friday Oct 30, date 2026-10-30): 8am to 6pm
+- next Saturday (Saturday Oct 31, date 2026-10-31): 9am to 2pm
+- next Sunday (Sunday Nov 01, date 2026-11-01): CLOSED - never offer a time on this day
+- next Monday (Monday Nov 02, date 2026-11-02): 8am to 6pm
+- next Tuesday (Tuesday Nov 03, date 2026-11-03): 8am to 6pm
+NEVER offer, suggest, or confirm a time on a day marked CLOSED.
+If the day they asked for is closed, say so and offer the next open day by name.
+If TOMORROW is closed, don't use the word "tomorrow" for a booking - name the next open day instead.
+Quote the opening time listed for THAT day.
+
+=== CONVERSATION LANGUAGE ===
+So far this conversation has been in English. Reply in the offered language the customer uses in their latest message (see LANGUAGE), and only in that language.
+
+Write ONE reply now.
+
+##### user
+Hi there
+
+##### assistant
+Hi Maria! How can I help you today?
+
+##### user
+Show me your inventory

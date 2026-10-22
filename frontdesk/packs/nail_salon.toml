@@ -1,0 +1,281 @@
+# Nail salon domain pack.
+# Manicures, pedicures, gel, dip powder, acrylics, nail art and waxing.
+# Walk-ins and appointments both matter; groups (bridal parties, birthdays) are common,
+# and removing old gel or acrylic changes the time and price, so intake asks about it.
+
+[domain]
+id                       = "nail_salon"
+name                     = "Nail Salon"
+description              = "Nail salons: manicures, pedicures, gel, dip powder, acrylics, nail art and waxing, for walk-ins and appointments."
+business_noun            = "salon"
+staff_noun               = "nail techs"
+agent_role               = "salon coordinator"
+voice_agent_role         = "front desk receptionist"
+default_agent_name       = "Linh"
+default_voice_agent_name = "Amy"
+goal                     = "Help the customer pick the right nail service, be clear about what it costs (including removal and nail art extras), and either book an appointment for everyone in their group or tell them honestly whether walking in is a good option."
+upsell_topics            = "upgrading to gel or a deluxe pedicure, nail art or chrome, a paraffin or callus add-on, matching mani-pedi sets, eyebrow waxing, or booking the whole group together"
+professionalism          = "friendly"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "walk_ins"
+label    = "Walk-ins"
+question = "Do you take walk-ins? When are wait times usually shortest or longest?"
+required = true
+
+[[profile]]
+key      = "pricing"
+label    = "Pricing policy"
+question = "How do you price extras? (removal, nail art per nail vs set, length/shape upcharges, French tips, chrome)"
+
+[[profile]]
+key      = "groups"
+label    = "Groups & parties"
+question = "How many people can you take at once? Any group, bridal party or kids party packages or deposits?"
+
+[[profile]]
+key      = "sanitation"
+label    = "Cleanliness & safety"
+question = "How do you clean tools and pedicure tubs? (autoclave, disposable files and liners, etc.)"
+
+[[profile]]
+key      = "booking_policy"
+label    = "Cancellations, late arrivals & fixes"
+question = "What's your cancellation and late-arrival policy, and do you fix chips or lifting for free within a certain time?"
+required = true
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the assistant should know? (payment, tipping, gift cards, parking, kids, services you don't offer)"
+
+[catalog]
+item_noun        = "service"
+item_noun_plural = "services"
+spoken_noun      = "service"
+heading          = "NAIL SERVICE MENU"
+intro            = "These are the services this salon offers. Prices are per person; long or extra-shaped nails, detailed art and removal of old product can add to the price and the time."
+empty_text       = "(No service menu provided - answer from Business Info and offer to book or suggest walking in.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{category}", "{price}", "{duration}"]
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Service"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "category"
+label      = "Category"
+searchable = true
+
+[[catalog.fields]]
+name       = "price"
+label      = "Price"
+empty_text = "Priced by design at the salon"
+
+[[catalog.fields]]
+name  = "duration"
+label = "Typical time"
+
+[[catalog.fields]]
+name       = "description"
+label      = "What's included"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[catalog.aliases]
+"service" = "name"
+
+[booking]
+visit_noun       = "appointment"
+subject_label    = "Services"
+subject_hint     = "the service(s) and party size, e.g. \"gel mani + spa pedi x2\""
+general_subject  = "manicure appointment"
+location         = "business"
+skip_intake_when = ""
+
+[[booking.intake]]
+key      = "service"
+label    = "Service"
+ask      = "Confirm which service(s) they want, using names from the NAIL SERVICE MENU (e.g. gel manicure, dip powder, acrylic full set or fill, pedicure, waxing). Don't re-ask if it's already clear."
+required = true
+
+[[booking.intake]]
+key      = "party_size"
+label    = "Number of people"
+ask      = "Ask how many people are coming, and if more than one, whether everyone is getting the same service. For groups, follow the GROUPS rules."
+required = true
+
+[[booking.intake]]
+key   = "removal"
+label = "Removal needed"
+ask   = "For manicures, gel, dip and acrylic services, ask whether they currently have gel, dip or acrylic on that needs to come off. Skip it for pedicures without gel and waxing."
+
+[[booking.intake]]
+key      = "design"
+label    = "Design notes"
+ask      = "If they mentioned nail art, French, chrome or a specific length or shape, note it in a few words; mention they can bring or text a photo. Don't ask if they didn't bring it up."
+channels = ["chat"]
+
+[widget]
+header_title      = "Nail Salon"
+tagline           = "Book your nails or check walk-ins, 24/7."
+input_placeholder = "Ask about manicures, pedicures, or booking..."
+icon              = "💅"
+capabilities      = "service questions, pricing, walk-ins, and booking an appointment"
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "💅 Manicure / Gel"
+message        = "I'd like a manicure"
+requires_field = "category"
+requires_any   = ["manicure"]
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "🦶 Pedicure"
+message        = "I'd like to book a pedicure"
+requires_field = "category"
+requires_any   = ["pedicure"]
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "✨ Acrylic / Dip"
+message        = "I'm interested in acrylic or dip powder nails"
+requires_field = "category"
+requires_any   = ["enhancements", "acrylic", "dip"]
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "🎨 Nail Art"
+message        = "What nail art do you do?"
+requires_field = "category"
+requires_any   = ["nail art"]
+
+[[widget.topics]]
+section        = "Popular Services"
+label          = "🌸 Waxing"
+message        = "Do you do waxing?"
+requires_field = "category"
+requires_any   = ["waxing"]
+
+[[widget.topics]]
+section = "Get Started"
+label   = "👯 Group / Bridal Party"
+message = "I'd like to book nails for a group"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "🚶 Walk-ins"
+message = "Do you take walk-ins right now?"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Book an Appointment"
+message = "I'd like to book an appointment"
+
+[voice]
+speak_years  = false
+speech_hints = "manicure,mani,pedicure,pedi,mani-pedi,gel,gel polish,gel manicure,gel X,Gel-X,soft gel,builder gel,dip,dip powder,SNS,acrylic,acrylics,full set,fill,refill,fill-in,removal,soak off,French,French tip,ombre,chrome,cat eye,nail art,rhinestones,coffin,almond,stiletto,square,squoval,short,medium,long,paraffin,callus,spa pedicure,deluxe pedicure,jelly pedicure,polish change,eyebrow wax,lip wax,walk-in,bridal party"
+
+[[topics]]
+id          = "manicure"
+label       = "Manicure & gel"
+description = "Regular or gel manicures, polish changes, gel removal, builder gel."
+
+[[topics]]
+id          = "pedicure"
+label       = "Pedicure"
+description = "Classic, spa or deluxe pedicures, gel toes, callus treatment."
+
+[[topics]]
+id          = "enhancements"
+label       = "Acrylic, dip & extensions"
+description = "Acrylic full sets or fills, dip powder, Gel-X or other extensions, and repairs."
+
+[[topics]]
+id          = "nail_art_waxing"
+label       = "Nail art & waxing"
+description = "Designs, French tips, chrome, rhinestones, and eyebrow or other waxing."
+
+[[topics]]
+id          = "group"
+label       = "Group or party"
+description = "Booking several people together: bridal parties, birthdays, kids parties, friends."
+
+[[topics]]
+id          = "walk_in"
+label       = "Walk-in / wait time"
+description = "Asking whether they can walk in now or how long the wait is."
+
+[[topics]]
+id          = "pricing"
+label       = "Pricing question"
+description = "Mainly asking what a service costs, without booking."
+
+[[topics]]
+id          = "scheduling"
+label       = "Scheduling or concern"
+description = "Booking, rescheduling, cancelling, running late, or a chip, lifting or other problem with a recent set."
+
+[followups]
+cold     = "Hi {first_name}, it's {agent_name} with {business_name}. Want me to save you a spot for your nails? Just tell me a day and time."
+reminder = "Reminder from {business_name}: your appointment is {visit_time} ({subject}). Reply here if anything changes or your group size changes."
+confirm  = "You're booked with {business_name} for {visit_time} - {subject}. Reply here if anything changes."
+
+[prompts]
+summary_focus = "The services, how many people, and whether old gel, dip or acrylic needs removing - the front desk assigns techs and chairs from those."
+
+chat = '''
+NAIL SALON RULES
+- Quote prices straight from the NAIL SERVICE MENU, per person. When you mention a price, add any extras that apply from Business Info or the menu: removal of old gel, dip or acrylic, long or shaped nails, French tips, chrome, or art.
+- Nail art is priced by design. Give the menu's starting price and say the tech confirms it after seeing the design or photo; never quote a firm price for custom art.
+- Never promise how long a set will last or that nails won't lift or chip. You can share the typical wear from the menu description.
+- Never promise a specific tech is free, and only name techs that appear in Business Info.
+- Hygiene and safety: if someone mentions an infection, open cut, swelling, or a fungus on the nail or foot, kindly say the techs can't work on that area until it's healed and suggest checking with a doctor. Never give medical advice.
+- Pedicure tip worth sharing when booking one: avoid shaving legs for 24 hours before the pedicure.
+- Mention a pairing once, naturally: gel toes with a gel mani, a paraffin or callus add-on with a pedicure, an eyebrow wax while they're in.
+
+WALK-INS
+- Follow the Walk-ins line in Business Info. Never promise there's no wait or guarantee a seat for a walk-in; offer to book a time if they want to be sure.
+
+GROUPS
+- For two or more people, book ONE appointment and put the party size and everyone's services in the subject (e.g. "mani-pedi x4, bridal party").
+- If the group is larger than Business Info says the salon can seat at once, say they'll be done in waves or suggest a quieter time, and offer `request_callback` so the salon can plan it.
+- Follow any group deposit or package rules in Business Info.
+'''
+
+voice = '''
+FRONT DESK TALK
+- Friendly and quick, like a busy salon front desk. "Sure, we can do that!"
+- Find out what service and how many people first, then timing. One question per turn.
+- Say prices simply: "a gel mani is thirty-eight, and removal is ten more."
+- If they ask "can I come in now?", answer from the Walk-ins info first, then offer to book a time so they don't wait.
+'''
+
+[[prompts.toggles]]
+setting   = "walk_ins_welcome"
+chat      = "WALK-INS: This salon welcomes walk-ins every day it's open. Tell walk-ins they can come by any time during open hours, share wait-time tips from the Walk-ins line in Business Info, and mention that booking ahead guarantees a spot."
+else_chat = "APPOINTMENTS ONLY: This salon works by appointment only - kindly tell anyone asking about walk-ins and offer to book the next open time."
+
+[[prompts.toggles]]
+setting = "group_deposit"
+chat    = "GROUP DEPOSITS: Parties of {setting_group_deposit_min} or more need a {setting_group_deposit_amount} deposit per person to hold the booking; the salon texts a secure link to pay. Never take card details in chat."
+voice   = "GROUP DEPOSITS: Parties of {setting_group_deposit_min} or more need a {setting_group_deposit_amount} deposit per person to hold the booking; tell them the salon will text a secure link to pay. Never take card numbers on the phone."

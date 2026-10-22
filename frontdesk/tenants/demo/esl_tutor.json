@@ -1,0 +1,44 @@
+{
+  "id": "demo-esl-tutor",
+  "slug": "demo-esl-tutor",
+  "name": "Puente English Academy",
+  "domain": "esl_tutor",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0158",
+  "address": "3720 W Washington St, Suite 2B, Indianapolis, IN 46241",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Friday: 9am to 9pm, Saturday: 9am to 4pm, Sunday: closed",
+  "defaultLanguage": "es",
+  "staffLanguage": "en",
+  "profile": {
+    "teacher": "Ms. Karen Whitfield, TESOL-certified with 12 years teaching adult ESL in Indianapolis. She speaks Spanish too, so beginners can ask questions in Spanish. Two assistant teachers help with the conversation club and kids homework help.",
+    "location": "In-person classes are at our classroom on W Washington St (west side, near Belmont Ave), Suite 2B upstairs. Free parking behind the building; IndyGo Route 8 stops out front. Online classes use Zoom - we send the link after you enroll.",
+    "assessment": "Free, about 20 minutes, online or in person. A short conversation and a short reading - nothing to study beforehand.",
+    "pricing": "Group classes are paid monthly; private lessons per lesson or in a 10-lesson package ($400, saves $50). 10% family discount when two or more people from the same household take classes. We accept cash, card, Zelle and Venmo.",
+    "materials": "Materials are included for group classes (printed worksheets or PDFs). Citizenship prep uses the free official civics study guide. Private lessons don't require a book.",
+    "cancellation": "Private lessons: cancel or reschedule at least 24 hours ahead, or the lesson counts as used. Missed group classes can be made up in another group at the same level that month when there's a seat.",
+    "policies": "Kids homework help is for ages 7-12 and teen classes for ages 13-17; a parent or guardian enrolls them. We teach English only - we don't help with immigration forms or give legal advice. Classes follow IPS holidays; closed the last two weeks of December. No childcare during adult classes."
+  },
+  "options": {
+    "free_assessment": true,
+    "trial_class": true
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "es",
+      "en"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "esl_tutor.json"
+      }
+    }
+  }
+}

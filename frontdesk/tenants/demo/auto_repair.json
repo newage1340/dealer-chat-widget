@@ -1,0 +1,45 @@
+{
+  "id": "demo-auto-repair",
+  "slug": "demo-auto-repair",
+  "name": "Hermanos Reyes Auto Repair",
+  "domain": "auto_repair",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0154",
+  "address": "3615 W 10th St, Indianapolis, IN 46222",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Friday: 8am to 6pm, Saturday: 8am to 2pm, Sunday: closed",
+  "defaultLanguage": "en",
+  "staffLanguage": "es",
+  "profile": {
+    "pricing": "$95 diagnostic fee, waived if you approve the repair with us. Labor rate $120/hour. We always call with a written estimate before doing any work, and never do extra work without your OK.",
+    "warranty": "12 months / 12,000 miles on parts and labor for most repairs. Used tires: 30-day warranty against defects.",
+    "vehicles": "Most cars, SUVs, minivans and light trucks: domestic, Japanese and Korean, including light-duty diesel pickups. We send out full transmission rebuilds, body and paint work, and most European luxury cars (BMW, Mercedes, Audi). No semis or RVs.",
+    "towing": "Call Westside Towing at (317) 555-0188 - mention us for a discounted tow to the shop. After hours, park it in the lot and drop the keys in the slot by the office door.",
+    "waiting": "You can wait for oil changes, tire work, flat repairs, battery replacement and most brake jobs - waiting room has wifi and coffee. For diagnostics and bigger repairs please drop the car off in the morning. After-hours key drop available.",
+    "credentials": "Family owned since 2009 by the Reyes brothers. ASE-certified technicians. Bilingual staff - se habla español.",
+    "policies": "We accept cash, all major cards, and Zelle. Financing on repairs over $500 through Snap Finance. Free brake inspections."
+  },
+  "options": {
+    "shuttle_service": true,
+    "shuttle_radius": "5 miles",
+    "customer_parts": false
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en",
+      "es"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "auto_repair.csv"
+      }
+    }
+  }
+}

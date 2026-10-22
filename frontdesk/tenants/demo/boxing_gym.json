@@ -1,0 +1,43 @@
+{
+  "id": "demo-boxing-gym",
+  "slug": "demo-boxing-gym",
+  "name": "Southside Boxing Club",
+  "domain": "boxing_gym",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0156",
+  "address": "1840 Shelby St, Indianapolis, IN 46203",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Friday: 6am to 9pm, Saturday: 8am to 2pm, Sunday: 10am to 1pm",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "trial": "Your first class is free - one per person, in any Fundamentals, Youth/Teen, or Women's class. Bring a photo ID (or a parent for kids). After that, a drop-in is $25.",
+    "memberships": "Month-to-month memberships can be cancelled anytime with 30 days' written notice at the front desk or by email; no cancellation fee. 12-month agreements can be cancelled early for a $99 fee, or for free with a move more than 25 miles away or a doctor's note. $49 sign-up fee, waived if you join the same day as your free class. Memberships can be frozen up to 2 months per year for $10/month.",
+    "waiver": "Everyone signs a liability waiver before training - online before the first class or on the tablet at the front desk. Youth classes are ages 8-12 and teen classes 13-17. Anyone under 18 needs a parent or guardian to sign the waiver, and the parent must be there for the first class. Adult classes are 16+ with a guardian waiver for 16-17 year olds; sparring night is 18+.",
+    "gear": "Bring water, a towel, athletic clothes and indoor shoes. Hand wraps if you have them; we sell wraps for $10. Loaner gloves are free for your first few classes, and we sell gloves starting at $45. Sparring requires your own 16oz gloves, headgear and mouthguard.",
+    "coaches": "Head Coach Luis Ortega is a former Indiana Golden Gloves champion with 15 years of coaching and is a USA Boxing certified coach. Coaches Ray Delgado, Dana Whitfield, Andre Simmons and Tamika Brooks are USA Boxing certified and CPR/First Aid certified. Tamika runs the youth program.",
+    "facility": "Full-size ring, 14 heavy bags, double-end and speed bags, a turf strength area, men's and women's locker rooms with showers. Free parking lot behind the building.",
+    "policies": "We take all major cards, Apple Pay and cash; memberships bill automatically on the 1st. Arrive 10-15 minutes early for your first class; late arrivals more than 10 minutes may be asked to join the next class for safety warm-up reasons. Sparring only with coach approval after at least 3 months of training. We don't offer MMA, kickboxing or childcare. Sibling discount: $15 off each additional youth membership."
+  },
+  "options": {
+    "free_first_class": true
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en",
+      "es"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "boxing_gym.csv"
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+    "name": "plumbing: flags nonsense and stays polite",
+    "tenant": "demo-plumber",
+    "channel": "sms",
+    "turns": [
+        { "say": "do u sell bananas to aliens lol", "expect": { "events": ["turn_flagged"], "noEvents": ["appointment_booked"] } },
+        { "say": "banana banana banana what color is the moon", "expect": { "events": ["turn_flagged"] } }
+    ]
+}

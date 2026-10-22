@@ -1,0 +1,36 @@
+##### system (cached)
+You sort finished customer conversations for Southside Boxing Club, a gym, so the coaching staff can see at a glance what happened.
+
+Read the transcript and fill in every field. Be literal: judge only what is in the transcript.
+
+outcome - pick exactly one:
+-   booked: a class visit was booked or rescheduled.
+-   lead: the customer wants something and expects follow-up (callback requested, left contact details, voicemail asking to be called back).
+-   answered: the customer got what they needed; nothing to follow up.
+-   transferred: the call was handed to a live person.
+-   abandoned: the customer left before saying anything useful (hang-up, silence, one word).
+-   spam: a robocall, sales pitch, wrong number, or prank.
+-   abusive: the customer was hostile, harassing, or abusive.
+
+topic - the one topic id that best describes what the conversation was mostly about:
+-   trial_class: Wants to try a class, a free first class, or a drop-in visit.
+-   schedule: Asking what classes run when, or which class fits their level.
+-   membership: Membership prices, class packs, drop-in rates, sign-up, freezing or cancelling.
+-   youth: A parent asking about classes for a child or teen, ages, or the guardian waiver.
+-   personal_training: One-on-one or small-group coaching sessions and their prices.
+-   sparring_competition: Getting approved for sparring, the competitive team, or amateur fights.
+-   scheduling: Booking, rescheduling or cancelling a class visit or session.
+-   other: Anything that fits none of the other topics.
+
+sentiment - positive, neutral, or negative, as the customer came across.
+urgency - urgent only if the customer needs someone right away (safety, damage happening now, an emergency); low if there's no time pressure; otherwise normal.
+language - the language the customer actually used, as a two-letter code (en = English, es = Spanish, zh = Mandarin Chinese, vi = Vietnamese, tl = Tagalog, ar = Arabic, ko = Korean, ru = Russian, fr = French, ht = Haitian Creole, pt = Portuguese).
+followup_needed - true if a person at the gym should contact this customer.
+gist - one or two plain sentences, written in English, that tell a busy owner what they need to know. Include names, what they want, and any time, address or detail the team must act on.
+    What matters most for this business: Which class they want and when, their experience level, any injury or health note for the coach, and whether it's a minor who needs a guardian waiver.
+
+
+##### user
+TRANSCRIPT:
+Customer: Hi, my kitchen faucet is leaking
+Assistant: I can help with that. When works for a visit?

@@ -1,0 +1,44 @@
+{
+  "name": "frontdesk",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "check": "tsc && vitest run",
+    "validate-pack": "node src/cli/validate-pack.ts",
+    "start": "node src/main.ts",
+    "dev": "node --watch src/main.ts",
+    "migrate": "node src/main.ts migrate",
+    "import-tenants": "node src/main.ts import-tenants",
+    "prompt": "node src/main.ts prompt",
+    "eval": "node src/main.ts eval",
+    "check-demo": "node src/cli/check-demo.ts",
+    "seed-demo": "node src/main.ts seed-demo",
+    "eval:packs": "node src/main.ts eval --packs",
+    "eval:all": "node src/main.ts eval --all --repeat 3",
+    "cost-model": "node src/cli/cost-model.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.10",
+    "@hono/node-server": "^2.1.5",
+    "@hono/node-ws": "^1.3.1",
+    "hono": "^4.13.13",
+    "nodemailer": "^7.0.13",
+    "openai": "^7.39.0",
+    "postgres": "^3.4.9",
+    "smol-toml": "^1.9.1",
+    "ts-pattern": "^5.9.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/nodemailer": "^8.0.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "packageManager": "pnpm@12.14.0"
+}

@@ -1,0 +1,44 @@
+{
+  "id": "demo-real-estate",
+  "slug": "demo-real-estate",
+  "name": "Hartwell Home Group",
+  "domain": "real_estate",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0159",
+  "address": "301 E Carmel Dr, Suite 200, Carmel, IN 46032",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Friday: 9am to 6pm, Saturday: 10am to 4pm, Sunday: by appointment only",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "service_area": "The Indianapolis metro: Marion, Hamilton, Boone and Johnson counties - including Indianapolis, Carmel, Fishers, Noblesville, Westfield, Zionsville, Greenwood and Speedway.",
+    "brokerage": "Hartwell Home Group is a team brokered by Crossroads Realty Partners. Lead agent Dana Hartwell is a licensed Indiana REALTOR; license details are available on request.",
+    "buyer_services": "Free buyer consultation (in person or video). Buyers sign a written buyer agreement before touring, as required since 2024; the agreement spells out how Dana is compensated, and in many cases the seller covers it - Dana goes over the details personally. A pre-approval letter or proof of funds is requested before a second showing, but not for the first.",
+    "seller_services": "Free, no-obligation home valuation and listing consultation. Every listing includes professional photography, a 3D virtual tour, a staging consultation, and MLS and major-site syndication. Commission is discussed at the listing consultation.",
+    "showings": "Showings need about 24 hours' notice; same-day is sometimes possible on vacant homes. Please bring a photo ID. Pending listings: we accept backup offers and can show pending homes to buyers who want to submit one. Coming-soon listings can't be shown until they go active. Video walkthroughs are available for out-of-town buyers.",
+    "referrals": "Lenders: Meridian Hills Mortgage (Tom Reyes, (317) 555-0171) and Lakeside Credit Union home loans. Real estate attorney: Bishop & Lowe Law, (317) 555-0183. Inspector: Keystone Home Inspections. Clients are free to use anyone they choose.",
+    "policies": "We work with residential buyers and sellers only - no rentals, property management or commercial. Dana's team includes a Spanish-speaking agent. Relocation clients welcome; video tours available."
+  },
+  "options": {
+    "buyer_agreement_required": true,
+    "free_valuation": true
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en",
+      "es"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "real_estate.json"
+      }
+    }
+  }
+}

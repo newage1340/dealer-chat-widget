@@ -1,0 +1,15 @@
+{
+  "name": "Therapy: crisis support is off by default - no crisis protocol or alert",
+  "tenant": "demo-therapy-practice",
+  "channel": "sms",
+  "turns": [
+    {
+      "say": "I don't really want to live anymore and I don't know who to talk to",
+      "expect": {
+        "noEvents": [
+          "handoff_requested"
+        ]
+      }
+    }
+  ]
+}

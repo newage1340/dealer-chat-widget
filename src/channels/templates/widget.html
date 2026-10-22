@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{{ business_name }} - Chat</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    :root {
+      --accent: {{ brand_color }};
+      --accent-hover: color-mix(in srgb, {{ brand_color }} 80%, white);
+    }
+  </style>
+</head>
+<body data-dealer-slug="{{ slug }}">
+  <div class="phone-gate" id="phoneGate" hidden>
+    <div class="phone-gate-card">
+      <div class="phone-gate-title">Welcome to {{ business_name }}</div>
+      <p class="phone-gate-sub">Please accept our terms and privacy policy to start the chat.</p>
+      <div id="phoneGateForm">
+        <label class="phone-gate-terms" for="phoneGateTerms">
+          <input type="checkbox" id="phoneGateTerms" name="terms_accept" autocomplete="off">
+          <span>Yes, I'd like to chat with {{ business_name }} about my inquiry. If I share my phone number, I may also receive text follow-ups — message frequency varies, msg &amp; data rates may apply, reply STOP anytime to opt out. <a href="{{ terms_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation();">View Terms of Service</a>.</span>
+        </label>
+        <label class="phone-gate-terms" for="phoneGatePrivacy">
+          <input type="checkbox" id="phoneGatePrivacy" name="privacy_accept" autocomplete="off">
+          <span>I have read and agree to the <a href="{{ privacy_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation();">Privacy Policy</a>.</span>
+        </label>
+        <button type="button" id="phoneGateSubmit">Enter chat</button>
+      </div>
+      <div class="phone-gate-error" id="phoneGateError"></div>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <button class="mobile-menu-toggle" id="menuToggle" aria-label="Open menu">&#9776;</button>
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-close" id="sidebarClose" aria-label="Close menu">&times;</div>
+
+      <div class="logo">
+        {% if logo_url %}
+          <img class="logo-image" src="{{ logo_url }}" alt="{{ business_name }} logo" />
+        {% else %}
+          <div class="logo-icon">{{ icon }}</div>
+        {% endif %}
+        <div class="logo-text">{{ business_name }}</div>
+      </div>
+      <div class="sidebar-tagline">{{ tagline }}</div>
+
+      <div class="topic-list">
+        {% for section, topics in sections %}
+        <div class="topic-label{% if not loop.first %} section-spacer{% endif %}">{{ section }}</div>
+        {% for topic in topics %}
+        <button class="topic-btn" data-message="{{ topic.message }}" onclick="askTopic(this.dataset.message)">{{ topic.label }}</button>
+        {% endfor %}
+        {% endfor %}
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="clear-btn" onclick="clearChat()">&#128465; Clear Chat</button>
+        <a class="terms-link" href="{{ terms_url }}" target="_blank" rel="noopener">Terms of Service</a>
+        <a class="terms-link" href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy Policy</a>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="main-header">
+        <div class="main-header-title">{{ header_title }}</div>
+        <div class="main-header-status"><span class="status-dot"></span>Online</div>
+      </div>
+
+      <div class="chat-window" id="chatWindow"></div>
+
+      <div class="input-area">
+        <textarea id="userInput" placeholder="{{ input_placeholder }}" rows="1" onkeydown="handleKey(event)"></textarea>
+        <button id="sendBtn" onclick="sendMessage()" aria-label="Send">&#10148;</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>

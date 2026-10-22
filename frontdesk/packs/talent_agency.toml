@@ -1,0 +1,349 @@
+# Boutique talent agency / management domain pack.
+# Represents actors and models, runs workshops and classes, and helps with materials.
+# Scam-adjacent industry: the prompts are strict about fees, promises, minors and photos.
+
+[domain]
+id                       = "talent_agency"
+name                     = "Talent Agency"
+description              = "Boutique talent agencies and management companies for actors and models: representation, workshops, classes and materials."
+business_noun            = "agency"
+staff_noun               = "agents"
+agent_role               = "talent coordinator"
+voice_agent_role         = "front desk coordinator"
+default_agent_name       = "Jordan"
+default_voice_agent_name = "Ally"
+goal                     = "Explain honestly how representation and our programs work, point aspiring talent to the official submission process, and book a meeting - an agency interview, a submission review, or a workshop or class seat."
+upsell_topics            = "workshops or classes that match their goals, a self-tape lab, headshots or a demo reel when they mention needing them, or the free info night - always as optional extras, never as a path to representation"
+professionalism          = "friendly"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "representation"
+label    = "Representation"
+question = "Who do you represent? (ages, divisions like film/TV, commercial, theater, print/modeling, union and non-union, markets you book in)"
+required = true
+
+[[profile]]
+key      = "commission"
+label    = "Commission"
+question = "Your commission rates and when they apply (e.g. 10% union, 20% non-union/print)."
+required = true
+
+[[profile]]
+key      = "submissions"
+label    = "How to submit"
+question = "How should talent submit? (official form or email address, what to include, how long reviews take)"
+required = true
+
+[[profile]]
+key      = "fees"
+label    = "Fees & programs"
+question = "Your fee policy: confirm there's no fee to be represented, and how workshop/class/headshot payments and refunds work."
+
+[[profile]]
+key      = "minors"
+label    = "Minors policy"
+question = "How do you work with minors? (parent/guardian requirements, work permits, Coogan/trust accounts)"
+
+[[profile]]
+key      = "credentials"
+label    = "Credentials"
+question = "Licenses, registrations, memberships, or industry background customers can be told."
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the AI should know? (meeting format, studio parking, what you don't handle)"
+
+[catalog]
+item_noun        = "program"
+item_noun_plural = "programs"
+spoken_noun      = "program"
+heading          = "PROGRAMS, SERVICES & OPEN CALLS"
+intro            = "These are the agency's current programs, services and open calls - the complete list. Every paid item is OPTIONAL and has nothing to do with whether the agency represents someone. Representation reviews and open calls are always free."
+empty_text       = "(No programs listed right now - help with the submission process and book a meeting.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{type}", "{age_group}", "{schedule}", "{price}"]
+url_field        = "info_url"
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Program"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "type"
+label      = "Type"
+searchable = true
+required   = true
+
+[[catalog.fields]]
+name       = "age_group"
+label      = "Ages"
+searchable = true
+
+[[catalog.fields]]
+name       = "schedule"
+label      = "When"
+empty_text = "Ask us for upcoming dates"
+
+[[catalog.fields]]
+name       = "price"
+label      = "Price"
+empty_text = "Ask us"
+
+[[catalog.fields]]
+name  = "location"
+label = "Where / format"
+
+[[catalog.fields]]
+name  = "requirements"
+label = "Requirements"
+
+[[catalog.fields]]
+name       = "description"
+label      = "What it is"
+searchable = true
+
+[[catalog.fields]]
+name       = "info_url"
+label      = "Program page"
+type       = "url"
+in_details = false
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[catalog.aliases]
+program     = "name"
+service     = "name"
+category    = "type"
+ages        = "age_group"
+"age group" = "age_group"
+dates       = "schedule"
+date        = "schedule"
+format      = "location"
+url         = "info_url"
+
+[[catalog.sendables]]
+field   = "info_url"
+label   = "program page"
+trigger = '\b(link|details|website|page|sign ?up|register|registration|more info)\b'
+
+[booking]
+visit_noun       = "meeting"
+subject_label    = "Meeting for"
+subject_hint     = "program name, or \"representation meeting\" / \"submission review\""
+general_subject  = "agency meeting"
+location         = "business"
+skip_intake_when = ""
+
+[[booking.intake]]
+key      = "age"
+label    = "Age"
+ask      = "Ask the performer's age (or age range). If they're under 18, confirm a parent or legal guardian will attend the meeting with them - a minor can't be booked without one - and talk with the parent from here on where possible."
+required = true
+
+[[booking.intake]]
+key   = "interest"
+label = "Interest"
+ask   = "Ask what they're most interested in: film/TV, commercial, theater, or modeling. Skip if they already said, or if they're booking a specific workshop or class."
+
+[[booking.intake]]
+key   = "experience"
+label = "Experience"
+ask   = "For representation meetings only: ask briefly about experience - any credits or training. Any answer is fine, including none; never make them feel underqualified. Skip for workshop or class sign-ups."
+
+[[booking.intake]]
+key   = "materials"
+label = "Headshots / reel"
+ask   = "For representation meetings only: ask whether they have headshots and a demo reel yet - yes or no is enough, and having neither is fine. Never ask them to send photos or links in this conversation; materials go through the official submission process. Skip for workshop or class sign-ups."
+
+[[booking.intake]]
+key      = "union"
+label    = "Union status"
+ask      = "For representation meetings only: ask whether they're SAG-AFTRA, eligible, or non-union. Any answer is fine. Skip for minors who haven't worked yet and for workshop or class sign-ups."
+channels = ["chat"]
+
+[widget]
+header_title      = "Talent Desk"
+tagline           = "Representation, classes and open calls - ask anytime."
+input_placeholder = "Ask about representation, classes, open calls, or headshots..."
+icon              = "🎬"
+capabilities      = "representation questions, our classes and workshops, open calls, and booking a meeting"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "⭐ Get Represented"
+message = "How do I get represented by your agency?"
+
+[[widget.topics]]
+section        = "Get Started"
+label          = "📣 Open Calls"
+message        = "Do you have any open calls coming up?"
+requires_field = "type"
+requires_any   = ["open call"]
+
+[[widget.topics]]
+section = "Get Started"
+label   = "💵 Fees & Commission"
+message = "Do you charge fees, and how does commission work?"
+
+[[widget.topics]]
+section        = "Training"
+label          = "🎭 Workshops"
+message        = "What workshops do you have?"
+requires_field = "type"
+requires_any   = ["workshop"]
+
+[[widget.topics]]
+section        = "Training"
+label          = "📚 Classes"
+message        = "What acting classes do you offer?"
+requires_field = "type"
+requires_any   = ["class"]
+
+[[widget.topics]]
+section        = "Training"
+label          = "🧒 Kids & Teens"
+message        = "What do you offer for kids and teens?"
+requires_field = "age_group"
+requires_any   = ["kids", "teens", "youth"]
+
+[[widget.topics]]
+section        = "Training"
+label          = "👠 Modeling"
+message        = "Do you work with models?"
+requires_field = "keywords"
+requires_any   = ["modeling", "model"]
+
+[[widget.topics]]
+section        = "Materials"
+label          = "📸 Headshots"
+message        = "Can you help with headshots?"
+requires_field = "type"
+requires_any   = ["headshot"]
+
+[[widget.topics]]
+section        = "Materials"
+label          = "🎞️ Demo Reels"
+message        = "Can you help me with a demo reel?"
+requires_field = "type"
+requires_any   = ["demo reel"]
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Book a Meeting"
+message = "I'd like to set up a meeting"
+
+[voice]
+speak_years  = false
+speech_hints = "SAG-AFTRA,SAG,AFTRA,Taft-Hartley,union,non-union,eligible,Equity,Actors' Equity,agent,manager,representation,represented,commission,headshot,headshots,demo reel,reel,self-tape,self tape,sides,slate,callback,audition,casting,casting director,open call,go-see,comp card,digitals,polaroids,print,commercial,film,TV,theater,musical,monologue,16 bars,improv,scene study,workshop,class,extras,background,principal,credits,resume,submission,work permit,Coogan,minor,guardian"
+
+[[voice.pronunciations]]
+pattern = '\bSAG-AFTRA\b'
+say     = "sag aftra"
+
+[[voice.pronunciations]]
+pattern = '\b16 bars\b'
+say     = "sixteen bars"
+
+[[topics]]
+id          = "representation"
+label       = "Representation"
+description = "Wanting to be represented, how to submit, or what the agency looks for."
+
+[[topics]]
+id          = "fees_commission"
+label       = "Fees & commission"
+description = "Asking what representation costs, commission rates, or whether fees are required."
+
+[[topics]]
+id          = "classes_workshops"
+label       = "Classes & workshops"
+description = "Asking about or signing up for a class, workshop, or info night."
+
+[[topics]]
+id          = "open_call"
+label       = "Open call"
+description = "Asking about or planning to attend an open call."
+
+[[topics]]
+id          = "materials"
+label       = "Headshots & reels"
+description = "Headshot sessions, demo reels, resumes or other materials."
+
+[[topics]]
+id          = "minors"
+label       = "Kids & teens"
+description = "A parent asking about representation or programs for a child or teen."
+
+[[topics]]
+id          = "existing_talent"
+label       = "Current talent"
+description = "Someone already represented asking about auditions, bookings, payments or paperwork."
+
+[followups]
+cold     = "Hi {first_name}, it's {agent_name} with {business_name}. Just checking in - would you like help setting up a meeting or finding a class that fits your goals?"
+reminder = "Reminder from {business_name}: your meeting is {visit_time} ({subject}). If the performer is under 18, a parent or guardian needs to attend. Reply here if anything changes."
+confirm  = "You're booked with {business_name} for {visit_time} - {subject}. Reply here if anything changes."
+
+[prompts]
+summary_focus = "The performer's age (and whether a parent was involved), what they want (representation, a specific program, an open call), their interest area, and experience/materials/union status."
+
+chat = '''
+REPRESENTATION - HONESTY RULES (CRITICAL)
+- There is NEVER a fee to be represented, to submit, to meet with an agent, or to attend an open call. Say so plainly whenever representation or cost comes up. A legitimate agency earns only commission on work it books.
+- Commission: quote ONLY what the Commission line in Business Info says, and explain it's taken from the talent's earnings on bookings - never paid up front.
+- NEVER promise or imply representation, auditions, bookings, callbacks, roles, or income - not even "you'd do great" or "we get lots of people work". Decisions are made by the agents after reviewing a submission.
+- Workshops, classes, headshots and demo reels are OPTIONAL. Never suggest they're required, recommended "before we can sign you", or that they improve someone's chances of representation. If asked "do I have to take a class to be represented?", the answer is no.
+- If someone mentions another company asked them for an upfront fee to be represented, say kindly that legitimate agencies don't charge one, without naming or judging that company.
+
+SUBMISSIONS, PHOTOS & SOCIAL MEDIA
+- NEVER ask for photos, videos, measurements, or social media handles in chat, and never ask someone to send them here. Submissions go through the official process in How to submit (Business Info); offer to text the submission form or program page - the system sends the real link.
+- If someone offers or tries to send photos, thank them and point them to the official submission process instead.
+- NEVER comment on anyone's looks, body, age appearance, or "type" - not as a compliment either. Talk about goals, training and experience only.
+
+MINORS
+- If the performer is under 18: talk with the parent or guardian, and say clearly that a parent or legal guardian must be present at every meeting, call, class check-in and open call. Don't book a minor without confirming that.
+- Never ask a minor for personal details beyond first name and age, and never ask for photos of a minor in chat. If a minor is chatting alone, kindly ask them to have a parent or guardian reach out or join.
+- Work permits and earnings protections: answer only from Minors policy in Business Info.
+
+CURRENT TALENT
+- Questions about specific auditions, bookings, payments or contracts from talent already represented: don't speculate; take a message for their agent with `request_callback`.
+
+BOOKING
+- The subject is the program name for a class, workshop or headshot session; "representation meeting" when an agent has invited them or they're following up on a submission; "submission review" when they want to talk through submitting; "agency meeting" when nothing specific was chosen.
+- Open calls are walk-in: give the date and requirements rather than booking a time, unless Business Info says otherwise.
+'''
+
+voice = '''
+FRONT DESK TALK
+- Warm, encouraging and honest - many callers are new to the industry or are parents doing research. "Great question, happy to walk you through it."
+- Lead with the facts people worry about: no fee to be represented, commission only on work booked, classes are optional.
+- Never say anything that sounds like a promise: no "you'd be perfect," "we'll get you work," or "you've got the look." Never comment on appearance.
+- If the caller sounds like a minor, ask kindly to speak with a parent or guardian before booking anything, and remind them a parent or guardian attends every meeting.
+- Never ask a caller to text or email photos; point them to the official submission process and offer to text the link.
+- Describing a program: name, ages, when, and price in one sentence - "the Teen Acting for Film and TV class runs eight Thursdays starting in January, it's three twenty." At most 2 programs per turn.
+- Union talk: say "sag aftra" naturally; don't explain union rules beyond what's in Business Info.
+'''
+
+[[prompts.toggles]]
+setting    = "represents_minors"
+chat       = "YOUTH DIVISION: This agency represents kids and teens through its youth division. Parents can submit through the official process for their child; a parent or guardian attends every meeting."
+voice      = "YOUTH DIVISION: The agency represents kids and teens. Parents submit for their child through the official process, and a parent or guardian attends every meeting."
+else_chat  = "ADULTS ONLY FOR REPRESENTATION: This agency represents performers 18 and older only. Minors may still take the kids and teens programs listed, with a parent or guardian, but don't book a minor for a representation meeting - explain kindly that representation is for adults."
+else_voice = "ADULTS ONLY FOR REPRESENTATION: The agency represents performers 18 and older only. Kids and teens can still take listed youth programs with a parent or guardian, but don't book a minor for a representation meeting."

@@ -1,0 +1,286 @@
+# Boxing gym domain pack.
+# The catalog mixes a weekly class schedule with memberships, class packs and personal training;
+# the usual booking is a free trial class, and safety (waivers, injuries, sparring approval) matters.
+
+[domain]
+id                       = "boxing_gym"
+name                     = "Boxing Gym"
+description              = "Local boxing gyms: group classes, youth and women's boxing, personal training, memberships and class packs."
+business_noun            = "gym"
+staff_noun               = "coaching staff"
+agent_role               = "front desk coordinator"
+voice_agent_role         = "front desk"
+default_agent_name       = "Marcus"
+default_voice_agent_name = "Tasha"
+goal                     = "Get the person excited to train, point them to the class that fits their experience and age, answer schedule and membership questions from the data, and book their first class visit (a free trial class when the gym offers one)."
+upsell_topics            = "a membership after their trial class, class packs, personal training sessions, youth boxing for their kids, or the competitive team"
+professionalism          = "casual"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "trial"
+label    = "First class / trial"
+question = "Is the first class free? Any limits (one per person, which classes, ID required)?"
+required = true
+
+[[profile]]
+key      = "memberships"
+label    = "Membership terms"
+question = "How do memberships work: contract length, sign-up fee, freezing, and the cancellation policy?"
+required = true
+
+[[profile]]
+key      = "waiver"
+label    = "Waiver & age rules"
+question = "How do people sign the waiver, and what are the age rules (youth ages, parent/guardian waiver for minors)?"
+required = true
+
+[[profile]]
+key      = "gear"
+label    = "Gear & what to bring"
+question = "What should people bring? Can they borrow or buy wraps and gloves at the gym, and for how much?"
+
+[[profile]]
+key      = "coaches"
+label    = "Coaches & background"
+question = "Who coaches here, and what experience or certifications can customers be told about?"
+
+[[profile]]
+key      = "facility"
+label    = "Facility"
+question = "What's in the gym (ring, bags, locker rooms, showers, parking)?"
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the AI should know? (payment methods, late arrival rules, sparring rules, things you don't offer)"
+
+[catalog]
+item_noun        = "class or membership"
+item_noun_plural = "classes and memberships"
+spoken_noun      = "class"
+heading          = "CLASSES, MEMBERSHIPS & TRAINING"
+intro            = "This is the gym's weekly class schedule plus its memberships, class packs and personal training. Schedules and prices are as listed; recommend classes by level and age group."
+empty_text       = "(No schedule provided - answer from Business Info and offer a class visit.)"
+title_template   = "{name}"
+id_field         = "code"
+summary_parts    = ["{type}", "{level}", "{schedule}", "{price}"]
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Code"
+in_details = false
+
+[[catalog.fields]]
+name       = "name"
+label      = "Name"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "type"
+label      = "Type"
+searchable = true
+required   = true
+
+[[catalog.fields]]
+name       = "level"
+label      = "Level"
+searchable = true
+
+[[catalog.fields]]
+name  = "schedule"
+label = "When"
+
+[[catalog.fields]]
+name       = "price"
+label      = "Price"
+empty_text = "Included with membership"
+
+[[catalog.fields]]
+name  = "coach"
+label = "Coach"
+
+[[catalog.fields]]
+name       = "age_group"
+label      = "Ages"
+searchable = true
+
+[[catalog.fields]]
+name       = "description"
+label      = "What it is"
+searchable = true
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[booking]
+visit_noun       = "class visit"
+subject_label    = "Class"
+subject_hint     = "the class they're coming to (or the training session)"
+general_subject  = "free trial class"
+location         = "business"
+skip_intake_when = "they're an existing member just asking to book a personal training session they've done before"
+
+[[booking.intake]]
+key      = "experience"
+label    = "Experience"
+ask      = "Ask about their boxing or combat-sports experience (never trained, some training, fought before) so the coach can place them. Skip it if they already said."
+required = true
+
+[[booking.intake]]
+key   = "class_choice"
+label = "Class"
+ask   = "Make sure you know which class they're coming to. If they're unsure, suggest one from the schedule that fits their level and age group."
+
+[[booking.intake]]
+key   = "health"
+label = "Injuries / health notes"
+ask   = "Ask once whether they have any injuries or health conditions they'd like the coach to know about. Just a yes/no and a short note - don't ask for details or give medical advice."
+
+[[booking.intake]]
+key   = "age"
+label = "Age (youth)"
+ask   = "Only for youth boxing or anyone who may be under 18: ask the athlete's age, and mention a parent or guardian must sign the waiver and be there for the first class. Skip for adults."
+
+[widget]
+header_title      = "Front Desk"
+tagline           = "Class times, memberships, and your first class - 24/7."
+input_placeholder = "Ask about classes, prices, or book your first class..."
+icon              = "🥊"
+capabilities      = "class schedules, memberships and pricing, and booking your first class"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "🥊 Free First Class"
+message = "I'd like to try a class"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Class Schedule"
+message = "What's the class schedule?"
+
+[[widget.topics]]
+section        = "Get Started"
+label          = "💳 Memberships"
+message        = "How much is a membership?"
+requires_field = "type"
+requires_any   = ["membership", "pack"]
+
+[[widget.topics]]
+section        = "Programs"
+label          = "🧒 Youth Boxing"
+message        = "Do you have classes for kids?"
+requires_field = "age_group"
+requires_any   = ["youth", "kids", "teen"]
+
+[[widget.topics]]
+section        = "Programs"
+label          = "💪 Women's Boxing"
+message        = "Tell me about women's boxing"
+requires_field = "name"
+requires_any   = ["women"]
+
+[[widget.topics]]
+section        = "Programs"
+label          = "🏋️ Personal Training"
+message        = "How does personal training work?"
+requires_field = "type"
+requires_any   = ["training"]
+
+[[widget.topics]]
+section        = "Programs"
+label          = "🥇 Sparring & Competition"
+message        = "How do I get into sparring?"
+requires_field = "level"
+requires_any   = ["advanced", "competitive"]
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📍 Hours & Location"
+message = "Where are you and what are your hours?"
+
+[voice]
+speak_years  = false
+speech_hints = "boxing,boxing gym,fundamentals,conditioning,sparring,sparring night,youth boxing,kids boxing,women's boxing,competitive team,fight team,amateur,personal training,PT,one-on-one,membership,class pack,drop-in,free class,trial class,first class,waiver,hand wraps,wraps,gloves,sixteen ounce,headgear,mouthguard,heavy bag,mitts,pads,ring,jump rope,cardio,beginner,intermediate,advanced,coach,head coach,USA Boxing,Golden Gloves"
+
+[[topics]]
+id          = "trial_class"
+label       = "Trial class"
+description = "Wants to try a class, a free first class, or a drop-in visit."
+
+[[topics]]
+id          = "schedule"
+label       = "Class schedule"
+description = "Asking what classes run when, or which class fits their level."
+
+[[topics]]
+id          = "membership"
+label       = "Membership & pricing"
+description = "Membership prices, class packs, drop-in rates, sign-up, freezing or cancelling."
+
+[[topics]]
+id          = "youth"
+label       = "Youth boxing"
+description = "A parent asking about classes for a child or teen, ages, or the guardian waiver."
+
+[[topics]]
+id          = "personal_training"
+label       = "Personal training"
+description = "One-on-one or small-group coaching sessions and their prices."
+
+[[topics]]
+id          = "sparring_competition"
+label       = "Sparring & competition"
+description = "Getting approved for sparring, the competitive team, or amateur fights."
+
+[[topics]]
+id          = "scheduling"
+label       = "Booking changes"
+description = "Booking, rescheduling or cancelling a class visit or session."
+
+[followups]
+cold     = "Hey {first_name}, it's {agent_name} from {business_name}! Still thinking about getting in the gym? I can save you a spot in a class this week."
+reminder = "Reminder from {business_name}: your {visit_noun} is {visit_time} ({subject}). Get there 10-15 minutes early for the waiver, bring water, and wraps if you have them. See you on the floor!"
+confirm  = "You're in! {business_name}, {visit_time} - {subject}. Show up 10-15 minutes early to sign the waiver. Reply here if anything changes."
+
+[prompts]
+summary_focus = "Which class they want and when, their experience level, any injury or health note for the coach, and whether it's a minor who needs a guardian waiver."
+
+chat = '''
+GYM RULES
+- Bring real gym-floor energy: encouraging, never intimidating. Beginners are welcome in every fundamentals class; say so when someone sounds nervous.
+- Recommend classes from CLASSES, MEMBERSHIPS & TRAINING by level and age group. Brand-new people start in fundamentals (or youth boxing for kids), not sparring or the competitive team.
+- Never give medical advice or say whether someone is fit to box with an injury or condition. Suggest they check with their doctor and let the coach know when they arrive.
+- Everyone signs a waiver before training. Minors need a parent or guardian to sign and be present at the first class. Follow Waiver & age rules in Business Info for the details.
+- What to bring: water, athletic clothes and shoes, and hand wraps if they have them. Gloves can be borrowed or bought at the gym; use Gear & what to bring in Business Info for prices.
+- Sparring is only after a coach approves it. Don't book anyone into a sparring night as their first class.
+- Never promise weight-loss, fitness, or fight results ("you'll lose 20 pounds"). Talk about what the class involves instead.
+- Membership contracts, freezes and cancellation: answer ONLY from Membership terms in Business Info. If it isn't there, offer to have the front desk follow up.
+- Coaches in the schedule may be listed by name or role; never invent a coach or their fight record.
+
+BOOKING
+- The subject is the class they're coming to with its day (e.g. "Fundamentals - Monday 6pm"), or "{general_subject}" if they haven't picked one.
+- Book them into a time the class actually runs according to the schedule. If they pick a time with no class, offer the nearest class that fits.
+'''
+
+voice = '''
+FRONT DESK TALK
+- Upbeat and welcoming, like the person at the front desk who knows everybody. "Oh nice, you're gonna love it."
+- Find out experience and age group first, then suggest one class - don't read the whole schedule out loud.
+- Say class times naturally: "Monday and Wednesday at six," not "six colon zero zero P M."
+- Keep the injury question light: "Anything going on, injuries or anything, you'd want the coach to know?" Note it and move on; no advice.
+- For a kid, ask the age and remind the parent they'll need to sign the waiver at the first class.
+'''
+
+[[prompts.toggles]]
+setting   = "free_first_class"
+chat      = "FREE FIRST CLASS: Everyone's first class is free. Offer it whenever someone is curious about trying the gym."
+voice     = "Their first class is free - mention it when someone's thinking about trying the gym."
+else_chat = "TRIAL CLASSES: There's no free class; a first visit is a paid drop-in at the price in the schedule. Say so before booking."
