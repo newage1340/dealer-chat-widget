@@ -254,7 +254,9 @@ export function toTenant(file: z.output<typeof TenantFile>): Tenant {
  */
 export function fromTenant(tenant: Tenant) {
     const s = tenant.settings;
-    const phones = (channel: "sms" | "voice") => (tenant.endpoints[channel] ?? []).map(a => a.value);
+    // Phone numbers are plain text in the file form, the way the settings page edits them.
+    const phones = (channel: "sms" | "voice"): string[] => (tenant.endpoints[channel] ?? []).map(a => a.value);
+    const staffPhones: string[] = Tenant.staffPhones(tenant);
     return {
         id:              tenant.id,
         slug:            tenant.slug,
@@ -268,7 +270,7 @@ export function fromTenant(tenant: Tenant) {
         voiceAgentName:  tenant.voiceAgentName,
         endpoints:       { sms: phones("sms"), voice: phones("voice") },
         staff:           {
-            phones: Tenant.staffPhones(tenant),
+            phones: staffPhones,
             emails: tenant.staffContacts.flatMap(a => a.kind === "email" ? [a.value] : []),
         },
         branding:        { ...tenant.branding },

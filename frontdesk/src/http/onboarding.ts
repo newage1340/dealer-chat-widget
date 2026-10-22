@@ -13,13 +13,14 @@ import { Hono, type Context } from "hono";
 
 import { importRows, parsePastedRows, syncCatalog } from "../catalogs/index.ts";
 import {
+    enumValue,
+    Language,
     LANGUAGE_NAMES,
     MIN_PASSWORD_LENGTH,
     Password,
     PhoneNumber,
     Professionalism,
     Text,
-    type Language,
     type Tenant,
     type WeekdayName,
 } from "../core/index.ts";
@@ -50,7 +51,7 @@ const TIME_ZONES: readonly (readonly [string, string])[] = [
 ];
 const DEFAULT_TIME_ZONE = "America/Indiana/Indianapolis";
 
-const LANGUAGE_OPTIONS = Object.entries(LANGUAGE_NAMES) as [Language, string][];
+const LANGUAGE_OPTIONS = Object.values(Language).map(l => [l, LANGUAGE_NAMES[l]] as const);
 
 /**
  * Friendlier names for the tenant fields a problem can point at.
@@ -372,8 +373,8 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
             problems.push(`${notesQ.label} is required.`);
         }
 
-        const level = one(body, "professionalism");
-        if (level !== "" && !Object.values(Professionalism).includes(level as Professionalism)) {
+        const level = enumValue(Professionalism, one(body, "professionalism"));
+        if (level === null && one(body, "professionalism") !== "") {
             problems.push("Choose how formal the assistant should be from the list.");
         }
 
@@ -392,7 +393,7 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
             return showForm(c, pack, body, problems);
         }
 
-        const defaultLanguage = one(body, "defaultLanguage") || "en";
+        const defaultLanguage = enumValue(Language, one(body, "defaultLanguage")) ?? Language.English;
         const slug = await freeSlug(name);
         const agentName = one(body, "agentName");
         const draft = {
@@ -408,12 +409,12 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
             voiceAgentName:  agentName,
             staff:           { emails: [email] },
             hoursText:       hours.text,
-            defaultLanguage: defaultLanguage as Language,
+            defaultLanguage,
             profile,
             options:         {},
             settings:        {
-                languages: [...new Set(["en", defaultLanguage, ...many(body, "languages")])] as Language[],
-                style:     { professionalism: (level || null) as Professionalism | null, honestAboutAi: null },
+                languages: [...new Set([Language.English, defaultLanguage, ...many(body, "languages").flatMap(l => enumValue(Language, l) ?? [])])],
+                style:     { professionalism: level, honestAboutAi: null },
                 catalog:   { source, fieldMap: {} },
             },
         } satisfies TenantFile;
