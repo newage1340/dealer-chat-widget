@@ -7,7 +7,7 @@
  * Everything is validated through `parseTenant`, like the settings pages.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 
 import { Hono, type Context } from "hono";
 
@@ -279,6 +279,30 @@ Summaries and alerts will go to the email you gave us.</p>
 
 // --- routes ------------------------------------------------------------------------------
 
+const DONE_LINK_HOURS = 24;
+
+function signDoneLink(secret: string, slug: string, expires: number): string {
+    return createHmac("sha256", secret).update(`onboarding-done:${slug}:${expires}`).digest("base64url");
+}
+
+/**
+ * The link to the "you're all set" page is signed and expires, so only the person who just signed up
+ * sees what they submitted, not anyone who guesses a business's web address.
+ */
+export const DoneLink = {
+    create(secret: string, slug: string, now: Date): string {
+        const expires = now.getTime() + DONE_LINK_HOURS * 3_600_000;
+        return `/onboarding/done?slug=${encodeURIComponent(slug)}&expires=${expires}&sig=${signDoneLink(secret, slug, expires)}`;
+    },
+
+    valid(secret: string, slug: string, expires: string, signature: string, now: Date): boolean {
+        const at = Number(expires);
+        return Number.isFinite(at)
+            && at > now.getTime()
+            && sameSecret(signature, signDoneLink(secret, slug, at));
+    },
+} as const;
+
 export function onboardingRoutes(deps: ChannelDeps): Hono {
     const app = new Hono();
     const { services, config } = deps;
@@ -456,11 +480,15 @@ export function onboardingRoutes(deps: ChannelDeps): Hono {
                 error:    result.ok ? null : result.error,
             });
         }
-        return c.redirect(`/onboarding/done?slug=${encodeURIComponent(slug)}`, 303);
+        return c.redirect(DoneLink.create(config.sessionSecret, slug, services.clock()), 303);
     });
 
     app.get("/onboarding/done", async c => {
-        const tenant = await store.tenants.bySlug(c.req.query("slug") ?? "");
+        const slug = c.req.query("slug") ?? "";
+        const signed = DoneLink.valid(config.sessionSecret, slug, c.req.query("expires") ?? "", c.req.query("sig") ?? "", services.clock());
+        const tenant = signed
+            ? await store.tenants.bySlug(slug)
+            : null;
         if (tenant === null) {
             return c.notFound();
         }

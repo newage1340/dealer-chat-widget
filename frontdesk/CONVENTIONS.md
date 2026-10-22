@@ -61,6 +61,15 @@ Reach for these before writing the same thing inline:
   `UsageRecord.measured` meters them.
 - `publishEvents` / `eventsAndJobs` / `recordMessage` (pipeline/services.ts) write events and messages outside a turn.
 
+Where to add things:
+
+- A prompt section: a function in prompts/sections.ts and an entry in `STABLE_SECTIONS` or `PER_TURN_SECTIONS`.
+  A placeholder: its name in domains/template.ts; the compiler then asks for its value in prompts/values.ts.
+- A settings section or form: an entry in `SETTINGS_SECTIONS` (http/settings/sections.ts); its route is generated.
+- A store: a port in storage/ports.ts and a file under storage/postgres/, wired in storage/postgres.ts.
+  JSON columns are read with a zod schema from storage/postgres/columns.ts.
+- A tenant setting: the zod `TenantFile`, `toTenant` and `fromTenant` (tests/tenants checks they agree).
+
 ## Style
 
 - Doc comments open with `/**` on its own line and wrap at clause boundaries.

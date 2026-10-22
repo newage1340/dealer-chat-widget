@@ -92,7 +92,7 @@ describe("onboarding pages", () => {
     it("turns a submission into a tenant with hours, languages, staff email and catalog", async () => {
         const res = await post(valid());
         expect(res.status).toBe(303);
-        expect(res.headers.get("location")).toBe("/onboarding/done?slug=bob-s-pipes-and-drains");
+        expect(res.headers.get("location")).toMatch(/^\/onboarding\/done\?slug=bob-s-pipes-and-drains&expires=\d+&sig=/);
 
         const saved = (await app.store.tenants.bySlug("bob-s-pipes-and-drains"))!;
         expect(saved.domain).toBe("plumbing");
@@ -119,10 +119,20 @@ describe("onboarding pages", () => {
         expect(done).not.toMatch(/style=|class=|<style|<script/);
     });
 
+    it("shows the summary only through the signed link it redirects to", async () => {
+        const location = (await post(valid())).headers.get("location")!;
+        expect((await routes.request(location)).status).toBe(200);
+        expect((await routes.request("/onboarding/done?slug=bob-s-pipes-and-drains")).status).toBe(404);
+        expect((await routes.request(location.replace("bob-s-pipes-and-drains", "someone-else"))).status).toBe(404);
+        const expired = new URL(location, "http://x");
+        expired.searchParams.set("expires", String(Date.now() - 1000));
+        expect((await routes.request(`${expired.pathname}${expired.search}`)).status).toBe(404);
+    });
+
     it("gives a taken name the next free web address", async () => {
         await post(valid());
         const res = await post({ ...valid(), email: "second@bobs.example" });
-        expect(res.headers.get("location")).toBe("/onboarding/done?slug=bob-s-pipes-and-drains-2");
+        expect(res.headers.get("location")).toMatch(/^\/onboarding\/done\?slug=bob-s-pipes-and-drains-2&/);
     });
 
     it("creates the owner's login, flags the business for review, and refuses a reused email", async () => {
