@@ -3,8 +3,7 @@
  *
  * `toTenant` (file -> tenant) and `fromTenant` (tenant -> file, for the settings pages) are written
  * separately, so a setting added to one and forgotten in the other would silently reset on every save.
- * `Tenant.upgrade` fills in settings added after a tenant was stored; its behavior is pinned here
- * so it can move (into the schema) without changing.
+ * Stored tenants use the file form too, so the schema fills in settings added after one was saved.
  */
 
 import { readdir, readFile } from "node:fs/promises";
@@ -13,8 +12,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ROOT } from "../../src/config.ts";
-import { DEFAULT_CATALOG_SETTINGS, DEFAULT_PRIVACY, Language, NO_BILLING, Tenant } from "../../src/core/index.ts";
-import { fromTenant, parseTenant } from "../../src/tenants/schema.ts";
+import { DEFAULT_CATALOG_SETTINGS, DEFAULT_PRIVACY, Language, NO_BILLING, type Tenant } from "../../src/core/index.ts";
+import { fromTenant, parseTenant, StoredTenant } from "../../src/tenants/schema.ts";
 import { plumber } from "../support/fixtures.ts";
 
 function roundTrip(tenant: Tenant): Tenant {
@@ -83,34 +82,39 @@ describe("tenant file round trip", () => {
     });
 });
 
-describe("Tenant.upgrade", () => {
-    it("leaves a current tenant unchanged", () => {
-        expect(Tenant.upgrade(FULL)).toEqual(FULL);
+describe("stored tenants", () => {
+    it("read back exactly as written", () => {
+        expect(StoredTenant.read(JSON.parse(JSON.stringify(StoredTenant.write(FULL))))).toEqual(FULL);
     });
 
-    it("fills in settings a tenant stored before they existed", () => {
-        const { languages: _l, privacy: _p, style: _s, catalog: _c, calls: _calls, ...older } = FULL.settings;
-        const { billing: _b, ...rest } = FULL;
-        const upgraded = Tenant.upgrade({ ...rest, settings: older } as unknown as Tenant);
-        expect(upgraded.billing).toEqual(NO_BILLING);
-        expect(upgraded.settings.languages).toEqual(Object.values(Language));
-        expect(upgraded.settings.privacy).toEqual(DEFAULT_PRIVACY);
-        expect(upgraded.settings.style).toEqual({ professionalism: null, honestAboutAi: null });
-        expect(upgraded.settings.catalog).toEqual(DEFAULT_CATALOG_SETTINGS);
-        expect(upgraded.settings.calls).toEqual({ silenceSeconds: 5, stillTherePrompts: 1, hiddenCallerId: "assistant" });
+    it("get defaults for settings added after they were saved", () => {
+        const { languages: _l, privacy: _p, style: _s, catalog: _c, calls: _calls, ...older } = StoredTenant.write(FULL).settings;
+        const { billing: _b, ...rest } = StoredTenant.write(FULL);
+        const read = StoredTenant.read({ ...rest, settings: older });
+        expect(read.billing).toEqual(NO_BILLING);
+        // Every language, the tenant's default (Spanish) first.
+        expect(read.settings.languages).toEqual(["es", ...Object.values(Language).filter(l => l !== "es")]);
+        expect(read.settings.privacy).toEqual(DEFAULT_PRIVACY);
+        expect(read.settings.style).toEqual({ professionalism: null, honestAboutAi: null });
+        expect(read.settings.catalog).toEqual(DEFAULT_CATALOG_SETTINGS);
+        expect(read.settings.calls).toEqual({ silenceSeconds: 5, stillTherePrompts: 1, hiddenCallerId: "assistant" });
     });
 
-    it("clamps stored values into the current platform bounds", () => {
-        const stored: Tenant = {
-            ...FULL,
+    it("clamp values the platform bounds no longer allow", () => {
+        const file = StoredTenant.write(FULL);
+        const read = StoredTenant.read({
+            ...file,
             settings: {
-                ...FULL.settings,
-                calls:  { ...FULL.settings.calls, silenceSeconds: 60, stillTherePrompts: -3 },
-                limits: { ...FULL.settings.limits, maxSessionSeconds: 3 * 3600 },
+                ...file.settings,
+                maxSessionMinutes: 180,
+                calls:             { ...file.settings.calls, silenceSeconds: 60, stillTherePrompts: -3 },
             },
-        };
-        const upgraded = Tenant.upgrade(stored);
-        expect(upgraded.settings.calls).toMatchObject({ silenceSeconds: 8, stillTherePrompts: 0 });
-        expect(upgraded.settings.limits.maxSessionSeconds).toBe(45 * 60);
+        });
+        expect(read.settings.calls).toMatchObject({ silenceSeconds: 8, stillTherePrompts: 0 });
+        expect(read.settings.limits.maxSessionSeconds).toBe(45 * 60);
+    });
+
+    it("refuse anything else that doesn't fit, as a bug", () => {
+        expect(() => StoredTenant.read({ ...StoredTenant.write(FULL), timezone: "Mars/Olympus" })).toThrow(/unknown timezone/);
     });
 });

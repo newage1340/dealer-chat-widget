@@ -26,7 +26,6 @@ import {
     Role,
     SessionId,
     SessionMeter,
-    Tenant,
     TenantId,
     type Account,
     type Appointment,
@@ -50,6 +49,7 @@ import {
     type Voicemail,
 } from "../core/index.ts";
 import { PriceTable } from "../providers/usage.ts";
+import { StoredTenant } from "../tenants/schema.ts";
 import type { Db, Row } from "./db.ts";
 import type {
     AccountStore,
@@ -317,7 +317,7 @@ export class PostgresStore implements Store {
         const db = this.#db;
         const one = async (sql: string, params: unknown[]) => {
             const rows = await db.query(sql, params);
-            return firstOrNull(rows, r => Tenant.upgrade(parsed<Tenant>(r["data"])));
+            return firstOrNull(rows, r => StoredTenant.read(parsed(r["data"])));
         };
         return {
             byId:       id => one("select data from tenants where id = $1", [id]),
@@ -327,12 +327,12 @@ export class PostgresStore implements Store {
                  where e.channel = $1 and e.address = $2`,
                 [channel, Address.key(address)],
             ),
-            all:        async () => (await db.query("select data from tenants order by slug")).map(r => Tenant.upgrade(parsed<Tenant>(r["data"]))),
+            all:        async () => (await db.query("select data from tenants order by slug")).map(r => StoredTenant.read(parsed(r["data"]))),
             save:       tenant => db.transaction(async tx => {
                 await tx.query(
                     `insert into tenants (id, slug, data, updated_at) values ($1, $2, $3::jsonb, now())
                      on conflict (id) do update set slug = excluded.slug, data = excluded.data, updated_at = now()`,
-                    [tenant.id, tenant.slug, json(tenant)],
+                    [tenant.id, tenant.slug, json(StoredTenant.write(tenant))],
                 );
                 await tx.query("delete from tenant_endpoints where tenant_id = $1", [tenant.id]);
                 for (const [channel, addresses] of Object.entries(tenant.endpoints)) {

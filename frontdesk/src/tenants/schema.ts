@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
     Address,
     BillingStatus,
+    Bound,
     CallFallback,
     DEFAULT_ABUSE_POLICY,
     DEFAULT_CALL_FALLBACKS,
@@ -27,7 +28,6 @@ import {
     ServiceSchedule,
     Tenant,
     TenantId,
-    type Bound,
     type CatalogSource,
     type LocalizedText,
 } from "../core/index.ts";
@@ -318,3 +318,63 @@ export function parseTenant(data: unknown): Result<Tenant, Problem[]> {
         ? Result.ok(toTenant(parsed.data))
         : Result.err(Problem.fromIssues(parsed.error.issues));
 }
+
+/**
+ * The bounded numbers of a stored tenant file, read loosely so they can be clamped before the strict parse.
+ */
+const BoundedSettings = z.looseObject({
+    settings: z.looseObject({
+        maxSessionMinutes: z.number().optional(),
+        calls:             z.looseObject({
+            silenceSeconds:    z.number().optional(),
+            stillTherePrompts: z.number().optional(),
+        }).optional(),
+    }).optional(),
+});
+
+/**
+ * A stored file with its bounded settings clamped into PLATFORM_BOUNDS (which may have narrowed since it was saved).
+ */
+function clampToBounds(data: unknown): unknown {
+    const file = BoundedSettings.safeParse(data);
+    const s = file.success ? file.data.settings : undefined;
+    if (s === undefined) {
+        return data;
+    }
+    const clamp = (bound: Bound, value: number | undefined) => value === undefined
+        ? undefined
+        : Bound.clamp(bound, value);
+    return {
+        ...file.data,
+        settings: {
+            ...s,
+            maxSessionMinutes: clamp(PLATFORM_BOUNDS.maxSessionMinutes, s.maxSessionMinutes),
+            ...(s.calls === undefined ? {} : {
+                calls: {
+                    ...s.calls,
+                    silenceSeconds:    clamp(PLATFORM_BOUNDS.silenceSeconds, s.calls.silenceSeconds),
+                    stillTherePrompts: clamp(PLATFORM_BOUNDS.stillTherePrompts, s.calls.stillTherePrompts),
+                },
+            }),
+        },
+    };
+}
+
+/**
+ * Tenants are stored in their file form, so reading one back goes through the same schema:
+ * settings added since it was saved get their defaults, and values outside narrowed platform bounds
+ * are clamped rather than rejected. Anything else that doesn't fit is a bug, so it throws.
+ */
+export const StoredTenant = {
+    write(tenant: Tenant): TenantDraft {
+        return fromTenant(tenant);
+    },
+
+    read(data: unknown): Tenant {
+        const parsed = parseTenant(clampToBounds(data));
+        if (!parsed.ok) {
+            throw new Error(`a stored tenant doesn't fit the tenant schema: ${parsed.error.map(Problem.format).join("; ")}`);
+        }
+        return parsed.value;
+    },
+} as const;

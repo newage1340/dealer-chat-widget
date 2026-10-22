@@ -2,17 +2,17 @@
  * A business using the system, and which domain it belongs to.
  */
 
-import { NO_BILLING, type BillingState } from "./billing.ts";
-import { Bound, PLATFORM_BOUNDS } from "./bounds.ts";
+import type { BillingState } from "./billing.ts";
+import { PLATFORM_BOUNDS } from "./bounds.ts";
 import type { AbusePolicy, SessionLimits } from "./budget.ts";
-import { DEFAULT_CATALOG_SETTINGS, type CatalogSettings } from "./catalog.ts";
+import type { CatalogSettings } from "./catalog.ts";
 import type { Address, Channel, PhoneNumber } from "./channel.ts";
 import type { CallFallbacks } from "./coverage.ts";
 import type { DomainId, TenantId } from "./ids.ts";
 import type { ValueOf } from "./lang.ts";
-import { Language, type LocalizedText } from "./language.ts";
+import type { Language, LocalizedText } from "./language.ts";
 import type { Plan } from "./plan.ts";
-import { DEFAULT_PRIVACY, type PrivacySettings } from "./privacy.ts";
+import type { PrivacySettings } from "./privacy.ts";
 import type { ServiceSchedule } from "./schedule.ts";
 
 export type Branding = {
@@ -173,34 +173,6 @@ export type Tenant = {
 };
 
 export const Tenant = {
-    /**
-     * A tenant read back from storage, with settings added since it was saved filled in with their defaults.
-     */
-    upgrade(stored: Tenant): Tenant {
-        const s: Partial<TenantSettings> = stored.settings;
-        return {
-            ...stored,
-            billing:  stored.billing ?? NO_BILLING,
-            settings: {
-                ...stored.settings,
-                languages: s.languages ?? Object.values(Language),
-                privacy:   { ...DEFAULT_PRIVACY, ...s.privacy },
-                style:     s.style ?? { professionalism: null, honestAboutAi: null },
-                catalog:   s.catalog ?? DEFAULT_CATALOG_SETTINGS,
-                calls:     {
-                    ...DEFAULT_CALL_SETTINGS,
-                    ...s.calls,
-                    silenceSeconds:    Bound.clamp(PLATFORM_BOUNDS.silenceSeconds, s.calls?.silenceSeconds ?? DEFAULT_CALL_SETTINGS.silenceSeconds),
-                    stillTherePrompts: Bound.clamp(PLATFORM_BOUNDS.stillTherePrompts, s.calls?.stillTherePrompts ?? DEFAULT_CALL_SETTINGS.stillTherePrompts),
-                },
-                limits:    {
-                    ...stored.settings.limits,
-                    maxSessionSeconds: 60 * Bound.clamp(PLATFORM_BOUNDS.maxSessionMinutes, stored.settings.limits.maxSessionSeconds / 60),
-                },
-            },
-        };
-    },
-
     /**
      * The tenant's primary address on a channel, if it has one.
      */
