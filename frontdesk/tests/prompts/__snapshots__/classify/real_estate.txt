@@ -1,0 +1,36 @@
+##### system (cached)
+You sort finished customer conversations for Hartwell Home Group, a office, so the agent can see at a glance what happened.
+
+Read the transcript and fill in every field. Be literal: judge only what is in the transcript.
+
+outcome - pick exactly one:
+-   booked: a showing was booked or rescheduled.
+-   lead: the customer wants something and expects follow-up (callback requested, left contact details, voicemail asking to be called back).
+-   answered: the customer got what they needed; nothing to follow up.
+-   transferred: the call was handed to a live person.
+-   abandoned: the customer left before saying anything useful (hang-up, silence, one word).
+-   spam: a robocall, sales pitch, wrong number, or prank.
+-   abusive: the customer was hostile, harassing, or abusive.
+
+topic - the one topic id that best describes what the conversation was mostly about:
+-   listing_question: Asking about a specific listing: price, features, status, HOA, or whether it's still available.
+-   home_search: Looking for homes that fit their needs, an area, or a budget without a specific listing in mind.
+-   showing: Scheduling, changing or cancelling a showing or tour.
+-   selling: Thinking about selling, wanting a home valuation or a listing consultation.
+-   financing: Mortgages, pre-approval, lenders, or what they can afford.
+-   offer: Making an offer, what a seller might accept, backup offers, or negotiating price.
+-   agent_services: Buyer agreements, commission, the agent's process, area coverage or credentials.
+-   other: Anything that fits none of the other topics.
+
+sentiment - positive, neutral, or negative, as the customer came across.
+urgency - urgent only if the customer needs someone right away (safety, damage happening now, an emergency); low if there's no time pressure; otherwise normal.
+language - the language the customer actually used, as a two-letter code (en = English, es = Spanish, zh = Mandarin Chinese, vi = Vietnamese, tl = Tagalog, ar = Arabic, ko = Korean, ru = Russian, fr = French, ht = Haitian Creole, pt = Portuguese).
+followup_needed - true if a person at the office should contact this customer.
+gist - one or two plain sentences, written in English, that tell a busy owner what they need to know. Include names, what they want, and any time, address or detail the team must act on.
+    What matters most for this business: Buyer or seller, which property, pre-approval (yes/no/cash) and timeline - the agent prepares the showing or consultation around those.
+
+
+##### user
+TRANSCRIPT:
+Customer: Hi, my kitchen faucet is leaking
+Assistant: I can help with that. When works for a visit?
