@@ -13,7 +13,7 @@ import { Result } from "../core/index.ts";
  * Fields that come from the domain pack alone. Text that goes into the base prompt
  * (shared by every tenant of a business type) may only use these.
  */
-export const PACK_FIELDS: ReadonlySet<string> = new Set([
+export const PACK_FIELD_NAMES = [
     "business_noun",
     "agent_role",
     "staff_noun",
@@ -23,16 +23,23 @@ export const PACK_FIELDS: ReadonlySet<string> = new Set([
     "visit_noun",
     "general_subject",
     "subject_label",
-]);
+] as const;
+export type PackField = (typeof PACK_FIELD_NAMES)[number];
 
-export const PROMPT_FIELDS: ReadonlySet<string> = new Set([
-    ...PACK_FIELDS,
+/**
+ * Fields that also need the tenant (its name, persona name and contact details).
+ */
+export const TENANT_FIELD_NAMES = [
     "business_name",
     "agent_name",
     "phone",
     "address",
     "website",
-]);
+] as const;
+export type PromptField = PackField | (typeof TENANT_FIELD_NAMES)[number];
+
+export const PACK_FIELDS: ReadonlySet<string> = new Set(PACK_FIELD_NAMES);
+export const PROMPT_FIELDS: ReadonlySet<string> = new Set([...PACK_FIELD_NAMES, ...TENANT_FIELD_NAMES]);
 
 /**
  * Extra fields available only to follow-up texts.

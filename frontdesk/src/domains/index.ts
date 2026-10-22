@@ -46,4 +46,6 @@ export {
     PACK_FIELDS,
     PROMPT_FIELDS,
     Template,
+    type PackField,
+    type PromptField,
 } from "./template.ts";

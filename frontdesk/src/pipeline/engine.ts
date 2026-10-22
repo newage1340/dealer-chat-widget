@@ -36,6 +36,7 @@ import {
     type Session,
 } from "../core/index.ts";
 import { STRINGS, phoneSentence, say } from "../prompts/strings.ts";
+import { PromptValues } from "../prompts/values.ts";
 import {
     ProviderError,
     type ChatMessage,
@@ -605,7 +606,7 @@ export class TurnEngine {
 
     #values(ctx: TurnContext): Record<string, string> {
         return {
-            ...this.#s.composer.values(ctx.tenant, ctx.pack, ctx.inbound.channel),
+            ...PromptValues.tenant(ctx.tenant, ctx.pack, ctx.inbound.channel),
             phone_sentence: phoneSentence(ctx.tenant),
             hours_sentence: ctx.tenant.hoursText
                 ? say(STRINGS.hoursSentence, ctx.session.language, { hours: ctx.tenant.hoursText })
