@@ -1,0 +1,8 @@
+{
+    "name": "plumbing: flooding emergency on a call gets a shutoff tip and a live person",
+    "tenant": "demo-plumber",
+    "channel": "voice",
+    "turns": [
+        { "say": "Hi this is Sam, water is pouring out of a pipe in my basement and it's flooding!", "expect": { "replyMatches": "shut|valve|main", "events": ["handoff_requested"] } }
+    ]
+}

@@ -1,0 +1,64 @@
+name: Front desk checks
+
+# Typecheck and tests on every change to frontdesk/. Evals (real model calls, about $0.15 a run)
+# also run when the repository has an OPENAI_API_KEY secret; without it they are skipped.
+
+on:
+  push:
+    paths: ["frontdesk/**", ".github/workflows/frontdesk-checks.yml"]
+  pull_request:
+    paths: ["frontdesk/**", ".github/workflows/frontdesk-checks.yml"]
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    working-directory: frontdesk
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: pnpm
+          cache-dependency-path: frontdesk/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: node src/cli/validate-pack.ts
+      - run: node src/cli/check-demo.ts
+
+  evals:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      EMBEDDED_DB_DIR: ${{ github.workspace }}/frontdesk/data/ci
+      RUN_WORKER: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        if: env.OPENAI_API_KEY != ''
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        if: env.OPENAI_API_KEY != ''
+        with:
+          node-version: "26"
+          cache: pnpm
+          cache-dependency-path: frontdesk/pnpm-lock.yaml
+      - if: env.OPENAI_API_KEY != ''
+        run: pnpm install --frozen-lockfile
+      - if: env.OPENAI_API_KEY != ''
+        run: node src/main.ts seed-demo
+      - if: env.OPENAI_API_KEY != ''
+        run: node src/main.ts eval --all --repeat 2
+      - if: env.OPENAI_API_KEY == ''
+        run: echo "No OPENAI_API_KEY secret; evals skipped."

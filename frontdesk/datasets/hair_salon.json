@@ -1,0 +1,254 @@
+[
+  {
+    "code": "CUT-1",
+    "name": "Women's haircut",
+    "category": "Cut",
+    "price": "from $65",
+    "duration": "45-60 min",
+    "description": "Consultation, shampoo, precision cut and a simple blow-dry style.",
+    "keywords": "womens cut layers long hair trim restyle"
+  },
+  {
+    "code": "CUT-2",
+    "name": "Trim / maintenance cut",
+    "category": "Cut",
+    "price": "from $45",
+    "duration": "30 min",
+    "description": "Dusting the ends and keeping your current shape. Dry finish.",
+    "keywords": "trim ends split ends maintenance"
+  },
+  {
+    "code": "CUT-3",
+    "name": "Men's haircut",
+    "category": "Cut",
+    "price": "from $35",
+    "duration": "30 min",
+    "description": "Clipper or scissor cut with shampoo, neck cleanup and style.",
+    "keywords": "mens cut fade taper short haircut guys"
+  },
+  {
+    "code": "CUT-4",
+    "name": "Kids cut (12 and under)",
+    "category": "Cut",
+    "price": "$25",
+    "duration": "20-30 min",
+    "description": "Haircut for kids 12 and under, wet or dry.",
+    "keywords": "kids children child boys girls first haircut"
+  },
+  {
+    "code": "CUT-5",
+    "name": "Bang trim",
+    "category": "Cut",
+    "price": "$15",
+    "duration": "15 min",
+    "description": "Quick fringe trim between appointments. Free for existing cut clients within 4 weeks.",
+    "keywords": "bangs fringe curtain bangs"
+  },
+  {
+    "code": "CUT-6",
+    "name": "Beard trim",
+    "category": "Cut",
+    "price": "$15",
+    "duration": "15 min",
+    "description": "Beard shaping and lineup; add to any men's cut.",
+    "keywords": "beard lineup shape facial hair"
+  },
+  {
+    "code": "CUT-7",
+    "name": "Curly cut",
+    "category": "Cut",
+    "price": "from $80",
+    "duration": "60-75 min",
+    "description": "Dry, curl-by-curl cut for curly and coily hair, with a curl-defining style.",
+    "keywords": "curly cut dry cut curls coily wavy devacut"
+  },
+  {
+    "code": "COL-1",
+    "name": "Root touch-up",
+    "category": "Color",
+    "price": "from $75",
+    "duration": "1.5 hours",
+    "description": "Single-process color on regrowth up to 1.5 inches; covers gray.",
+    "keywords": "roots regrowth gray coverage touch up"
+  },
+  {
+    "code": "COL-2",
+    "name": "All-over color",
+    "category": "Color",
+    "price": "from $95",
+    "duration": "2 hours",
+    "description": "Single-process color from roots to ends. Long or thick hair may need extra color.",
+    "keywords": "single process all over color full color"
+  },
+  {
+    "code": "COL-3",
+    "name": "Partial highlights",
+    "category": "Color",
+    "price": "from $110",
+    "duration": "2 hours",
+    "description": "Foils around the face and part line, includes toner.",
+    "keywords": "partial foils face frame highlights"
+  },
+  {
+    "code": "COL-4",
+    "name": "Full highlights",
+    "category": "Color",
+    "price": "from $150",
+    "duration": "2.5-3 hours",
+    "description": "Foils throughout the whole head, includes toner.",
+    "keywords": "full foils highlights babylights"
+  },
+  {
+    "code": "COL-5",
+    "name": "Balayage",
+    "category": "Color",
+    "price": "from $185",
+    "duration": "3-3.5 hours",
+    "description": "Hand-painted, soft, low-maintenance lightening with toner. Price depends on length and starting color.",
+    "keywords": "balayage hand painted ombre lived in color"
+  },
+  {
+    "code": "COL-6",
+    "name": "Gloss / toner",
+    "category": "Color",
+    "price": "from $45",
+    "duration": "45 min",
+    "description": "Refresh tone and shine between color visits, or add to a lightening service.",
+    "keywords": "gloss toner glaze brassy refresh shine"
+  },
+  {
+    "code": "COL-7",
+    "name": "Lowlights",
+    "category": "Color",
+    "price": "from $100",
+    "duration": "2 hours",
+    "description": "Darker foils woven in to add depth and dimension.",
+    "keywords": "lowlights depth dimension darker"
+  },
+  {
+    "code": "COL-8",
+    "name": "Color correction",
+    "category": "Color",
+    "price": "",
+    "duration": "varies; often 2 sessions",
+    "description": "Fixing box dye, banding or unwanted tones. Requires a consultation first; may take more than one session.",
+    "keywords": "color correction box dye fix orange brassy"
+  },
+  {
+    "code": "COL-9",
+    "name": "Patch test",
+    "category": "Color",
+    "price": "Free",
+    "duration": "15 min",
+    "description": "Skin allergy test for new color clients, done at least 48 hours before the color appointment.",
+    "keywords": "patch test allergy skin test"
+  },
+  {
+    "code": "STY-1",
+    "name": "Blowout",
+    "category": "Styling",
+    "price": "from $45",
+    "duration": "45 min",
+    "description": "Shampoo, conditioning and round-brush blowout. Long or thick hair from $55.",
+    "keywords": "blowout blow dry wash and style"
+  },
+  {
+    "code": "STY-2",
+    "name": "Silk press",
+    "category": "Styling",
+    "price": "from $85",
+    "duration": "1.5-2 hours",
+    "description": "Shampoo, deep condition, blow-dry and flat-iron press for natural hair.",
+    "keywords": "silk press natural hair flat iron press"
+  },
+  {
+    "code": "STY-3",
+    "name": "Updo / event style",
+    "category": "Styling",
+    "price": "from $85",
+    "duration": "1 hour",
+    "description": "Formal updo or curled style for weddings, proms and events. Trial run recommended for brides.",
+    "keywords": "updo prom wedding formal event curls"
+  },
+  {
+    "code": "STY-4",
+    "name": "Bridal hair (with trial)",
+    "category": "Styling",
+    "price": "from $175",
+    "duration": "Trial 1 hour + wedding day",
+    "description": "Bridal trial plus wedding-day styling at the salon. On-site styling quoted separately.",
+    "keywords": "bride bridal wedding trial"
+  },
+  {
+    "code": "TRT-1",
+    "name": "Deep conditioning treatment",
+    "category": "Treatment",
+    "price": "$25",
+    "duration": "15 min add-on",
+    "description": "Moisture mask under heat; add to any service.",
+    "keywords": "deep condition mask moisture dry hair"
+  },
+  {
+    "code": "TRT-2",
+    "name": "Bond-building treatment (Olaplex / K18)",
+    "category": "Treatment",
+    "price": "from $35",
+    "duration": "20 min add-on",
+    "description": "Repairs broken bonds; recommended with any lightening service.",
+    "keywords": "olaplex k18 bond builder repair damage"
+  },
+  {
+    "code": "TRT-3",
+    "name": "Keratin smoothing treatment",
+    "category": "Treatment",
+    "price": "from $250",
+    "duration": "2.5-3 hours",
+    "description": "Reduces frizz and curl for up to 3-4 months. Price depends on length and thickness.",
+    "keywords": "keratin brazilian blowout smoothing frizz"
+  },
+  {
+    "code": "TRT-4",
+    "name": "Scalp treatment",
+    "category": "Treatment",
+    "price": "$40",
+    "duration": "30 min",
+    "description": "Exfoliating scalp scrub, massage and steam.",
+    "keywords": "scalp exfoliation dandruff massage"
+  },
+  {
+    "code": "EXT-1",
+    "name": "Extensions consultation",
+    "category": "Extensions",
+    "price": "Free",
+    "duration": "30 min",
+    "description": "Color match, method recommendation and quote. Required before any extensions install.",
+    "keywords": "extensions consult quote color match"
+  },
+  {
+    "code": "EXT-2",
+    "name": "Tape-in extensions install",
+    "category": "Extensions",
+    "price": "from $450",
+    "duration": "2-3 hours",
+    "description": "Tape-in extensions including hair. Final price depends on how many packs you need.",
+    "keywords": "tape in tape-ins extensions length volume"
+  },
+  {
+    "code": "EXT-3",
+    "name": "Hand-tied weft extensions install",
+    "category": "Extensions",
+    "price": "from $800",
+    "duration": "3-4 hours",
+    "description": "Hand-tied wefts including hair. Quoted at consultation.",
+    "keywords": "hand tied wefts beaded rows extensions"
+  },
+  {
+    "code": "EXT-4",
+    "name": "Extensions move-up",
+    "category": "Extensions",
+    "price": "from $150",
+    "duration": "1.5-2 hours",
+    "description": "Re-tape or move up existing extensions every 6-8 weeks.",
+    "keywords": "move up retape maintenance extensions"
+  }
+]

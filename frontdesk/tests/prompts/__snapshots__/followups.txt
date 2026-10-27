@@ -1,0 +1,108 @@
+auto_repair confirm en: You're booked with Hermanos Reyes Auto Repair for Friday at 10 AM - a repair. Reply here if anything changes.
+auto_repair confirm es: Su cita con Hermanos Reyes Auto Repair quedó para Friday at 10 AM - a repair. Responda aquí si necesita cambiar algo.
+auto_repair confirm vi: You're booked with Hermanos Reyes Auto Repair for Friday at 10 AM - a repair. Reply here if anything changes.
+auto_repair reminder en: Reminder from Hermanos Reyes Auto Repair: your appointment is Friday at 10 AM (a repair). Reply here if anything changes.
+auto_repair reminder es: Recordatorio de Hermanos Reyes Auto Repair: su cita es Friday at 10 AM (a repair). Responda aquí si necesita cambiarla.
+auto_repair reminder vi: Reminder from Hermanos Reyes Auto Repair: your appointment is Friday at 10 AM (a repair). Reply here if anything changes.
+auto_repair cold en: Hi there, it's Daniel with Hermanos Reyes Auto Repair. Just checking in about your car - want me to get you on the schedule?
+auto_repair cold es: Hola there, le saluda Daniel de Hermanos Reyes Auto Repair. Solo queríamos saber cómo sigue su carro - ¿le aparto una cita?
+auto_repair cold vi: Hi there, it's Daniel with Hermanos Reyes Auto Repair. Just checking in about your car - want me to get you on the schedule?
+automotive confirm en: You're confirmed at demo-automotive for Friday at 10 AM - a repair. Address: . Reply here if anything changes.
+automotive confirm es: You're confirmed at demo-automotive for Friday at 10 AM - a repair. Address: . Reply here if anything changes.
+automotive confirm vi: You're confirmed at demo-automotive for Friday at 10 AM - a repair. Address: . Reply here if anything changes.
+automotive reminder en: Reminder: your visit to demo-automotive is coming up Friday at 10 AM for the a repair. Reply here if anything changes - see you soon!
+automotive reminder es: Reminder: your visit to demo-automotive is coming up Friday at 10 AM for the a repair. Reply here if anything changes - see you soon!
+automotive reminder vi: Reminder: your visit to demo-automotive is coming up Friday at 10 AM for the a repair. Reply here if anything changes - see you soon!
+automotive cold en: Hi there, it's Dave with demo-automotive. Just checking in - did you have any other questions about the vehicles we talked about? I'm happy to help set up a time to come see one.
+automotive cold es: Hi there, it's Dave with demo-automotive. Just checking in - did you have any other questions about the vehicles we talked about? I'm happy to help set up a time to come see one.
+automotive cold vi: Hi there, it's Dave with demo-automotive. Just checking in - did you have any other questions about the vehicles we talked about? I'm happy to help set up a time to come see one.
+boxing_gym confirm en: You're in! Southside Boxing Club, Friday at 10 AM - a repair. Show up 10-15 minutes early to sign the waiver. Reply here if anything changes.
+boxing_gym confirm es: You're in! Southside Boxing Club, Friday at 10 AM - a repair. Show up 10-15 minutes early to sign the waiver. Reply here if anything changes.
+boxing_gym confirm vi: You're in! Southside Boxing Club, Friday at 10 AM - a repair. Show up 10-15 minutes early to sign the waiver. Reply here if anything changes.
+boxing_gym reminder en: Reminder from Southside Boxing Club: your class visit is Friday at 10 AM (a repair). Get there 10-15 minutes early for the waiver, bring water, and wraps if you have them. See you on the floor!
+boxing_gym reminder es: Reminder from Southside Boxing Club: your class visit is Friday at 10 AM (a repair). Get there 10-15 minutes early for the waiver, bring water, and wraps if you have them. See you on the floor!
+boxing_gym reminder vi: Reminder from Southside Boxing Club: your class visit is Friday at 10 AM (a repair). Get there 10-15 minutes early for the waiver, bring water, and wraps if you have them. See you on the floor!
+boxing_gym cold en: Hey there, it's Marcus from Southside Boxing Club! Still thinking about getting in the gym? I can save you a spot in a class this week.
+boxing_gym cold es: Hey there, it's Marcus from Southside Boxing Club! Still thinking about getting in the gym? I can save you a spot in a class this week.
+boxing_gym cold vi: Hey there, it's Marcus from Southside Boxing Club! Still thinking about getting in the gym? I can save you a spot in a class this week.
+chinese_restaurant confirm en: You're all set with Golden Lotus Family Kitchen for Friday at 10 AM - a repair. Reply here if you need to change anything.
+chinese_restaurant confirm es: You're all set with Golden Lotus Family Kitchen for Friday at 10 AM - a repair. Reply here if you need to change anything.
+chinese_restaurant confirm vi: You're all set with Golden Lotus Family Kitchen for Friday at 10 AM - a repair. Reply here if you need to change anything.
+chinese_restaurant reminder en: Reminder from Golden Lotus Family Kitchen: we'll see you Friday at 10 AM (a repair). Reply here if anything changes.
+chinese_restaurant reminder es: Reminder from Golden Lotus Family Kitchen: we'll see you Friday at 10 AM (a repair). Reply here if anything changes.
+chinese_restaurant reminder vi: Reminder from Golden Lotus Family Kitchen: we'll see you Friday at 10 AM (a repair). Reply here if anything changes.
+chinese_restaurant cold en: Hi there, it's Amy at Golden Lotus Family Kitchen. Still hungry? I can get a pickup order or a table set up for you whenever you're ready.
+chinese_restaurant cold es: Hi there, it's Amy at Golden Lotus Family Kitchen. Still hungry? I can get a pickup order or a table set up for you whenever you're ready.
+chinese_restaurant cold vi: Hi there, it's Amy at Golden Lotus Family Kitchen. Still hungry? I can get a pickup order or a table set up for you whenever you're ready.
+computer_repair confirm en: You're booked with Byte Fix Computer & Phone Repair for Friday at 10 AM - a repair. Bring the charger too. Reply here if anything changes.
+computer_repair confirm es: You're booked with Byte Fix Computer & Phone Repair for Friday at 10 AM - a repair. Bring the charger too. Reply here if anything changes.
+computer_repair confirm vi: You're booked with Byte Fix Computer & Phone Repair for Friday at 10 AM - a repair. Bring the charger too. Reply here if anything changes.
+computer_repair reminder en: Reminder from Byte Fix Computer & Phone Repair: your drop-off appointment is Friday at 10 AM (a repair). Bring the device and its charger, and back up anything you can beforehand. Reply here if anything changes.
+computer_repair reminder es: Reminder from Byte Fix Computer & Phone Repair: your drop-off appointment is Friday at 10 AM (a repair). Bring the device and its charger, and back up anything you can beforehand. Reply here if anything changes.
+computer_repair reminder vi: Reminder from Byte Fix Computer & Phone Repair: your drop-off appointment is Friday at 10 AM (a repair). Bring the device and its charger, and back up anything you can beforehand. Reply here if anything changes.
+computer_repair cold en: Hi there, it's Jordan with Byte Fix Computer & Phone Repair. Still having trouble with that device? I can get you a drop-off time so a tech can take a look.
+computer_repair cold es: Hi there, it's Jordan with Byte Fix Computer & Phone Repair. Still having trouble with that device? I can get you a drop-off time so a tech can take a look.
+computer_repair cold vi: Hi there, it's Jordan with Byte Fix Computer & Phone Repair. Still having trouble with that device? I can get you a drop-off time so a tech can take a look.
+esl_tutor confirm en: You're booked with Puente English Academy for Friday at 10 AM - a repair. Reply here if anything changes.
+esl_tutor confirm es: ¡Listo! Su cita con Puente English Academy es Friday at 10 AM - a repair. Responda aquí si necesita cambiarla.
+esl_tutor confirm vi: You're booked with Puente English Academy for Friday at 10 AM - a repair. Reply here if anything changes.
+esl_tutor reminder en: Reminder from Puente English Academy: your a repair is Friday at 10 AM. Reply here if you need to change it.
+esl_tutor reminder es: Recordatorio de Puente English Academy: su a repair es Friday at 10 AM. Responda aquí si necesita cambiarla.
+esl_tutor reminder vi: Reminder from Puente English Academy: your a repair is Friday at 10 AM. Reply here if you need to change it.
+esl_tutor cold en: Hi there, it's Lucia from Puente English Academy. Would you like to book your free level assessment? It only takes a few minutes.
+esl_tutor cold es: Hola there, soy Lucia de Puente English Academy. ¿Le gustaría reservar su examen de nivel gratis? Solo toma unos minutos.
+esl_tutor cold vi: Hi there, it's Lucia from Puente English Academy. Would you like to book your free level assessment? It only takes a few minutes.
+hair_salon confirm en: You're booked with Mass Ave Hair Studio for Friday at 10 AM - a repair. Reply here if you need to reschedule.
+hair_salon confirm es: You're booked with Mass Ave Hair Studio for Friday at 10 AM - a repair. Reply here if you need to reschedule.
+hair_salon confirm vi: You're booked with Mass Ave Hair Studio for Friday at 10 AM - a repair. Reply here if you need to reschedule.
+hair_salon reminder en: Reminder from Mass Ave Hair Studio: your appointment is Friday at 10 AM (a repair). Please come with dry, product-free hair for color services. Reply here if anything changes.
+hair_salon reminder es: Reminder from Mass Ave Hair Studio: your appointment is Friday at 10 AM (a repair). Please come with dry, product-free hair for color services. Reply here if anything changes.
+hair_salon reminder vi: Reminder from Mass Ave Hair Studio: your appointment is Friday at 10 AM (a repair). Please come with dry, product-free hair for color services. Reply here if anything changes.
+hair_salon cold en: Hi there, it's Jess with Mass Ave Hair Studio. Still thinking about that appointment? I'm happy to find a time that works for you.
+hair_salon cold es: Hi there, it's Jess with Mass Ave Hair Studio. Still thinking about that appointment? I'm happy to find a time that works for you.
+hair_salon cold vi: Hi there, it's Jess with Mass Ave Hair Studio. Still thinking about that appointment? I'm happy to find a time that works for you.
+nail_salon confirm en: You're booked with Lotus Nails & Spa for Friday at 10 AM - a repair. Reply here if anything changes.
+nail_salon confirm es: You're booked with Lotus Nails & Spa for Friday at 10 AM - a repair. Reply here if anything changes.
+nail_salon confirm vi: You're booked with Lotus Nails & Spa for Friday at 10 AM - a repair. Reply here if anything changes.
+nail_salon reminder en: Reminder from Lotus Nails & Spa: your appointment is Friday at 10 AM (a repair). Reply here if anything changes or your group size changes.
+nail_salon reminder es: Reminder from Lotus Nails & Spa: your appointment is Friday at 10 AM (a repair). Reply here if anything changes or your group size changes.
+nail_salon reminder vi: Reminder from Lotus Nails & Spa: your appointment is Friday at 10 AM (a repair). Reply here if anything changes or your group size changes.
+nail_salon cold en: Hi there, it's Linh with Lotus Nails & Spa. Want me to save you a spot for your nails? Just tell me a day and time.
+nail_salon cold es: Hi there, it's Linh with Lotus Nails & Spa. Want me to save you a spot for your nails? Just tell me a day and time.
+nail_salon cold vi: Hi there, it's Linh with Lotus Nails & Spa. Want me to save you a spot for your nails? Just tell me a day and time.
+plumbing confirm en: You're booked with Circle City Plumbing for Friday at 10 AM - a repair. Reply here if anything changes.
+plumbing confirm es: You're booked with Circle City Plumbing for Friday at 10 AM - a repair. Reply here if anything changes.
+plumbing confirm vi: You're booked with Circle City Plumbing for Friday at 10 AM - a repair. Reply here if anything changes.
+plumbing reminder en: Reminder from Circle City Plumbing: your service call is Friday at 10 AM (a repair). Our tech will text when they're on the way. Reply here if anything changes.
+plumbing reminder es: Reminder from Circle City Plumbing: your service call is Friday at 10 AM (a repair). Our tech will text when they're on the way. Reply here if anything changes.
+plumbing reminder vi: Reminder from Circle City Plumbing: your service call is Friday at 10 AM (a repair). Our tech will text when they're on the way. Reply here if anything changes.
+plumbing cold en: Hi there, it's Dave with Circle City Plumbing. Just checking in on that plumbing issue - want me to get a tech scheduled out to you?
+plumbing cold es: Hi there, it's Dave with Circle City Plumbing. Just checking in on that plumbing issue - want me to get a tech scheduled out to you?
+plumbing cold vi: Hi there, it's Dave with Circle City Plumbing. Just checking in on that plumbing issue - want me to get a tech scheduled out to you?
+real_estate confirm en: You're confirmed with Hartwell Home Group for Friday at 10 AM - a repair. Reply here if anything changes.
+real_estate confirm es: You're confirmed with Hartwell Home Group for Friday at 10 AM - a repair. Reply here if anything changes.
+real_estate confirm vi: You're confirmed with Hartwell Home Group for Friday at 10 AM - a repair. Reply here if anything changes.
+real_estate reminder en: Reminder from Hartwell Home Group: your showing is Friday at 10 AM (a repair). Reply here if anything changes.
+real_estate reminder es: Reminder from Hartwell Home Group: your showing is Friday at 10 AM (a repair). Reply here if anything changes.
+real_estate reminder vi: Reminder from Hartwell Home Group: your showing is Friday at 10 AM (a repair). Reply here if anything changes.
+real_estate cold en: Hi there, it's Claire with Hartwell Home Group. I wanted to follow up on the homes we talked about - would you like me to set up a time to see one in person?
+real_estate cold es: Hi there, it's Claire with Hartwell Home Group. I wanted to follow up on the homes we talked about - would you like me to set up a time to see one in person?
+real_estate cold vi: Hi there, it's Claire with Hartwell Home Group. I wanted to follow up on the homes we talked about - would you like me to set up a time to see one in person?
+talent_agency confirm en: You're booked with Marquee Talent Collective for Friday at 10 AM - a repair. Reply here if anything changes.
+talent_agency confirm es: You're booked with Marquee Talent Collective for Friday at 10 AM - a repair. Reply here if anything changes.
+talent_agency confirm vi: You're booked with Marquee Talent Collective for Friday at 10 AM - a repair. Reply here if anything changes.
+talent_agency reminder en: Reminder from Marquee Talent Collective: your meeting is Friday at 10 AM (a repair). If the performer is under 18, a parent or guardian needs to attend. Reply here if anything changes.
+talent_agency reminder es: Reminder from Marquee Talent Collective: your meeting is Friday at 10 AM (a repair). If the performer is under 18, a parent or guardian needs to attend. Reply here if anything changes.
+talent_agency reminder vi: Reminder from Marquee Talent Collective: your meeting is Friday at 10 AM (a repair). If the performer is under 18, a parent or guardian needs to attend. Reply here if anything changes.
+talent_agency cold en: Hi there, it's Jordan with Marquee Talent Collective. Just checking in - would you like help setting up a meeting or finding a class that fits your goals?
+talent_agency cold es: Hi there, it's Jordan with Marquee Talent Collective. Just checking in - would you like help setting up a meeting or finding a class that fits your goals?
+talent_agency cold vi: Hi there, it's Jordan with Marquee Talent Collective. Just checking in - would you like help setting up a meeting or finding a class that fits your goals?
+therapy_practice confirm en: Willow Creek Counseling: your appointment is scheduled for Friday at 10 AM. Reply here or call if you need to change it.
+therapy_practice confirm es: Willow Creek Counseling: your appointment is scheduled for Friday at 10 AM. Reply here or call if you need to change it.
+therapy_practice confirm vi: Willow Creek Counseling: your appointment is scheduled for Friday at 10 AM. Reply here or call if you need to change it.
+therapy_practice reminder en: Reminder from Willow Creek Counseling: your appointment is Friday at 10 AM. Reply here or call to reschedule.
+therapy_practice reminder es: Reminder from Willow Creek Counseling: your appointment is Friday at 10 AM. Reply here or call to reschedule.
+therapy_practice reminder vi: Reminder from Willow Creek Counseling: your appointment is Friday at 10 AM. Reply here or call to reschedule.
+therapy_practice cold en: (none)
+therapy_practice cold es: (none)
+therapy_practice cold vi: (none)

@@ -1,0 +1,8 @@
+{
+    "_comment": "Prompt A/B test. Each conversation is assigned one variant (stable for that customer) in proportion to weight. A variant can replace base templates with files in this folder, and override temperature or tier. Change \"experiment\" when starting a new test so assignments reshuffle. Compare with GET /admin/quality or /settings/quality.",
+    "experiment": "2026-10-baseline",
+    "variants": [
+        { "id": "control", "weight": 100, "description": "The current prompts." },
+        { "id": "temperature-0", "weight": 0, "description": "Example: same prompts at temperature 0. Give it weight to test it.", "temperature": 0 }
+    ]
+}

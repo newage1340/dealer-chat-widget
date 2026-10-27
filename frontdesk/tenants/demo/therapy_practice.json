@@ -1,0 +1,53 @@
+{
+  "id": "demo-therapy-practice",
+  "slug": "demo-therapy-practice",
+  "name": "Willow Creek Counseling",
+  "domain": "therapy_practice",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0155",
+  "address": "8888 Keystone Crossing, Suite 410, Indianapolis, IN 46240",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday-Thursday: 9am to 8pm, Friday: 9am to 3pm, Saturday: by appointment only, Sunday: closed",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "clinicians": "Dana (LCSW) - adults, anxiety and life transitions, EMDR-trained. Marcus (LMFT) - couples and families. Rosa (LMHC) - teens ages 13-17 and young adults; sees clients in English and Spanish. Matching happens after the free consultation.",
+    "insurance": "In network with Anthem, CareSource, and UnitedHealthcare/Optum. Out of network for all other plans: we provide a monthly superbill you can submit for possible reimbursement. We do not accept Medicare. Payment by card (HSA/FSA cards welcome); card kept on file through our secure client portal.",
+    "fees": "Standard individual session (50 min) $140; couples and family sessions (50 min) $160; first sessions run longer and cost a bit more. A limited number of sliding-scale spots ($70-$120) are available for individual therapy - ask during the free consultation.",
+    "consultation": "Free 15-minute phone or video call with one of our clinicians. We call you at the time you book. It's a chance to ask questions and see if we're a good fit - not a therapy session.",
+    "telehealth": "Telehealth by secure video for clients located in Indiana at the time of the session. Office is on the 4th floor, elevator access, free parking in the surface lot; the waiting room is shared with no sign-in sheet.",
+    "cancellation": "Please cancel or reschedule at least 24 hours ahead. Late cancellations and no-shows are charged the full session fee (insurance doesn't cover missed sessions). The free consultation has no fee if you need to move it.",
+    "policies": "We see clients ages 13 and up; a parent or guardian must book and consent for anyone under 18. We don't prescribe medication or provide psychological testing, custody evaluations, or court-ordered services. Records and release-of-information requests go through the office manager and need a signed form. We are not a crisis service: in an emergency call or text 988, or call 911."
+  },
+  "options": {
+    "sliding_scale": true,
+    "waitlist": false
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en",
+      "es"
+    ],
+    "privacy": {
+      "redact": [
+        "card",
+        "ssn",
+        "bank_account",
+        "birth_date"
+      ],
+      "sensitive": true
+    },
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "therapy_practice.json"
+      }
+    }
+  }
+}

@@ -1,0 +1,149 @@
+{
+    "_comment": "USD per single unit, by provider then model (\"\" = any model; a model also matches entries it starts with). Twilio, Deepgram and OpenAI list prices retrieved 2026-10-21 from their pricing pages (see docs/voice-costs.md for sources). SMS includes about $0.004 of carrier pass-through fees per segment. Self-hosted providers are $0 per use; their machine cost is in docs/voice-costs.md.",
+    "openai": {
+        "gpt-4o-mini": {
+            "input_tokens": 1.5e-07,
+            "cached_input_tokens": 7.5e-08,
+            "output_tokens": 6e-07
+        },
+        "gpt-4o": {
+            "input_tokens": 2.5e-06,
+            "cached_input_tokens": 1.25e-06,
+            "output_tokens": 1e-05
+        },
+        "gpt-4.1-mini": {
+            "input_tokens": 4e-07,
+            "cached_input_tokens": 1e-07,
+            "output_tokens": 1.6e-06
+        },
+        "gpt-4.1-nano": {
+            "input_tokens": 1e-07,
+            "cached_input_tokens": 2.5e-08,
+            "output_tokens": 4e-07
+        },
+        "gpt-5-mini": {
+            "input_tokens": 2.5e-07,
+            "cached_input_tokens": 2.5e-08,
+            "output_tokens": 2e-06
+        },
+        "gpt-5-nano": {
+            "input_tokens": 5e-08,
+            "cached_input_tokens": 5e-09,
+            "output_tokens": 4e-07
+        }
+    },
+    "local": {
+        "": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "output_tokens": 0
+        }
+    },
+    "twilio": {
+        "": {
+            "sms_segments": 0.0123,
+            "call_seconds": 0.00014167,
+            "number_months": 1.15
+        },
+        "toll_free": {
+            "sms_segments": 0.0123,
+            "call_seconds": 0.00036667,
+            "number_months": 2.15
+        }
+    },
+    "twilio-speech": {
+        "": {
+            "requests": 0.02
+        }
+    },
+    "twilio-tts": {
+        "polly-neural": {
+            "characters": 3.2e-05
+        },
+        "polly-standard": {
+            "characters": 8e-06
+        },
+        "": {
+            "characters": 0
+        }
+    },
+    "twilio-media-streams": {
+        "": {
+            "call_seconds": 7.333e-05
+        }
+    },
+    "deepgram": {
+        "nova-3-streaming": {
+            "audio_seconds": 8e-05
+        },
+        "nova-3": {
+            "audio_seconds": 7.167e-05
+        },
+        "aura-2": {
+            "characters": 3e-05
+        },
+        "aura-1": {
+            "characters": 1.5e-05
+        },
+        "": {
+            "audio_seconds": 7.167e-05,
+            "characters": 3e-05
+        }
+    },
+    "openai-tts": {
+        "": {
+            "characters": 1.67e-05
+        }
+    },
+    "local-whisper": {
+        "": {
+            "audio_seconds": 0
+        }
+    },
+    "local-tts": {
+        "": {
+            "characters": 0
+        }
+    },
+    "resend": {
+        "": {
+            "requests": 0.0004
+        }
+    },
+    "vapi": {
+        "": {
+            "call_seconds": 0
+        }
+    },
+    "log-messaging": {
+        "": {
+            "sms_segments": 0
+        }
+    },
+    "log-email": {
+        "": {
+            "requests": 0
+        }
+    },
+    "fake-tts": {
+        "": {
+            "characters": 0
+        }
+    },
+    "fake-stt": {
+        "": {
+            "audio_seconds": 0
+        }
+    },
+    "openai-stt": {
+        "gpt-4o-mini-transcribe": {
+            "audio_seconds": 5e-05
+        },
+        "whisper-1": {
+            "audio_seconds": 0.0001
+        },
+        "": {
+            "audio_seconds": 0.0001
+        }
+    }
+}

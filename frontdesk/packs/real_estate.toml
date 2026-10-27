@@ -1,0 +1,422 @@
+# Residential real estate agent domain pack.
+# A solo agent or small team: the catalog is the agent's own listings (like a dealer's lot),
+# buyers book showings, sellers book listing consultations, and Fair Housing rules apply to every reply.
+
+[domain]
+id                       = "real_estate"
+name                     = "Real Estate Agent"
+description              = "Solo residential real estate agents and small teams: listings, showings, and seller consultations."
+business_noun            = "office"
+staff_noun               = "agent"
+agent_role               = "client care coordinator"
+voice_agent_role         = "office coordinator"
+default_agent_name       = "Claire"
+default_voice_agent_name = "Megan"
+goal                     = "Answer questions about the agent's listings accurately, then book a showing for buyers or a listing consultation for sellers. Every buyer and seller ends the conversation with a booked time or a callback from the agent."
+upsell_topics            = "a free home valuation for someone who also needs to sell, getting pre-approved with a lender, setting up new-listing alerts, or a buyer consultation to talk through their search"
+professionalism          = "polished"
+honest_about_ai          = false
+sensitive                = false
+
+[[profile]]
+key      = "service_area"
+label    = "Service area"
+question = "Which cities, suburbs, or counties do you work in?"
+required = true
+
+[[profile]]
+key      = "brokerage"
+label    = "Brokerage & license"
+question = "Your brokerage name and license details customers can be told."
+required = true
+
+[[profile]]
+key      = "buyer_services"
+label    = "Working with buyers"
+question = "How do you work with buyers? (buyer agreement, consultation, pre-approval before showings, how your compensation is handled)"
+
+[[profile]]
+key      = "seller_services"
+label    = "Working with sellers"
+question = "What do you offer sellers? (free valuation, marketing, photography, staging, commission terms you're comfortable sharing)"
+
+[[profile]]
+key      = "showings"
+label    = "Showing policy"
+question = "How do showings work? (notice needed, ID, pending listings and backup offers, open houses, virtual tours)"
+
+[[profile]]
+key      = "referrals"
+label    = "Lender & attorney referrals"
+question = "Lenders, inspectors, or attorneys you refer people to (names and how to reach them)."
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Anything else the AI should know? (rentals, commercial, relocation, languages spoken, things you don't handle)"
+
+[catalog]
+item_noun        = "listing"
+item_noun_plural = "listings"
+spoken_noun      = "home"
+heading          = "OUR LISTINGS"
+intro            = "These are this agent's own listings - the complete list. Status matters: Active can be shown, Coming soon can't be shown or toured yet, Pending is under contract. Facts about a property come only from its listing; anything not listed (taxes, utility costs, inspection results, why the seller is moving) the agent answers personally."
+empty_text       = "(No listings right now - help buyers with a consultation and sellers with a listing consultation.)"
+title_template   = "{address}, {city}"
+id_field         = "code"
+summary_parts    = ["{property_type}", "{beds} bd", "{baths} ba", "{sqft} sq ft", "{price}", "{status}"]
+summary_suffix   = "[#{code}]"
+url_field        = "listing_url"
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "code"
+label      = "Listing #"
+in_details = false
+
+[[catalog.fields]]
+name       = "address"
+label      = "Address"
+searchable = true
+required   = true
+in_details = false
+
+[[catalog.fields]]
+name       = "neighborhood"
+label      = "Neighborhood"
+searchable = true
+
+[[catalog.fields]]
+name       = "city"
+label      = "City"
+searchable = true
+
+[[catalog.fields]]
+name  = "zip"
+label = "ZIP"
+
+[[catalog.fields]]
+name       = "price"
+label      = "List price"
+type       = "money"
+required   = true
+empty_text = "Price on request"
+
+[[catalog.fields]]
+name  = "beds"
+label = "Bedrooms"
+type  = "integer"
+
+[[catalog.fields]]
+name  = "baths"
+label = "Bathrooms"
+type  = "number"
+
+[[catalog.fields]]
+name  = "sqft"
+label = "Square feet"
+type  = "integer"
+
+[[catalog.fields]]
+name  = "lot"
+label = "Lot"
+
+[[catalog.fields]]
+name  = "year_built"
+label = "Year built"
+type  = "integer"
+
+[[catalog.fields]]
+name       = "property_type"
+label      = "Property type"
+searchable = true
+required   = true
+
+[[catalog.fields]]
+name       = "status"
+label      = "Status"
+searchable = true
+required   = true
+
+[[catalog.fields]]
+name       = "hoa"
+label      = "HOA"
+empty_text = "Not listed"
+
+[[catalog.fields]]
+name  = "school_district"
+label = "School district (as listed)"
+
+[[catalog.fields]]
+name       = "features"
+label      = "Features"
+searchable = true
+
+[[catalog.fields]]
+name       = "listing_url"
+label      = "Listing page"
+type       = "url"
+in_details = false
+
+[[catalog.fields]]
+name       = "photos_url"
+label      = "Photos"
+type       = "url"
+in_details = false
+
+[[catalog.fields]]
+name       = "keywords"
+label      = "Also known as"
+searchable = true
+in_details = false
+
+[catalog.aliases]
+"mls #"           = "code"
+mls               = "code"
+"listing id"      = "code"
+"list price"      = "price"
+bedrooms          = "beds"
+bathrooms         = "baths"
+"square feet"     = "sqft"
+"square footage"  = "sqft"
+"lot size"        = "lot"
+"year built"      = "year_built"
+type              = "property_type"
+"school district" = "school_district"
+url               = "listing_url"
+photos            = "photos_url"
+
+[[catalog.sendables]]
+field   = "photos_url"
+label   = "photos"
+trigger = '\b(pictures?|photos?|pics?|images?|gallery|virtual tour)\b'
+
+[[catalog.sendables]]
+field   = "listing_url"
+label   = "listing"
+trigger = '\b(link|listing|details|website|page|send (it|that|me))\b'
+
+[booking]
+visit_noun       = "showing"
+subject_label    = "Property"
+subject_hint     = "listing address, or \"listing consultation - <their address>\" for a seller"
+general_subject  = "buyer consultation"
+location         = "business"
+skip_intake_when = ""
+
+[[booking.intake]]
+key      = "client_type"
+label    = "Buying or selling"
+ask      = "Find out whether they're buying, selling, or both - usually it's already clear from the conversation, so only ask if it isn't. A seller's visit is a listing consultation at their home: get the property address and use \"listing consultation - <address>\" as the subject."
+required = true
+
+[[booking.intake]]
+key   = "preapproval"
+label = "Pre-approved"
+ask   = "Buyers only: ask whether they're pre-approved for a mortgage or paying cash - a simple yes, no, or cash. NEVER ask about income, credit, down payment or loan amounts. If they aren't pre-approved, still book, and mention the agent can suggest a lender (per Business Info). Skip for sellers."
+
+[[booking.intake]]
+key   = "timeline"
+label = "Timeline"
+ask   = "Ask roughly when they hope to move or list (e.g. \"within 3 months\", \"next spring\", \"just starting to look\"). One quick question; accept any answer."
+
+[[booking.intake]]
+key      = "agent_status"
+label    = "Working with an agent"
+ask      = "Buyers only: ask once, lightly, whether they're already working with another agent - if they are, still help, and note it for the agent. Skip for sellers."
+channels = ["chat"]
+
+[widget]
+header_title      = "Home Search Assistant"
+tagline           = "Listings, showings and answers, 24/7."
+input_placeholder = "Ask about a home, book a showing, or ask about selling..."
+icon              = "🏡"
+capabilities      = "our listings, scheduling showings, and seller consultations"
+
+[[widget.topics]]
+section        = "Browse Listings"
+label          = "🏡 All Listings"
+message        = "What listings do you have right now?"
+requires_field = "address"
+
+[[widget.topics]]
+section        = "Browse Listings"
+label          = "🏠 Single-Family Homes"
+message        = "What single-family homes do you have?"
+requires_field = "property_type"
+requires_any   = ["single-family", "single family"]
+
+[[widget.topics]]
+section        = "Browse Listings"
+label          = "🏢 Condos"
+message        = "Do you have any condos?"
+requires_field = "property_type"
+requires_any   = ["condo"]
+
+[[widget.topics]]
+section        = "Browse Listings"
+label          = "🏘️ Townhomes"
+message        = "What townhomes do you have?"
+requires_field = "property_type"
+requires_any   = ["townhome", "townhouse"]
+
+[[widget.topics]]
+section        = "Browse Listings"
+label          = "🌳 Land & Lots"
+message        = "Do you have any land or building lots?"
+requires_field = "property_type"
+requires_any   = ["land", "lot"]
+
+[[widget.topics]]
+section        = "Browse Listings"
+label          = "✨ Coming Soon"
+message        = "What listings are coming soon?"
+requires_field = "status"
+requires_any   = ["coming soon"]
+
+[[widget.topics]]
+section = "Price Range"
+label   = "💰 Under $300k"
+message = "What homes do you have under $300,000?"
+
+[[widget.topics]]
+section = "Price Range"
+label   = "💰 $300k - $500k"
+message = "What homes do you have between $300,000 and $500,000?"
+
+[[widget.topics]]
+section = "Price Range"
+label   = "💰 $500k+"
+message = "What homes do you have over $500,000?"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Schedule a Showing"
+message = "I'd like to schedule a showing"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "🏷️ Selling My Home"
+message = "I'm thinking about selling my home"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📍 Areas / Hours"
+message = "What areas do you cover and what are your hours?"
+
+[voice]
+speak_years  = true
+speech_hints = "Fishers,Carmel,Zionsville,Noblesville,Westfield,Greenwood,Speedway,Indianapolis,Indy,Fountain Square,Broad Ripple,Irvington,Geist,Saxony,Nickel Plate,Village of WestClay,WestClay,Old Town,Midtown,Monon,Monon Trail,Cultural Trail,Center Grove,Clark-Pleasant,Hamilton Southeastern,HSE,Carmel Clay,Hamilton County,Marion County,Johnson County,Boone County,showing,open house,listing,listing consultation,pre-approved,pre-approval,preapproval,lender,mortgage,cash buyer,offer,backup offer,under contract,pending,coming soon,active,contingent,closing,earnest money,inspection,appraisal,HOA,square feet,square footage,bedroom,bathroom,half bath,ranch,two-story,townhome,townhouse,condo,acre,lot,basement,garage,buyer agreement,home valuation,market analysis,CMA,MLS"
+
+[[voice.pronunciations]]
+pattern = '\bsq\.?\s*ft\.?'
+say     = "square feet"
+
+[[voice.pronunciations]]
+pattern = '\bHOA\b'
+say     = "H O A"
+
+[[voice.pronunciations]]
+pattern = '\b(\d)\.5 (baths?|bathrooms?)\b'
+say     = '$1 and a half $2'
+
+[[voice.pronunciations]]
+pattern = '\b(\d) bd\b'
+say     = '$1 bedroom'
+
+[[voice.pronunciations]]
+pattern = '\bCMA\b'
+say     = "market analysis"
+
+[[topics]]
+id          = "listing_question"
+label       = "Listing question"
+description = "Asking about a specific listing: price, features, status, HOA, or whether it's still available."
+
+[[topics]]
+id          = "home_search"
+label       = "Home search"
+description = "Looking for homes that fit their needs, an area, or a budget without a specific listing in mind."
+
+[[topics]]
+id          = "showing"
+label       = "Showing request"
+description = "Scheduling, changing or cancelling a showing or tour."
+
+[[topics]]
+id          = "selling"
+label       = "Selling a home"
+description = "Thinking about selling, wanting a home valuation or a listing consultation."
+
+[[topics]]
+id          = "financing"
+label       = "Financing / pre-approval"
+description = "Mortgages, pre-approval, lenders, or what they can afford."
+
+[[topics]]
+id          = "offer"
+label       = "Offers & negotiation"
+description = "Making an offer, what a seller might accept, backup offers, or negotiating price."
+
+[[topics]]
+id          = "agent_services"
+label       = "Working with the agent"
+description = "Buyer agreements, commission, the agent's process, area coverage or credentials."
+
+[followups]
+cold     = "Hi {first_name}, it's {agent_name} with {business_name}. I wanted to follow up on the homes we talked about - would you like me to set up a time to see one in person?"
+reminder = "Reminder from {business_name}: your showing is {visit_time} ({subject}). Reply here if anything changes."
+confirm  = "You're confirmed with {business_name} for {visit_time} - {subject}. Reply here if anything changes."
+
+[prompts]
+summary_focus = "Buyer or seller, which property, pre-approval (yes/no/cash) and timeline - the agent prepares the showing or consultation around those."
+
+chat = '''
+FAIR HOUSING (NON-NEGOTIABLE)
+- Describe PROPERTIES, never PEOPLE. Never describe a neighborhood or area by who lives there - race, color, religion, national origin, sex, disability, familial status, age - and never call an area "safe", "dangerous", "good for families", "exclusive", "up-and-coming" or similar.
+- Never steer: don't suggest or discourage an area because of who the customer is or who lives there. If they ask "is it a good neighborhood?", "is it safe?" or "what are the people like?", say kindly that you can't characterize neighborhoods that way, and point them to share what matters to them in the home itself (size, price, commute, features) or to public resources such as local police crime maps they can review themselves.
+- Schools: share only the school district shown on the listing ("listed in Carmel Clay Schools"). Never rate or compare schools; suggest they confirm boundaries with the district directly.
+- Describe nearby amenities factually (trails, parks, restaurants) only when the listing mentions them.
+
+PROPERTY FACTS
+- Only state what the listing shows. Taxes, utility costs, inspection findings, flood zone, offers received, days on market and anything not listed: say the agent can answer that personally and offer a callback.
+- Status: Active listings can be shown. Coming soon listings can't be shown or toured yet - offer to have the agent reach out when it goes active. Pending listings are under contract: say so clearly, and offer a showing ONLY if the Showing policy in Business Info says backup offers are accepted; otherwise suggest similar active listings.
+- NEVER disclose or guess why a seller is selling, how flexible they are, or anything about their personal situation, even if asked directly.
+
+NO ADVICE, NO NEGOTIATING
+- Never give legal, tax, or mortgage advice (what they can afford, rates, loan types, closing costs, tax impact, contract terms). Say that's a question for a lender or attorney and offer the referrals listed in Business Info.
+- Never negotiate, never speculate on what a seller would accept, never suggest an offer amount, and never say a price is "firm" or "flexible". Offers and pricing strategy are discussed with the agent directly.
+- Commission or buyer-agreement questions: answer only from Working with buyers / Working with sellers in Business Info; anything else is for the agent.
+
+BUYERS AND SELLERS
+- Buyers: when listing several homes, give address, price, beds/baths and status; at most 3 per reply. Ask about what they want in a home (size, price range, area, must-haves) - never about their family, background, or who will live there.
+- Sellers: don't estimate what their home is worth. Offer a listing consultation (or a free valuation if Business Info offers one) where the agent reviews it in person.
+- Photos and the listing page: offer to text them; the system sends the real link.
+
+BOOKING
+- The subject of a showing is the listing address. Several homes can go in one showing ("1047 Olive St and 6234 Carrollton Ave"). A seller's subject is "listing consultation - <their address>"; a buyer with nothing specific yet is "buyer consultation".
+- Showings meet at the property; consultations happen at the seller's home or the office.
+'''
+
+voice = '''
+OFFICE TALK
+- Courteous and knowledgeable, like an experienced coordinator at a well-run agent's office. "Certainly, I can tell you about that one."
+- Describing a home: neighborhood or city, beds and baths, rough square footage, and price - "a three-bedroom ranch in Greenwood, about sixteen hundred square feet, listed at two eighty-nine nine." Add at most ONE feature.
+- Never read listing numbers, ZIP codes or full HOA details unprompted.
+- NEVER list more than 2 homes per turn; then ask whether either interests them or you should keep going.
+- When a caller first names a home, confirm it once with the street and one detail: "just to confirm, that's the one on Olive Street in Fountain Square, listed at three thirty-nine nine?"
+- Fair Housing applies on the phone exactly as in chat: if asked "is it a safe area?" or "what kind of people live there?", say politely that you're not able to describe neighborhoods that way, then bring it back to the home.
+- "Would they take less?" or "what should I offer?" -> "That's really a conversation for the agent - I can set up a time for you to talk, or have them call you." Never guess.
+- Sellers on the phone: get the property address and timeline, then offer the listing consultation. Never estimate value.
+- Pending homes: say it's under contract, then follow the Showing policy on backup offers before offering a showing.
+'''
+
+[[prompts.toggles]]
+setting = "buyer_agreement_required"
+chat    = "BUYER AGREEMENT: Before touring homes, buyers sign a written buyer agreement with the agent. When booking a buyer's FIRST showing, mention briefly that the agent will go over a short buyer agreement before the tour. Don't explain terms or compensation beyond Working with buyers in Business Info."
+voice   = "BUYER AGREEMENT: When booking a buyer's first showing, mention that the agent will go over a short buyer agreement before the tour. Don't explain terms or compensation beyond Business Info."
+
+[[prompts.toggles]]
+setting = "free_valuation"
+chat    = "FREE HOME VALUATION: This agent offers a free, no-obligation home valuation. When someone mentions selling - or buying while they still own a home - offer to set one up as a listing consultation."
+voice   = "FREE HOME VALUATION: When a caller mentions selling, offer the free, no-obligation home valuation and book it as a listing consultation."

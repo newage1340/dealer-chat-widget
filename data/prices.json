@@ -1,0 +1,16 @@
+{
+  "_comment": "USD per single unit, by provider then model (\"\" = any model). List prices at time of writing - verify against current vendor pricing. Self-hosted providers can carry an amortized cost so they compare fairly.",
+  "openai": {
+    "gpt-4o-mini": {"input_tokens": 0.00000015, "cached_input_tokens": 0.000000075, "output_tokens": 0.0000006},
+    "gpt-4o":      {"input_tokens": 0.0000025,  "cached_input_tokens": 0.00000125,  "output_tokens": 0.00001}
+  },
+  "local": {
+    "": {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
+  },
+  "twilio": {
+    "": {"sms_segments": 0.0083}
+  },
+  "log-messaging": {
+    "": {"sms_segments": 0}
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "Nail salon: Vietnamese, then back to English with no accent left over",
+  "tenant": "demo-nail-salon",
+  "channel": "voice",
+  "turns": [
+    {
+      "say": "Hi, my name is Linh. Can we speak Vietnamese please?",
+      "expect": {
+        "language": "vi"
+      }
+    },
+    {
+      "say": "Actually, English please.",
+      "expect": {
+        "language": "en"
+      }
+    },
+    {
+      "say": "How much is a gel manicure?",
+      "expect": {
+        "language": "en",
+        "replyMatches": "\\$|dollar|bucks"
+      }
+    }
+  ]
+}

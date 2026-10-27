@@ -1,0 +1,53 @@
+{
+  "id": "demo-chinese-restaurant",
+  "slug": "demo-chinese-restaurant",
+  "name": "Golden Lotus Family Kitchen",
+  "domain": "chinese_restaurant",
+  "timezone": "America/Indiana/Indianapolis",
+  "phone": "(317) 555-0153",
+  "address": "8840 E Washington St, Indianapolis, IN 46219",
+  "website": "https://example.com",
+  "staff": {
+    "emails": [
+      "tunachiptv@gmail.com"
+    ]
+  },
+  "hoursText": "Monday: closed, Tuesday-Thursday: 11am to 9pm, Friday-Saturday: 11am to 10pm, Sunday: 12pm to 9pm",
+  "defaultLanguage": "en",
+  "staffLanguage": "en",
+  "profile": {
+    "ordering": "Order by phone, text, or this chat and pay at pickup. Most pickup orders are ready in 15-20 minutes; Friday and Saturday evenings 30-40 minutes. Peking duck and the steamed whole fish need extra time - about 25 minutes, or call ahead.",
+    "reservations": "We take reservations for any size party. 60 seats; the largest party we can seat together is 20 in the back room, which needs a day's notice for groups over 10. Walk-ins welcome.",
+    "catering": "Yes - half trays feed 8-10. At least 24 hours notice, $100 minimum. Pickup only; we can help load your car.",
+    "kitchen": "We cook with soybean oil and no MSG is added (some sauces like oyster sauce contain natural glutamates). Peanuts, tree nuts, shellfish, fish, eggs, soy, wheat and sesame are all used in our kitchen and woks are shared, so we can't guarantee any dish is allergen-free. We can leave out peanuts, make most dishes mild or extra spicy, and put sauce on the side.",
+    "dietary": "Vegetarian dishes are marked on the menu. Ma Po Tofu can be made without pork. Most vegetable dishes can be made vegan without egg. Dishes marked 'gluten-free option' can be made with gluten-free tamari sauce on request; fried items are not gluten-free.",
+    "policies": "We accept cash, Visa, Mastercard, Discover and Amex. Free parking in our lot. Gift cards available at the counter. Kitchen takes the last orders 15 minutes before closing. Closed Thanksgiving; open Christmas Day 12pm to 8pm."
+  },
+  "options": {
+    "delivery_partners": "DoorDash and Uber Eats"
+  },
+  "settings": {
+    "transferTo": "+13313083025",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "catalog": {
+      "source": {
+        "kind": "dataset",
+        "name": "chinese_restaurant.csv"
+      },
+      "fieldMap": {
+        "Item #": "code",
+        "Dish": "name",
+        "Chinese Name": "name_zh",
+        "Section": "category",
+        "Price": "price",
+        "Spicy": "spice",
+        "Dietary": "dietary",
+        "Notes": "description",
+        "Tags": "keywords"
+      }
+    }
+  }
+}

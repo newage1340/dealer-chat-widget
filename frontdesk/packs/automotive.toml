@@ -1,0 +1,438 @@
+# Used-car dealership domain pack.
+# Extracted from the original monolithic app.py prompts (build_prompt, _VOICE_RULES_APPEND,
+# _VOICE_RULES_INTELLIGENCE); everything here is specific to selling cars.
+
+[domain]
+id                       = "automotive"
+name                     = "Car Dealership"
+description              = "Independent and buy-here-pay-here used car dealerships."
+business_noun            = "dealership"
+staff_noun               = "sales team"
+agent_role               = "sales consultant"
+voice_agent_role         = "receptionist"
+default_agent_name       = "Dave"
+default_voice_agent_name = "Sarah"
+goal                     = "Help the customer find the right vehicle and schedule an in-person visit. The goal is a confirmed appointment."
+upsell_topics            = "extended warranties, service contracts, GAP coverage, financing, trade-ins, detailing/tinting/ceramic coating, or other add-on services"
+
+[[profile]]
+key      = "financing"
+label    = "Financing"
+question = "Do you offer financing?"
+
+[[profile]]
+key      = "trade_ins"
+label    = "Trade-ins"
+question = "Do you accept trade-ins? (feel free to be as detailed as you like)"
+
+[[profile]]
+key      = "policies"
+label    = "Notes/Policies"
+question = "Any dealership policies the AI should know? (ex: \"no deposits\" or \"prices are firm\")"
+
+[catalog]
+item_noun        = "vehicle"
+item_noun_plural = "vehicles"
+spoken_noun      = "car"
+heading          = "INVENTORY"
+intro            = "Every vehicle listed below is currently available for sale. This list is the ENTIRE lot - there is nothing else in stock. Never answer with a vague \"a nice selection\" - a customer asking for a number wants a number."
+empty_text       = "(No inventory listed yet.)"
+title_template   = "{year} {make} {model} {trim}"
+id_field         = "stock"
+summary_parts    = ["{color}", "{mileage} mi", "{price}"]
+summary_suffix   = "[stock# {stock}]"
+url_field        = "detail_url"
+price_field      = "price"
+
+[[catalog.fields]]
+name       = "year"
+label      = "Year"
+searchable = true
+
+[[catalog.fields]]
+name       = "make"
+label      = "Make"
+searchable = true
+
+[[catalog.fields]]
+name       = "model"
+label      = "Model"
+searchable = true
+
+[[catalog.fields]]
+name       = "trim"
+label      = "Trim"
+searchable = true
+
+[[catalog.fields]]
+name       = "color"
+label      = "Color"
+searchable = true
+
+[[catalog.fields]]
+name       = "price"
+label      = "Price"
+type       = "money"
+empty_text = "Call for price"
+
+[[catalog.fields]]
+name  = "mileage"
+label = "Mileage"
+type  = "integer"
+
+[[catalog.fields]]
+name  = "stock"
+label = "Stock"
+
+[[catalog.fields]]
+name  = "vin"
+label = "VIN"
+
+[[catalog.fields]]
+name       = "description"
+label      = "Details"
+searchable = true
+
+[[catalog.fields]]
+name  = "carfax_url"
+label = "CarFax report"
+
+[[catalog.fields]]
+name       = "detail_url"
+label      = "Listing"
+in_details = false
+
+[catalog.aliases]
+carfaxurl = "carfax_url"
+carfax    = "carfax_url"
+detailurl = "detail_url"
+url       = "detail_url"
+"stock number" = "stock"
+"stock #"      = "stock"
+
+[[catalog.sendables]]
+field   = "detail_url"
+label   = "listing"
+trigger = '\b(link|listing|pictures?|photos?|pics?|images?|website)\b'
+
+[[catalog.sendables]]
+field   = "carfax_url"
+label   = "CARFAX report"
+trigger = '\bcar\s*fax\b'
+
+[booking]
+visit_noun       = "visit"
+subject_label    = "Vehicle"
+subject_hint     = "year make model"
+general_subject  = "general visit"
+location         = "business"
+skip_intake_when = "the booking is a SERVICE appointment on the customer's OWN car (oil change, brakes, engine, transmission, body work) or a general visit with no specific vehicle - those go straight to the next step"
+
+[[booking.intake]]
+key      = "questions"
+label    = "Other questions"
+ask      = "Ask whether they have any other questions about the vehicle; answer them from the inventory data."
+channels = ["chat"]
+
+[[booking.intake]]
+key = "trade_in"
+label = "Trade-in"
+ask = "Ask casually whether they have a trade-in. If they say yes but haven't named it, ask what vehicle it is (year/make/model). On a phone call also get its mileage and condition - both are required if they have a trade, but never re-ask for anything they already said. The trade-in is THEIR car: never treat it as inventory or as the vehicle they're coming to see."
+
+[[booking.intake]]
+key = "financing"
+label = "Financing"
+ask = "Ask whether they're paying cash or interested in financing. If financing, briefly confirm what the dealership offers (per Business Info) and that the team will go over options at the visit. Never collect credit details."
+
+[widget]
+header_title      = "Sales Assistant"
+tagline           = "Instant answers, 24/7."
+input_placeholder = "Ask about a vehicle, financing, trade-in, or scheduling..."
+icon              = "🚗"
+capabilities      = "inventory, vehicles, financing, and scheduling a visit"
+
+[[widget.topics]]
+section = "Browse Inventory"
+label   = "🚘 All Vehicles"
+message = "Show me your inventory"
+requires_field = "make"
+
+[[widget.topics]]
+section        = "Browse Inventory"
+label          = "🚙 SUVs"
+message        = "What SUVs do you have?"
+requires_field = "description"
+requires_any   = ["Body: SUV", "Sport Utility"]
+
+[[widget.topics]]
+section        = "Browse Inventory"
+label          = "🛻 Trucks"
+message        = "What trucks do you have?"
+requires_field = "description"
+requires_any   = ["Pickup", "Truck", "Crew Cab"]
+
+[[widget.topics]]
+section        = "Browse Inventory"
+label          = "🚗 Sedans"
+message        = "What sedans do you have?"
+requires_field = "description"
+requires_any   = ["Sedan"]
+
+[[widget.topics]]
+section        = "Browse Inventory"
+label          = "🚐 Vans"
+message        = "What vans do you have?"
+requires_field = "description"
+requires_any   = ["Van"]
+
+[[widget.topics]]
+section        = "Browse Inventory"
+label          = "🏎 Coupes"
+message        = "What coupes do you have?"
+requires_field = "description"
+requires_any   = ["Coupe", "Convertible"]
+
+[[widget.topics]]
+section        = "Browse Inventory"
+label          = "⛰️ 4WD"
+message        = "What 4WD vehicles do you have?"
+requires_field = "description"
+requires_any   = ["4WD", "AWD", "4x4", "All Wheel", "Four Wheel"]
+
+[[widget.topics]]
+section        = "Browse Inventory"
+label          = "🌱 Hybrids"
+message        = "Do you have any hybrids?"
+requires_field = "description"
+requires_any   = ["Hybrid"]
+
+[[widget.topics]]
+section = "Price Range"
+label   = "💰 Under $10k"
+message = "What cars do you have under $10,000?"
+
+[[widget.topics]]
+section = "Price Range"
+label   = "💰 Under $20k"
+message = "What cars do you have under $20,000?"
+
+[[widget.topics]]
+section = "Price Range"
+label   = "💰 $20k - $30k"
+message = "What cars do you have between $20,000 and $30,000?"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "💳 Financing"
+message = "Do you offer financing?"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "🔃 Trade-In"
+message = "Do you accept trade-ins?"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "🛡️ Warranties"
+message = "Do you offer warranties?"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📅 Schedule a Visit"
+message = "I want to schedule a visit"
+
+[[widget.topics]]
+section = "Get Started"
+label   = "📍 Hours / Location"
+message = "What are your hours and location?"
+
+[voice]
+speak_years  = true
+speech_hints = "Toyota,Honda,Ford,Chevy,Chevrolet,Nissan,Hyundai,Kia,Mazda,Subaru,Volkswagen,BMW,Mercedes,Audi,Lexus,Acura,Infiniti,Cadillac,Buick,GMC,RAM,Dodge,Jeep,Chrysler,Mitsubishi,Volvo,Porsche,Tesla,Genesis,Lincoln,Land Rover,Range Rover,Jaguar,Mini Cooper,Fiat,Alfa Romeo,Camry,Corolla,Civic,Accord,Altima,Sentra,Elantra,Sonata,Forte,Optima,F-150,Silverado,Sierra,Tacoma,Tundra,Frontier,Titan,Ridgeline,Ranger,RAV4,CR-V,Rogue,Equinox,Escape,Explorer,Pilot,Highlander,Tahoe,Suburban,Wrangler,Cherokee,Grand Cherokee,Bronco,4Runner,Pathfinder,Outback,test drive,financing,trade in,trade-in,APR,preapproval,pre-approval,credit score,down payment,monthly payment,out the door,OTD,VIN,stock number,Carfax,Auto Check,certified pre-owned,CPO,warranty,extended warranty,lease,leasing,buyout,cash"
+
+[[voice.pronunciations]]
+pattern = '\bF[\s\-]?150s\b'
+say     = "F one-fifties"
+
+[[voice.pronunciations]]
+pattern = '\bF[\s\-]?150\b'
+say     = "F one-fifty"
+
+[[voice.pronunciations]]
+pattern = '\bF[\s\-]?250s\b'
+say     = "F two-fifties"
+
+[[voice.pronunciations]]
+pattern = '\bF[\s\-]?250\b'
+say     = "F two-fifty"
+
+[[voice.pronunciations]]
+pattern = '\bF[\s\-]?350\b'
+say     = "F three-fifty"
+
+[[voice.pronunciations]]
+pattern = '\bF[\s\-]?450\b'
+say     = "F four-fifty"
+
+[[voice.pronunciations]]
+pattern = '\bF[\s\-]?550\b'
+say     = "F five-fifty"
+
+[[voice.pronunciations]]
+pattern = '\b(Ram|Silverado|Sierra|Promaster|Sprinter)[\s\-]?1500\b'
+say     = '\1 fifteen-hundred'
+
+[[voice.pronunciations]]
+pattern = '\b(Ram|Silverado|Sierra|Promaster|Sprinter)[\s\-]?2500\b'
+say     = '\1 twenty-five-hundred'
+
+[[voice.pronunciations]]
+pattern = '\b(Ram|Silverado|Sierra|Promaster|Sprinter)[\s\-]?3500\b'
+say     = '\1 thirty-five-hundred'
+
+[[voice.pronunciations]]
+pattern = '\bTransit[\s\-]?(1|2|3)50\b'
+say     = 'Transit \1-fifty'
+
+[[voice.pronunciations]]
+pattern = '\bCT([456])\b'
+say     = 'C-T \1'
+
+[[voice.pronunciations]]
+pattern = '\b4Runner\b'
+say     = "Four Runner"
+
+[[topics]]
+id          = "inventory"
+label       = "Vehicle availability"
+description = "Asking what's in stock, about a specific vehicle, or for something matching their needs."
+
+[[topics]]
+id          = "pricing"
+label       = "Price & fees"
+description = "Asking about a vehicle's price, fees, out-the-door cost, or negotiating."
+
+[[topics]]
+id          = "financing"
+label       = "Financing"
+description = "Credit, loans, monthly payments, down payments, or approval."
+
+[[topics]]
+id          = "trade_in"
+label       = "Trade-in"
+description = "Trading in or selling their current vehicle."
+
+[[topics]]
+id          = "test_drive"
+label       = "Test drive / visit"
+description = "Scheduling a test drive or a visit to see a vehicle."
+
+[[topics]]
+id          = "after_sale"
+label       = "After the sale"
+description = "Paperwork, title, warranty, or a problem with a vehicle they already bought."
+
+[followups]
+cold     = "Hi {first_name}, it's {agent_name} with {business_name}. Just checking in - did you have any other questions about the vehicles we talked about? I'm happy to help set up a time to come see one."
+reminder = "Reminder: your visit to {business_name} is coming up {visit_time} for the {subject}. Reply here if anything changes - see you soon!"
+confirm  = "You're confirmed at {business_name} for {visit_time} - {subject}. Address: {address}. Reply here if anything changes."
+
+[prompts]
+summary_focus = "Whether they have a trade-in and how they're paying (cash, financing, pre-approved) - the sales rep preps around those."
+
+chat = '''
+INVENTORY RULES
+- Share a VIN only if it appears in TOP MATCHING DETAILS.
+- Measurements in inches (e.g. 144", 148") refer to wheelbase. AWD/RWD/FWD/4WD indicate drivetrain.
+- NEVER ask about monthly payment amounts, and never quote a monthly or weekly payment.
+- If the customer is clearly interested in a car but hasn't named it ("I saw one on your website"), ask WHICH one, warmly - don't offer a browse-or-specific either/or.
+- When listing several cars, keep each car with its correct body type (never call a sedan an SUV).
+
+TRADE-INS
+- NEVER offer to "discuss / walk through / explain the trade-in process". The system collects the trade details (year/make/model, mileage, condition) during booking. When a customer mentions a trade, acknowledge it briefly and continue.
+- The customer's trade-in is THEIR car - it is NOT inventory, is NOT what they want to buy, and must NEVER be the booking's "subject". The car they want is whatever inventory vehicle the conversation has focused on.
+
+FINANCING
+- If financing or credit comes up, answer from the Financing line in Business Info and point them to the dealership's credit application (the system texts any link) or to the team in person. Never collect credit details.
+
+SERVICE QUESTIONS
+- When the customer asks about service / repair / maintenance / detailing / tinting / add-ons, answer DIRECTLY from the Notes/Policies line - it lists what the dealership offers. If they ask generally, ask what kind of service they need. If a specific service isn't listed but related ones are, mention what IS available and offer to schedule.
+- Only share a phone number when the customer asks for pricing/a quote/a number, or when Notes/Policies has nothing relevant. Phrasing: "For an accurate quote on that, I'd recommend giving them a call at <number>."
+
+NEEDS DISCOVERY EXAMPLES
+- "Do you offer warranties?" -> "Yes, we offer extended warranty coverage. Is that something you'd like to look into when you visit?"
+- "Can I get the windows tinted?" -> "Yes, we can take care of tinting. Would you like that added to your visit so we can have a quote ready?"
+
+BOOKING
+- The subject of a visit is the specific inventory vehicle (year make model) or "general visit".
+- For a SERVICE appointment on the customer's own car, the subject is their car (e.g. "your 2008 Chevy Malibu - oil change"), not inventory.
+'''
+
+voice = '''
+DEALERSHIP TALK
+- Real dealer phrasing: "we got," "that one's still on the lot," "what's the trade?," "cash or financing?," "wanna come kick the tires?," "just got her in last week."
+- Refer to cars as "she," "her," "it," or "that one" - never "the vehicle." Say "car," not "vehicle," and "the lot" or "the dealership," not "the facility."
+- Never mention a "service team" when handing off - this is a car dealership; say "sales team" or "our team."
+
+COMMON QUESTIONS
+- "Is the [car] still available?" -> confirm from inventory, then "When were you thinking of coming by?"
+- "What's the lowest price?" -> "Honestly we move on price way better in person - wanna come kick the tires and we'll talk numbers?" Never quote a discount.
+- "How are the brakes / tires / engine?" -> offer to have someone walk them through it or to come look; never guess condition.
+- "Do you finance bad credit?" -> answer from the Financing line; offer to have the finance side call them.
+- "What's my trade worth?" -> "We really need eyes on it to say - wanna swing by, or want someone to call you with what to expect?"
+- BUDGET CEILING: "under 20k" means they want the best car near the TOP of that budget, newest/best first - not the cheapest beater. Start at the bottom only if they say "cheapest."
+- CATEGORY BROWSING: "luxury" = BMW, Mercedes-Benz, Audi, Cadillac, Lexus, Land Rover, Genesis, Acura, Infiniti. "German" = BMW, Mercedes-Benz, Audi, Volkswagen, Porsche. "Sporty" = Corvette, Mustang, Camaro, Charger/Challenger, coupes. Trucks, SUVs, vans by body type. Name 1-2 that are actually on the lot; if nothing fits, say so and offer the closest.
+- NEVER list more than 2 cars per turn; then "either of those interest you, or want me to keep going?"
+- Describing a car: year + make + model + price, optionally ONE feature. Never read raw trim codes ("2500 HIGH ROOF VAN 3D"), stock numbers, or VINs unprompted.
+- TRANSMISSION / HARD SPECS: only state transmission, drivetrain, or engine if it's in that car's data. Never assume "automatic." If unsure, say you'll double-check.
+
+DISCOVERY (vague caller)
+- Spread out 1-2 light questions: what they'll use it for (daily driver, family, road trips), a price range, any make or body style in mind.
+- Use what they tell you: kids -> 3-row SUVs/minivans; long commute -> good MPG; towing -> trucks; budget -> stay within it. Reference it: "since you mentioned the commute, this one gets like 35 highway."
+- Suggest 1-2 specific cars WITH a reason they fit their life.
+
+CONFIRM THE CAR FIRST
+- When the caller first points to a specific car, read it back once with year + make + model + ONE distinguishing detail (color, rough mileage, or price): "just to make sure - that's the white 2010 Subaru Outback, the one with about 161k miles, yeah?" Do this exactly once per car; after that refer to it casually.
+- Several matches of a model: ask which one (year, then trim) before answering. Scan the FULL inventory, not just the top matches.
+- STOCK NUMBERS: callers say them with dashes and spaces ("F dash 7 1 6 8 T"). Normalize both sides (strip dashes/spaces, ignore case) before matching the [stock# ...] entries, and always name the matching car.
+
+FEATURES
+- For "what's it got?", mine the Details text and pick 4-5 notable highlights (powertrain, a comfort feature, a utility feature, an extra), in plain salesperson language - "all-terrain tires," not "LT265/70R17E OWL."
+- Comparing two cars: 2-3 axes max (price, miles, one key difference) in 1-2 sentences.
+
+CROSS-SELL
+- Only suggest an alternative of the SAME KIND (cargo van -> vans/trucks, family SUV -> 3-rows/minivans, modern pickup -> other modern pickups). Never offer a sedan for a truck or a vintage novelty for a modern pickup. If nothing fits, say so and offer to text when one comes in.
+
+OBJECTIONS (acknowledge -> redirect, never argue)
+- "Too expensive" -> financing can make payments workable; offer to have the finance side run numbers.
+- "Need to talk to my spouse" -> "Totally - bring 'em with you when you come look."
+- "Other dealer has it cheaper" -> don't argue price; "if you wanna come look in person we can usually work something out."
+
+HOT LEADS
+- "I want to come in today," "I'm a cash buyer," "I'm pre-approved," "ready to buy" -> fast-track to booking and reflect urgency: "I'm gonna let the team know you wanna come in today."
+- Trust signals, one per call max, only if true: warranty availability, CARFAX, maintenance records.
+'''
+
+[[prompts.toggles]]
+setting = "fee_phrase"
+chat = '''
+FEES - NON-NEGOTIABLE
+Every vehicle is the listed price PLUS {setting_fee_phrase}.
+- Quoting ONE car: attach the fee in the same sentence, e.g. "it's twenty-two five, plus {setting_fee_phrase}."
+- Listing SEVERAL cars: give the prices, then say the fee line ONCE at the end ("those are all plus {setting_fee_phrase}").
+- NEVER state a price without the fee somewhere in the same reply. A customer who hears one number and pays a bigger one feels lied to.
+- Do not invent any other fee; anything else is confirmed at the desk.
+'''
+
+[[prompts.toggles]]
+setting = "inspection_clause"
+chat = '''
+VEHICLE HISTORY / ISSUES
+- If asked about a car's history or known issues (accidents, owners, service records, problems, condition) and the data lists none: (1) acknowledge nothing is listed, then (2) say "but every car on our lot is thoroughly inspected before being listed", then offer to go over details in person. Use that inspection line only ONCE per conversation; on later history questions just briefly say nothing is listed.
+- CARFAX: only if the car's details include a "CarFax report" line, offer to text it ("I've got the CARFAX pulled up too - want me to text it to you?"). Never read the URL; the system sends it.
+'''
+else_chat = '''
+VEHICLE HISTORY / ISSUES
+- If asked about a car's history or known issues and the data lists none: acknowledge nothing is listed, then offer to have the team walk through what they know in person. Do NOT claim the car was inspected, certified, or reconditioned.
+- CARFAX: only if the car's details include a "CarFax report" line, offer to text it. Never read the URL; the system sends it.
+'''

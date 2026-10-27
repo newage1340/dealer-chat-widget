@@ -1,0 +1,13 @@
+{
+  "name": "ESL: Spanish-first school answers in Spanish",
+  "tenant": "demo-esl-tutor",
+  "channel": "sms",
+  "turns": [
+    {
+      "say": "Hola, quiero aprender inglés para mi trabajo. ¿Tienen clases en la noche?",
+      "expect": {
+        "language": "es"
+      }
+    }
+  ]
+}

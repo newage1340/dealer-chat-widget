@@ -1,0 +1,272 @@
+[
+  {
+    "code": "MAN-1",
+    "name": "Classic manicure",
+    "category": "Manicure",
+    "price": "$22",
+    "duration": "30 min",
+    "description": "Nail shaping, cuticle care, hand massage and regular polish.",
+    "keywords": "manicure mani regular polish basic"
+  },
+  {
+    "code": "MAN-2",
+    "name": "Gel manicure",
+    "category": "Manicure",
+    "price": "$38",
+    "duration": "45 min",
+    "description": "Shaping, cuticle care and gel polish cured under LED; lasts about 2-3 weeks.",
+    "keywords": "gel mani shellac gel polish no chip"
+  },
+  {
+    "code": "MAN-3",
+    "name": "Deluxe spa manicure",
+    "category": "Manicure",
+    "price": "$35",
+    "duration": "45 min",
+    "description": "Classic manicure plus sugar scrub, mask and paraffin dip.",
+    "keywords": "spa manicure deluxe paraffin scrub"
+  },
+  {
+    "code": "MAN-4",
+    "name": "Builder gel (structured) manicure",
+    "category": "Manicure",
+    "price": "$50",
+    "duration": "60 min",
+    "description": "Strengthening builder gel overlay on natural nails, with gel color.",
+    "keywords": "builder gel structured manicure overlay biab strengthen"
+  },
+  {
+    "code": "MAN-5",
+    "name": "Polish change (hands)",
+    "category": "Manicure",
+    "price": "$12",
+    "duration": "15 min",
+    "description": "Remove and reapply regular polish; no cuticle work.",
+    "keywords": "polish change color change"
+  },
+  {
+    "code": "MAN-6",
+    "name": "Gel removal",
+    "category": "Manicure",
+    "price": "$10",
+    "duration": "15 min",
+    "description": "Soak-off removal of gel, dip or builder gel. Free with a new gel or dip service.",
+    "keywords": "gel removal soak off take off"
+  },
+  {
+    "code": "MAN-7",
+    "name": "Kids manicure (10 and under)",
+    "category": "Manicure",
+    "price": "$15",
+    "duration": "20 min",
+    "description": "Gentle nail trim and regular polish for kids.",
+    "keywords": "kids children mani little girls"
+  },
+  {
+    "code": "PED-1",
+    "name": "Classic pedicure",
+    "category": "Pedicure",
+    "price": "$32",
+    "duration": "40 min",
+    "description": "Soak, nail trim and shaping, cuticle care, callus buff, massage and regular polish.",
+    "keywords": "pedicure pedi regular toes"
+  },
+  {
+    "code": "PED-2",
+    "name": "Spa pedicure",
+    "category": "Pedicure",
+    "price": "$45",
+    "duration": "50 min",
+    "description": "Classic pedicure plus sugar scrub, mask and hot towels.",
+    "keywords": "spa pedicure scrub mask hot towel"
+  },
+  {
+    "code": "PED-3",
+    "name": "Deluxe pedicure",
+    "category": "Pedicure",
+    "price": "$60",
+    "duration": "60 min",
+    "description": "Spa pedicure plus paraffin wax, callus treatment and extended hot stone massage.",
+    "keywords": "deluxe pedicure paraffin hot stone callus"
+  },
+  {
+    "code": "PED-4",
+    "name": "Jelly pedicure",
+    "category": "Pedicure",
+    "price": "$65",
+    "duration": "60 min",
+    "description": "Deluxe pedicure with a jelly soak - a fun, soothing upgrade.",
+    "keywords": "jelly pedicure jelly soak"
+  },
+  {
+    "code": "PED-5",
+    "name": "Gel pedicure upgrade",
+    "category": "Pedicure",
+    "price": "+$15",
+    "duration": "+15 min",
+    "description": "Gel polish on toes instead of regular; add to any pedicure.",
+    "keywords": "gel toes gel pedicure"
+  },
+  {
+    "code": "PED-6",
+    "name": "Kids pedicure (10 and under)",
+    "category": "Pedicure",
+    "price": "$22",
+    "duration": "25 min",
+    "description": "Short soak, trim and regular polish for kids.",
+    "keywords": "kids pedicure children toes"
+  },
+  {
+    "code": "ENH-1",
+    "name": "Acrylic full set",
+    "category": "Enhancements",
+    "price": "$50",
+    "duration": "75 min",
+    "description": "Acrylic tips or sculpted nails with regular polish. Gel color +$10; long or coffin/stiletto shapes +$5-$15.",
+    "keywords": "acrylic full set fake nails tips coffin almond stiletto"
+  },
+  {
+    "code": "ENH-2",
+    "name": "Acrylic fill",
+    "category": "Enhancements",
+    "price": "$38",
+    "duration": "45-60 min",
+    "description": "Fill regrowth on an existing acrylic set (within 3 weeks). Gel color +$10.",
+    "keywords": "acrylic fill refill fill in"
+  },
+  {
+    "code": "ENH-3",
+    "name": "Dip powder (natural nails)",
+    "category": "Enhancements",
+    "price": "$45",
+    "duration": "60 min",
+    "description": "Dip powder color on natural nails; strong and lasts about 3-4 weeks.",
+    "keywords": "dip powder sns dip nails"
+  },
+  {
+    "code": "ENH-4",
+    "name": "Dip powder with tips",
+    "category": "Enhancements",
+    "price": "$55",
+    "duration": "75 min",
+    "description": "Dip powder over tips for added length.",
+    "keywords": "dip with tips extensions dip length"
+  },
+  {
+    "code": "ENH-5",
+    "name": "Gel-X extensions",
+    "category": "Enhancements",
+    "price": "$60",
+    "duration": "75 min",
+    "description": "Soft gel full-cover extensions with gel color; lighter than acrylic.",
+    "keywords": "gel x gelx soft gel extensions apres"
+  },
+  {
+    "code": "ENH-6",
+    "name": "Acrylic or dip removal",
+    "category": "Enhancements",
+    "price": "$15",
+    "duration": "20-30 min",
+    "description": "Gentle soak-off removal of acrylic or dip; $5 with a new set.",
+    "keywords": "acrylic removal take off soak off"
+  },
+  {
+    "code": "ENH-7",
+    "name": "Nail repair",
+    "category": "Enhancements",
+    "price": "$5 per nail",
+    "duration": "10 min",
+    "description": "Fix a broken or lifted nail. Free within 7 days of your set.",
+    "keywords": "broken nail fix repair lifting"
+  },
+  {
+    "code": "ART-1",
+    "name": "French tips",
+    "category": "Nail Art",
+    "price": "+$8",
+    "duration": "+10 min",
+    "description": "Classic white or colored French tips on any manicure or set.",
+    "keywords": "french tip french manicure white tips"
+  },
+  {
+    "code": "ART-2",
+    "name": "Chrome / cat eye",
+    "category": "Nail Art",
+    "price": "+$10",
+    "duration": "+10 min",
+    "description": "Chrome powder or magnetic cat-eye finish over gel.",
+    "keywords": "chrome glazed donut cat eye magnetic mirror"
+  },
+  {
+    "code": "ART-3",
+    "name": "Simple nail art",
+    "category": "Nail Art",
+    "price": "from $5 for 2 nails",
+    "duration": "+10-20 min",
+    "description": "Dots, lines, simple flowers or an accent nail.",
+    "keywords": "nail art design accent nail flowers"
+  },
+  {
+    "code": "ART-4",
+    "name": "Full-set custom art",
+    "category": "Nail Art",
+    "price": "from $25",
+    "duration": "+30-45 min",
+    "description": "Detailed hand-painted designs, 3D, rhinestones or ombre on all nails. Priced by design.",
+    "keywords": "custom design rhinestones 3d ombre full set art"
+  },
+  {
+    "code": "WAX-1",
+    "name": "Eyebrow wax",
+    "category": "Waxing",
+    "price": "$12",
+    "duration": "10 min",
+    "description": "Shape and clean up brows.",
+    "keywords": "eyebrow wax brows shaping"
+  },
+  {
+    "code": "WAX-2",
+    "name": "Lip or chin wax",
+    "category": "Waxing",
+    "price": "$8",
+    "duration": "5-10 min",
+    "description": "Upper lip or chin waxing.",
+    "keywords": "lip wax chin wax upper lip facial"
+  },
+  {
+    "code": "WAX-3",
+    "name": "Full face wax",
+    "category": "Waxing",
+    "price": "$35",
+    "duration": "20 min",
+    "description": "Brows, lip, chin and sides of face.",
+    "keywords": "full face wax"
+  },
+  {
+    "code": "WAX-4",
+    "name": "Underarm wax",
+    "category": "Waxing",
+    "price": "$18",
+    "duration": "10 min",
+    "description": "Underarm waxing.",
+    "keywords": "underarm armpit wax"
+  },
+  {
+    "code": "PKG-1",
+    "name": "Mani-pedi combo",
+    "category": "Package",
+    "price": "$50",
+    "duration": "75 min",
+    "description": "Classic manicure and classic pedicure together. Upgrade to gel mani for $15.",
+    "keywords": "mani pedi combo package both"
+  },
+  {
+    "code": "PKG-2",
+    "name": "Bridal party package (per person)",
+    "category": "Package",
+    "price": "$70",
+    "duration": "90 min",
+    "description": "Gel manicure and spa pedicure for each guest, with a free French or accent nail for the bride. Groups of 4 or more.",
+    "keywords": "bridal party bride wedding group package bachelorette"
+  }
+]

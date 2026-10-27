@@ -1,0 +1,14 @@
+{
+  "name": "Computer repair (English only) declines Spanish politely",
+  "tenant": "demo-computer-repair",
+  "channel": "sms",
+  "turns": [
+    {
+      "say": "Hola, ¿hablan español? Mi laptop no prende.",
+      "expect": {
+        "language": "en",
+        "replyMatches": "english|inglés|ingles"
+      }
+    }
+  ]
+}
